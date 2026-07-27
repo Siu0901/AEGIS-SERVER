@@ -1,0 +1,15 @@
+[project]
+name = "aegis-sim"
+version = "0.1.0"
+description = "AEGIS 시뮬레이터 — 가짜 젯슨(edge_sim) · 가짜 ESP32(mcu_sim)"
+requires-python = ">=3.13"
+dependencies = [
+    "aegis-contracts",
+    "paho-mqtt>=2.1",
+    "pyyaml>=6.0",
+    "websockets>=13.1",
+]
+
+# 휠로 빌드하지 않는다. 레포 루트에서 `python -m sim.edge_sim.main` 으로 실행한다.
+[tool.uv]
+package = false

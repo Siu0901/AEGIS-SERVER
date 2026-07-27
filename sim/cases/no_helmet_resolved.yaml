@@ -1,0 +1,143 @@
+# 안전모 미착용 → 경고 → 착용 → 시정 완료
+#
+# 서버가 이렇게 판정하기를 기대한다:
+#   +3s   확정(active → alerted)  · confirm_duration_s = 3
+#   +12s  위반 소멸 관측 시작      · helmet: on
+#   +22s  해소(resolved)          · resolve_duration_s = 10
+#
+# 시뮬레이터는 위 판정을 하지 않는다. 관측된 사실만 올린다(엣지는 판단하지 않는다).
+# 지금은 뼈대 예시 1개이며, 프레임 밀도와 시나리오 다양화는 M2~M3 에서 채운다.
+#
+# `ts` 는 적지 않는다 — 시작 시각 + `at` 으로 주입된다.
+
+name: no_helmet_resolved
+description: 지게차 통행로에서 안전모 미착용, 경고 방송 후 착용해 시정된 경우
+cam_id: 1
+
+timeline:
+  - at: 0.0
+    type: heartbeat
+    fps: {cam1: 8.2, cam2: 8.0}
+    gpu_util: 0.41
+    mem_used_mb: 3820
+    cls_calls_per_min: 96
+    cls_cache_hit_rate: 0.87
+    depth_calls_per_min: 14
+    cameras: {cam1: ok, cam2: ok}
+
+  # --- 위반 관측 시작 ---
+  - at: 0.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.91
+        bbox: [0.197, 0.364, 0.273, 0.764]
+        helmet: "off"
+        helmet_conf: 0.88
+        foot_point: [0.235, 0.762]
+        foot_point_m: [4.21, 7.85]
+        foot_conf: 0.88
+        posture: standing
+        height_ratio: 0.97
+        axis_angle_deg: 8.2
+        stillness_s: 0.4
+        in_zone: forklift_lane
+      - class: vehicle
+        track_id: 11
+        conf: 0.87
+        bbox: [0.591, 0.389, 0.838, 0.756]
+        anchor_m: [7.02, 8.90]
+        moving: true
+        danger_radius_m: 3.0
+
+  - at: 1.0
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violations: [no_helmet, zone_intrusion]
+    zone_id: forklift_lane
+    bbox: [0.197, 0.364, 0.273, 0.764]
+    conf: 0.91
+    foot_point_m: [4.21, 7.85]
+    foot_conf: 0.88
+    helmet: "off"
+    helmet_conf: 0.88
+    posture: standing
+    observed_ms: 1000
+    nearby:
+      - class: vehicle
+        track_id: 11
+        dist_m: 3.2
+        method: mask_nearest
+        depth_verified: true
+        moving: true
+        within_danger_radius: false
+
+  # --- 확정 조건(3초)을 채우는 구간 ---
+  - at: 3.2
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violations: [no_helmet, zone_intrusion]
+    zone_id: forklift_lane
+    bbox: [0.199, 0.363, 0.276, 0.765]
+    conf: 0.93
+    foot_point_m: [4.25, 7.88]
+    foot_conf: 0.90
+    helmet: "off"
+    helmet_conf: 0.91
+    posture: standing
+    observed_ms: 3200
+    nearby: []
+
+  # --- 안전모 착용 · 구역 이탈 → 위반 소멸 ---
+  - at: 12.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.92
+        bbox: [0.262, 0.361, 0.339, 0.762]
+        helmet: "on"
+        helmet_conf: 0.94
+        foot_point: [0.300, 0.760]
+        foot_point_m: [6.02, 7.91]
+        foot_conf: 0.89
+        posture: standing
+        height_ratio: 0.98
+        axis_angle_deg: 6.4
+        stillness_s: 0.2
+        in_zone: null
+
+  # --- 해소 조건(10초)을 채운 뒤 ---
+  - at: 22.5
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.90
+        bbox: [0.281, 0.360, 0.358, 0.761]
+        helmet: "on"
+        helmet_conf: 0.95
+        foot_point: [0.319, 0.759]
+        foot_point_m: [6.44, 7.93]
+        foot_conf: 0.88
+        posture: standing
+        height_ratio: 0.98
+        axis_angle_deg: 5.1
+        stillness_s: 0.3
+        in_zone: null
+
+  - at: 25.0
+    type: heartbeat
+    fps: {cam1: 8.1, cam2: 8.0}
+    gpu_util: 0.39
+    mem_used_mb: 3810
+    cls_calls_per_min: 92
+    cls_cache_hit_rate: 0.88
+    depth_calls_per_min: 11
+    cameras: {cam1: ok, cam2: ok}
