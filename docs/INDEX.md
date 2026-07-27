@@ -195,7 +195,7 @@ FN-ID가 붙지 않는 기반 작업이다. 전부 완료되었고 `make verify`
 
 | 항목 | 위치 | 근거 | 상태 |
 |---|---|---|---|
-| 계약 스키마 (§2~§5 전량) | `packages/contracts/src/aegis_contracts/` | API명세서 전 절 | ✅ |
+| 계약 스키마 (§2~§5.4 전량) | `packages/contracts/src/aegis_contracts/` | API명세서 전 절 | ✅ |
 | 명세서 예시 JSON 회귀 테스트 | `packages/contracts/tests/test_spec_examples.py` | API §2·§3·§4.5·§5 | ✅ |
 | `Clock` 프로토콜 · FakeClock | `packages/vision/src/aegis_vision/clock.py` | CLAUDE.md 절대규칙 1 | ✅ |
 | DB 스키마 (7테이블) · 마이그레이션 `0001`·`0002` | `server/infra/db/` | 기능명세서 §6 | ✅ |
@@ -215,36 +215,36 @@ FN-ID가 붙지 않는 기반 작업이다. 전부 완료되었고 `make verify`
 명세서를 SSOT로 두고 **코드에서 임의로 채우지 않은** 항목이다. 사람이 판단해
 명세서를 갱신하면 그때 코드에 반영한다(CLAUDE.md 절대규칙 8).
 
-### 해소됨 (명세서 v2 갱신분 반영 완료)
+### 해소됨
 
-§2 필수·선택 규약 명문화, §5 대시보드 스키마 전량 정의, §6 컬럼 추가
-(`zones.name` · `events.height_ratio` · `nearby_snapshot` · `similar_incidents`),
-`keyframe_paths` 배열화, 카메라 규격(640×360 / 1920×1080 / 15fps / 16:9) 확정,
-`fall_*` 임계값 float화, FN-DET 개수·시안 파일명 표기 — 전부 반영했다.
+**v2 갱신분** — §2 필수·선택 규약 명문화, §5 대시보드 스키마 정의, §6 컬럼 추가,
+`keyframe_paths` 배열화, 카메라 규격 확정, `fall_*` 임계값 float화, FN-DET 개수·시안
+파일명 표기.
 
-### A. 갱신분 안에서 새로 생긴 불일치
+**v3 갱신분 (직전에 보고한 12건 전량)** — §2.4 필드 표 재작성·JSON 오타, §4.6
+`edge.fps` 제거와 `cameras[].fps` 통일, `edge.msg_rejected_total` 신설, §5.1 `bbox`
+`[x1,y1,x2,y2]` 확정, §5.4 `zone_updated` 신설, `violation` → `violation_type`,
+`event_updated` 전이별 동반 필드 표, `severity` = `AlertCommand.level` 동일 척도,
+§5.3 `metric` 에 `fall_events`·`anomaly_flags` 추가, `component`·`state` 값 목록,
+§6 `keyframe_paths` jsonb 표기. — 전부 코드에 반영했다.
+
+### A. v3 갱신분 안에서 새로 생긴 것
 
 | 내용 | 상세 |
 |---|---|
-| §2.4 `heartbeat` 필드 표 | JSON 예시는 `cameras[]` 배열(`cam_id`·`connected`·`fps`)로 바뀌었는데 **아래 필드 표는 그대로다** — 여전히 `fps` 항목이 있고 `cameras` 를 "스트림 상태 ok/reconnecting/down"으로 설명한다. 코드는 JSON 예시를 따랐다 |
-| §2.4 JSON 예시 | `"depth_calls_per_min": 14,` 뒤에 항목이 없는데 쉼표가 남아 있어 그대로는 파싱되지 않는다(문서상 오타) |
-| §4.6 `GET /system/status` | §2.2가 거부 건수 노출을 요구(FN-SYS-06)하지만 §4.6 응답 예시에 반영되지 않았다. **필드명이 정해지지 않아** 카운터 이름을 따라 `edge.edge_msg_rejected_total`(int)로 두었다 |
-| §4.6 `edge.fps` | 여전히 `{"cam1":8.2,"cam2":8.2}` 딕셔너리다. §2.4가 배열로 바뀐 것과 표기가 갈린다. §4.6대로 두었다 |
-| §5.1 `overlay` 의 `bbox` | 예시값이 `[0.42, 0.31, 0.08, 0.24]` 로 **`[x, y, w, h]` 처럼 보인다.** §1.2는 `[x1, y1, x2, y2]`(좌상단·우하단)로 정의한다. 코드는 §1.2를 따랐고 타입은 어느 쪽이든 `float[4]` 라 모델은 같지만, **렌더링이 갈리므로 확정이 필요하다** |
-| `zone_updated` 메시지 | §5.1 본문이 "`zone_updated` 수신 시 갱신한다"고 하는데 **§5 타입 표에도 없고 스키마도 없다.** 7번째 메시지 유형인지 확인 필요. 정의가 없어 만들지 않았다 |
-| §5.2 `violation` | §4.1은 같은 값을 `violation_type` 이라 부른다. 이름만 다르다 |
-| §5.2 `event_updated` | "변경된 필드만 싣는다"고 하는데 **가능한 필드 집합이 열거되지 않았다.** 예시의 `resolved_at`·`resolution_sec` 만 선택 필드로 두었으므로, `lost`·`expired` 전이는 `event_id`+`status` 만 나간다(`lost_at`·`expired_at`·`alert_count` 를 실을 수 없다) |
-| §5.3 `metric` | §4.2 `GET /metrics/summary` 에 있는 `fall_events` 와 `anomaly_flags` 가 §5.3 페이로드에는 없다. 의도적 축소인지 누락인지 불명확. §5.3대로 두었다 |
-| §5.3 `system` | `component` 와 `state` 의 값 목록이 열거되지 않았다(`cloud_api` · `degraded` 예시뿐). `str` 로 열어 두었다 |
-| §5.2 `severity` | 새 필드다. §3 `AlertCommand.level`(1=주의/2=경고/3=긴급)과 같은 척도로 보이나 명시가 없다. `int` 로 두었다 |
-| §6 `keyframe_paths` | 지시대로 `jsonb` 배열로 바꿨으나 **§6 표기는 여전히 `text`** 다. 명세서 갱신이 필요하다 |
+| §5.4 `zone_updated` 의 중첩 | §5 구조 규약은 "모든 메시지는 평면이고 중첩은 배열 원소에만 허용"인데, `zone_updated` 는 `zone` **객체**를 중첩한다. 명세서 예시대로 구현했고 평면 검사에서 이 유형만 제외했다. 규약을 고칠지 메시지를 펼칠지 확인 필요 |
+| §5.3 `system.cam_id` | `component` 표가 "`camera` — `cam_id` 필드를 함께 실음"이라고 하는데 **JSON 예시와 필드 표에는 `cam_id` 가 없다.** 선택 필드로 추가했다 |
+| §5.4 `zone` 의 필수 여부 | "`delete` 시에는 `zone_id` 만 포함"이라 타입만으로는 표현되지 않는다. `action == "upsert"` 면 `name`·`polygon_m`·`buffer_m`·`active` 를 요구하는 검증을 넣었다 — 폴리곤 없는 upsert 가 통과하면 대시보드 캐시가 망가진다 |
+| 카메라 상태 표현이 두 가지 | §2.4 `heartbeat.cameras[]` 는 `connected`(bool), §4.6 `system/status` 의 `cameras[]` 는 `state`(`ok`/`reconnecting`/`down`)다. `fps` 는 통일됐지만 상태 표현은 갈린 채로 남았다. 각 절대로 두었다 |
+| §5.3 `system.state` vs §4.6 `cameras[].state` | 값 집합이 다르다 — 전자는 `ok`/`degraded`/`down`, 후자는 `ok`/`reconnecting`/`down`. 별도 타입(`ComponentState` · `CameraState`)으로 뒀다 |
 
-### B. 판단이 필요했던 타입 (지시 반영 과정)
+### B. 판단이 필요했던 타입
 
 | 필드 | 판단 |
 |---|---|
 | `anomaly_sample_interval_min` | "분 단위 주기"라 개수로 볼 수도 있으나 **지속시간 계열로 보아 `float`** 로 했다. 정수만 허용해야 한다면 되돌려야 한다 |
 | `cls_min_crop_px` | Policies 에서 **유일하게 `int` 로 남긴 값**이다(픽셀 수는 셀 수 있는 값). 서브 640×360 기준 64px = 프레임 높이의 17.8% 로, FN-DET-04 카메라 설치 지침의 "약 18%"와 일치한다 |
+| `AlertCommand.level` | §5.2가 "`severity` 와 동일한 척도이며 같은 값"이라 명시하므로 **`Literal[1,2,3]` 을 공유**하도록 좁혔다. §3 표의 타입 칸은 여전히 `int` 지만 산문이 1·2·3만 열거한다 |
 | `overlay.objects[].violations` · `event_ids` · `nearby` | "없으면 빈 배열"이므로 **필드는 항상 실리는 것**으로 보고 기본값을 주지 않았다 |
 | `event_created.zone_id` · `alerted_at` | §5.2 예시에는 값이 있으나 §4.1이 둘 다 nullable 이므로 **필수 + null 허용**으로 두었다 |
 | `anomaly.note` · `keyframe_url` | 클라우드 미가용 시 설명이 없을 수 있어(FN-SYS-03) **필수 + null 허용**으로 두었다 |
@@ -256,5 +256,4 @@ FN-ID가 붙지 않는 기반 작업이다. 전부 완료되었고 `make verify`
 | `metrics/timeseries` · `distribution` · `repeat` 응답 | **응답 스키마가 여전히 없다.** 창작하지 않고 쿼리 모델만 정의했다 |
 | `assistant/chat` 의 `attachments[]` | 원소 스키마가 없다. `dict` 로 열어 두었다 |
 | `events.confirmed_at` | §6에는 있으나 §4.1 응답에는 노출되지 않는다(§5.2 `event_created` 에는 있다) |
-| `AlertCommand.level` | 값 범위가 산문에만 있고 타입은 `int` 다 |
 | 명세서 부록 A-1·B | 시안을 `docs/front_design.pdf` 로 표기하지만 실제 파일은 `docs/AEGIS_front_design.pdf` 다. `CLAUDE.md` 는 고쳤고 명세서는 수정 대상이 아니라 두었다 |
