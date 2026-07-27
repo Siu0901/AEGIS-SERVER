@@ -272,8 +272,8 @@ v2.0 · 2026-07-18
 {
   "type": "heartbeat", "ts": "2026-08-14T05:37:05.000Z",
   "cameras": [
-    {"cam_id": 1, "connected": true, "fps": 8.2},
-    {"cam_id": 2, "connected": true, "fps": 8.0}
+    {"cam_id": 1, "sub_state": "ok", "fps": 8.2},
+    {"cam_id": 2, "sub_state": "ok", "fps": 8.0}
   ],
   "gpu_util": 0.41, "mem_used_mb": 3820,
   "cls_calls_per_min": 96,
@@ -285,7 +285,7 @@ v2.0 · 2026-07-18
 | 필드 | 설명 |
 |---|---|
 | `cameras[]` | 카메라별 상태 배열. **`cam_id` 는 int** 이며 §2.1 `cam_id` 와 같은 값이다 |
-| `cameras[].connected` | RTSP 연결 여부 |
+| `cameras[].sub_state` | 엣지가 보는 **서브 스트림** 상태: `ok` / `reconnecting` / `down` |
 | `cameras[].fps` | 해당 카메라의 실제 처리 프레임 수. 8 미만 지속 시 대시보드 경고 |
 | `gpu_util` / `mem_used_mb` | GPU 사용률과 메모리 사용량 |
 | `cls_calls_per_min` | 2단계 분류 호출 횟수 |
@@ -342,6 +342,7 @@ v2.0 · 2026-07-18
       "zone_id": "forklift_lane",
       "status": "alerted",
       "detected_at": "2026-08-14T05:37:02.183Z",
+      "confirmed_at": "2026-08-14T05:37:03.005Z",
       "alerted_at": "2026-08-14T05:37:03.010Z",
       "resolved_at": null,
       "resolution_sec": null,
@@ -360,6 +361,7 @@ v2.0 · 2026-07-18
 |---|---|
 | `violation_type` | `no_helmet` / `zone_intrusion` / `proximity` / `fall` |
 | `status` | 상태머신 값 (기능명세서 §4.2) |
+| `detected_at` / `confirmed_at` / `alerted_at` | 최초 후보 관측 · 확정 · 경고 발동 시각 |
 | `resolution_sec` | `alerted_at`→`resolved_at` 소요 초. **시정률 지표의 원천** |
 | `posture` | 확정 시점 자세. `fall` 이벤트의 근거 |
 | `repeat_count_7d` | 동일 트랙·구역의 최근 7일 유사 이벤트 수 |
@@ -435,9 +437,49 @@ v2.0 · 2026-07-18
 | `fall_events` | 쓰러짐 이벤트 수. 별도 집계 |
 | `avg_resolution_sec` | `resolution_sec` 평균 |
 
-#### `GET /metrics/timeseries?metric=violations&bucket=hour&from=..&to=..`
-#### `GET /metrics/distribution` — 유형별 건수
-#### `GET /metrics/repeat` — 반복 위반 순위
+#### `GET /metrics/timeseries?metric=..&bucket=..&from=..&to=..`
+
+`metric`: `violations` / `correction_rate` / `avg_resolution_sec` / `undetermined_rate`
+`bucket`: `hour` / `day` / `week`
+
+```json
+{ "metric":"correction_rate","bucket":"day",
+  "points":[ {"t":"2026-08-12","value":0.81,"n":18},
+             {"t":"2026-08-13","value":0.87,"n":23} ] }
+```
+
+| 필드 | 설명 |
+|---|---|
+| `points[].t` | 버킷 시작 시각 |
+| `points[].value` | 지표값. 비율 지표는 0~1, 건수 지표는 정수 |
+| `points[].n` | 해당 버킷의 모집단 크기. 표본이 작을 때 비율을 신뢰하지 않기 위해 함께 제공한다 |
+
+#### `GET /metrics/distribution?by=..&from=..&to=..`
+
+`by`: `violation_type` / `zone` / `camera` / `hour_of_day`
+
+```json
+{ "by":"violation_type",
+  "buckets":[ {"key":"no_helmet","label":"안전모 미착용","count":13,"ratio":0.57},
+              {"key":"zone_intrusion","label":"금지구역 침입","count":7,"ratio":0.30} ] }
+```
+
+`by=hour_of_day` 는 0~23 을 `key` 로 사용하며 시간대 히트맵의 데이터원이 된다.
+
+#### `GET /metrics/repeat?days=7&limit=10`
+
+```json
+{ "days":7,
+  "items":[ {"subject":"zone","key":"forklift_lane","label":"지게차 통행로",
+             "violation_type":"no_helmet","count":9,"last_at":"2026-08-14T05:37:03Z"} ] }
+```
+
+| 필드 | 설명 |
+|---|---|
+| `subject` | 집계 대상: `zone` / `camera` / `track` |
+| `count` | 기간 내 반복 횟수 |
+
+※ 작업자 개인 단위 누적은 하지 않는다. `track` 은 세션 내 추적 번호일 뿐 신원이 아니다.
 
 ---
 
@@ -489,7 +531,25 @@ v2.0 · 2026-07-18
 | 필드 | 설명 |
 |---|---|
 | `route` | `sql`(통계) / `vector`(장면 검색) / `vision`(현재 화면 브리핑) |
-| `attachments[]` | 클립·이미지 첨부 |
+| `attachments[]` | 답변에 딸린 첨부. 아래 형태 |
+
+**`attachments[]` 원소**
+
+```json
+{ "kind":"clip","event_id":"EV-20260814-0231",
+  "clip_url":"/media/clips/EV-20260814-0231.mp4",
+  "thumbnail_url":"/media/keyframes/EV-20260814-0231_0.jpg",
+  "label":"안전모 미착용 · 카메라 1 · 8/13 15:22" }
+```
+
+| `kind` | 추가 필드 |
+|---|---|
+| `clip` | `event_id`, `clip_url`, `thumbnail_url`, `label` |
+| `image` | `image_url`, `label` |
+| `table` | `columns[]`, `rows[][]`, `label` — SQL 집계 결과 표시용 |
+| `event_ref` | `event_id`, `label` — 상세 화면으로 이동하는 링크 |
+
+모든 첨부는 **URL 규약**을 따른다. 서버 파일 경로를 싣지 않는다.
 | `sources[]` | 근거 |
 
 #### `POST /assistant/briefing`
@@ -636,8 +696,8 @@ v2.0 · 2026-07-18
   "edge": { "online": true, "gpu_util":0.41,
             "cls_cache_hit_rate":0.87, "depth_calls_per_min":14,
             "msg_rejected_total":0 },
-  "cameras": [{"cam_id":1,"state":"ok","fps":8.2},
-              {"cam_id":2,"state":"ok","fps":8.0}],
+  "cameras": [{"cam_id":1,"main_state":"ok","sub_state":"ok","fps":8.2},
+              {"cam_id":2,"main_state":"ok","sub_state":"ok","fps":8.0}],
   "mcu": { "online": true, "last_seen":"2026-08-14T05:39:58Z" },
   "cloud": { "available": true, "quota_used": 0.62 },
   "storage": { "retention_days":7, "free_gb":512 },
@@ -647,7 +707,20 @@ v2.0 · 2026-07-18
 
 | 필드 | 설명 |
 |---|---|
-| `cameras[].fps` | 카메라별 처리 fps. **§2.4 `heartbeat.cameras[]` 와 동일한 배열 형식**을 쓴다 |
+| `cameras[].main_state` | **서버가 보는 메인 스트림**(1080p, 라이브·녹화용) 상태 |
+| `cameras[].sub_state` | **엣지가 보는 서브 스트림**(640×360, 추론용) 상태. `heartbeat` 값을 그대로 전달 |
+| `cameras[].fps` | 엣지의 실제 처리 fps |
+
+**상태 값이 두 종류인 이유**
+
+메인과 서브는 **서로 다른 스트림**이고 관측 주체도 다르다. 메인이 끊겨도 추론은 계속되고, 서브가 끊겨도 녹화는 계속된다. 하나로 합치면 어느 쪽이 죽었는지 구분할 수 없으므로 분리해서 노출한다.
+
+| 열거형 | 값 | 적용 대상 |
+|---|---|---|
+| `StreamState` | `ok` / `reconnecting` / `down` | 카메라 스트림 (`main_state`, `sub_state`) |
+| `ComponentState` | `ok` / `degraded` / `down` | 시스템 구성요소 (§5.3 `system.state`) |
+
+스트림에는 `degraded` 가, API에는 `reconnecting` 이 의미가 없으므로 두 열거형을 통합하지 않는다.
 | `edge.msg_rejected_total` | 스키마 검증에 실패해 거부된 엣지 메시지 누적 건수 (FN-SYS-06). 0이 아니면 대시보드에 경고를 띄운다 |
 | `cloud.quota_used` | 무료 한도 사용률. 초과 시 분석 기능만 중단되고 안전 기능은 무관 |
 | `time_sync.edge_offset_ms` | 엣지-서버 시각 차이. 크면 클립 추출 구간이 어긋남 |
@@ -668,7 +741,14 @@ v2.0 · 2026-07-18
 **구조 규약**
 
 모든 대시보드 메시지는 **평면(flat)** 구조다. `type` 과 나머지 필드가 같은 깊이에 온다.
-중첩은 배열 원소(`objects[]`, `nearby[]`)에만 허용한다.
+중첩은 다음 두 경우에만 허용한다.
+
+| 허용 | 예 |
+|---|---|
+| 배열 원소 | `objects[]`, `nearby[]` |
+| **REST 리소스를 그대로 전달하는 단일 객체** | `zone_updated.zone` (§5.4) |
+
+두 번째 예외를 둔 이유는 클라이언트가 `GET /zones` 응답과 **같은 형태**로 캐시를 갱신할 수 있게 하기 위함이다. 이 경우 외에 새로운 중첩을 추가하지 않는다.
 
 **경로 규약**
 
@@ -795,6 +875,11 @@ FN-UI-02 표시 규칙(위반자 적색·근접 거리선·거리 라벨)을 채
   "detail":"쿼터 62%","at":"2026-08-14T05:30:00Z" }
 ```
 
+```json
+{ "type":"system","component":"camera","cam_id":2,"state":"reconnecting",
+  "detail":"메인 스트림 재연결 중","at":"2026-08-14T05:31:12Z" }
+```
+
 `system` 은 **변화한 구성요소 하나만** 보낸다. 전체 스냅샷이 필요하면
 `GET /system/status` 를 사용한다.
 
@@ -831,7 +916,16 @@ FN-UI-02 표시 규칙(위반자 적색·근접 거리선·거리 라벨)을 채
 | 필드 | 설명 |
 |---|---|
 | `action` | `upsert` / `delete` |
-| `zone` | `delete` 시에는 `zone_id` 만 포함 |
+| `zone` | 구역 리소스. `GET /zones` 응답 원소와 동일한 형태 |
+
+**`action` 별 필수 필드**
+
+| `action` | `zone` 에 필요한 필드 |
+|---|---|
+| `upsert` | `zone_id`, `name`, `polygon_m`, `buffer_m`, `active` **전부 필수** |
+| `delete` | `zone_id` 만 |
+
+`upsert` 인데 `polygon_m` 이 없으면 대시보드 캐시가 손상되므로 **수신 측에서 거부**한다.
 
 캘리브레이션(호모그래피)이 변경된 경우에도 지면 좌표계가 바뀌므로
 해당 카메라의 모든 구역에 대해 `upsert` 를 순차 발행한다.
