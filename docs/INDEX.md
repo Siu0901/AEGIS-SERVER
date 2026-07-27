@@ -7,7 +7,7 @@
 |---|---|
 | ⬜ | 미착수 |
 | 🟡 | 진행 중 |
-| ✅ | 완료 (`make verify` 통과 + 테스트 존재) |
+| ✅ | 완료 (`uv run tasks.py verify` 통과 + 테스트 존재) |
 | 보류 | P2 — 여유 시 구현. 일정 부족 시 조정 |
 
 ---
@@ -21,7 +21,7 @@
 | **M2** | 이벤트 상태머신 | 후보 병합 · 확정 · 해소 · 쿨다운 · 소실 유예 · sim 시나리오 |
 | **M3** | 경고와 기록 | 음성 방송 · 경광등(MQTT) · 클립/키프레임 예약 추출 · 저장 관리 |
 | **M4** | 재결합과 지표 | 재결합 · 반복 위반 · 시정률/판정 불가율 · 수동 정정 |
-| **M5** | 관제 화면 P0 | 개요 · 실시간 관제(오버레이 정합) · 이벤트 · `make types` |
+| **M5** | 관제 화면 P0 | 개요 · 실시간 관제(오버레이 정합) · 이벤트 · `uv run tasks.py types` |
 | **M6** | 설정과 비전 로직 | 캘리브레이션 · 구역 편집 · 음원 매핑 · 정책 · `packages/vision` 순수 계산 |
 | **M7** | 지능 기능 | 임베딩 · 장면 검색 · LLM 분석 · 규정 매핑 · 챗봇 · 브리핑 |
 | **M8** | 분석·보고서 | 분석 화면 · 이상 탐지 · 유사 사례 · 주간 보고서 (P2 다수) |
@@ -191,7 +191,7 @@
 
 ## M0 산출물 (계약·뼈대)
 
-FN-ID가 붙지 않는 기반 작업이다. 전부 완료되었고 `make verify` 가 통과한다.
+FN-ID가 붙지 않는 기반 작업이다. 전부 완료되었고 `uv run tasks.py verify` 가 통과한다.
 
 | 항목 | 위치 | 근거 | 상태 |
 |---|---|---|---|
@@ -202,10 +202,10 @@ FN-ID가 붙지 않는 기반 작업이다. 전부 완료되었고 `make verify`
 | 정책값 시드 | `scripts/seed_policies.py` | API §4.5 | ✅ |
 | 리포지토리 프로토콜 | `server/domain/repository.py` | — | ✅ |
 | 개발 스택 (postgres·redis·mosquitto·mediamtx) | `docker-compose.yml` · `deploy/` | — | ✅ |
-| 카메라 규격 · 화면비 검증 | `deploy/mediamtx.yml` · `deploy/fake_cams.sh` | API §1.2 · 기능 FN-DET-01 | ✅ |
+| 카메라 규격 · 화면비 검증 | `deploy/mediamtx.yml` · `deploy/fake_cams.py` | API §1.2 · 기능 FN-DET-01 | ✅ |
 | 엣지 설정 (모델 경로 · `imgsz [384,640]`) | `edge/config.yaml` | 기능 §5 · 절대규칙 6 | ✅ |
 | 가짜 엣지 · 가짜 MCU | `sim/` | API §2·§3 | ✅ |
-| 검증 파이프라인 | `Makefile` · `scripts/verify.sh` | — | ✅ |
+| 검증 파이프라인 | `tasks.py` · `.claude/settings.json` (Stop 훅) | — | ✅ |
 | 프론트 라우팅·레이아웃 뼈대 | `front/` | 기능 §4.6 · 부록 B | ✅ |
 
 ---

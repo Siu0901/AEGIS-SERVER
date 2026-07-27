@@ -15,7 +15,7 @@
 # 실제 IP 카메라로 교체할 때도 위 표를 그대로 맞춘다. 어긋나면 엣지 추론 예산
 # (기능명세서 §5)과 오버레이 정합(±100ms) 실측이 의미를 잃는다.
 #
-# 송출:  make cams          (deploy/fake_cams.sh — 화면비를 검증한다)
+# 송출:  uv run tasks.py cams   (deploy/fake_cams.py — 화면비를 검증한다)
 # 재생:  rtsp://localhost:8554/cam1/main
 
 logLevel: info

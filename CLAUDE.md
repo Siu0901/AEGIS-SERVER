@@ -145,7 +145,7 @@ front/               React + Vite 관제 화면 (7개)
 sim/edge_sim/        가짜 젯슨 — frame·candidate·track_lost·heartbeat 생성
 sim/mcu_sim/         가짜 ESP32 — aegis/alert 구독, device/status 발행
 sim/cases/           시나리오 파일
-deploy/              mediamtx.yml · fake_cams.sh · mosquitto.conf
+deploy/              mediamtx.yml · fake_cams.py · mosquitto.conf
 edge/                실물 젯슨 러너 (M9에서 작업, 그 전까지 비워둠)
 models/              가중치·엔진 (git 제외, 사람이 관리)
 assets/              경고 음원 wav · 규정 매핑 · 사고사례 시드
@@ -157,17 +157,25 @@ media/               런타임 저장소 — 녹화·클립·키프레임 (git �
 
 ## 명령어
 
+개발 환경은 **Windows + PowerShell** 이다. `make` 와 셸 스크립트(`.sh`)를 쓰지 않는다.
+태스크는 전부 `tasks.py` 에 정의하고 `uv run` 으로 실행한다.
+젯슨(리눅스)에서도 동일한 명령이 동작해야 하므로 OS 의존 명령을 넣지 않는다.
+
 ```
-make verify      lint + typecheck + pytest + 마이그레이션 + 스모크 + 프론트 빌드
-make dev         docker-compose + 서버 + 프론트
-make cams        가짜 RTSP 2채널 송출 (mediamtx + ffmpeg)
-make sim CASE=<이름>       가짜 엣지 실행
-make mcu         가짜 ESP32 실행
-make migrate     alembic upgrade head
-make types       contracts → front TypeScript 타입 생성
+uv run tasks.py verify     lint + typecheck + pytest + 마이그레이션 + 스모크 + 프론트 빌드
+uv run tasks.py fmt        포매팅과 자동 수정
+uv run tasks.py dev        docker-compose + 서버 + 프론트
+uv run tasks.py cams       가짜 RTSP 2채널 송출
+uv run tasks.py cams-stop  cams 가 띄운 ffmpeg 종료
+uv run tasks.py sim --case <이름>    가짜 엣지 실행
+uv run tasks.py mcu        가짜 ESP32 실행
+uv run tasks.py migrate    alembic upgrade head
+uv run tasks.py types      contracts → front TypeScript 타입 생성 (M5 전까지 실패한다)
 ```
 
-작업을 마쳤다고 판단하기 전에 반드시 `make verify` 가 통과해야 한다.
+작업을 마쳤다고 판단하기 전에 반드시 `uv run tasks.py verify` 가 통과해야 한다.
+**명령을 찾을 수 없어 건너뛴 것을 통과로 간주하지 않는다.** 각 단계는 실제로 실행되어야 하며,
+실행할 수 없으면 통과가 아니라 오류로 보고한다.
 
 ---
 
@@ -187,7 +195,7 @@ make types       contracts → front TypeScript 타입 생성
 - **커밋은 해도 되지만 `git push` 는 하지 마라.** 푸시는 사람이 한다.
 - `git add .` 대신 변경한 파일을 명시해서 스테이징한다.
 - `media/`, `models/weights/`, `models/engines/`, `.env` 는 절대 커밋하지 않는다.
-- 커밋 전 `make verify` 가 통과해야 한다.
+- 커밋 전 `uv run tasks.py verify` 가 통과해야 한다.
 
 ---
 

@@ -1,7 +1,7 @@
 # AEGIS 로컬 개발 스택
 #
-#   make dev     — 아래 서비스 기동 + 서버 + 프론트
-#   make cams    — mediamtx 경로에 가짜 RTSP 송출
+#   uv run tasks.py dev     — 아래 서비스 기동 + 서버 + 프론트
+#   uv run tasks.py cams    — mediamtx 경로에 가짜 RTSP 송출
 #
 # 전부 현장 내(Tier 1)에서 도는 것들이다. 인터넷이 끊겨도 감지·경고·기록·시정판정·
 # 라이브뷰·SQL 통계가 정상 동작해야 한다(기능명세서 §7 가용성).

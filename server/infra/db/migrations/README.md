@@ -3,7 +3,7 @@
 기능명세서 §6 데이터 모델의 스키마 이력이다.
 
 ```
-make migrate                                                  # upgrade head + policies 시드
+uv run tasks.py migrate                                       # upgrade head + policies 시드
 uv run alembic -c server/infra/db/alembic.ini upgrade head
 uv run alembic -c server/infra/db/alembic.ini revision -m "설명"
 ```
@@ -14,4 +14,4 @@ uv run alembic -c server/infra/db/alembic.ini revision -m "설명"
   한글 Windows(cp949)에서 UTF-8 바이트를 만나면 파싱이 깨진다. 설명은 이 파일에 적는다.
 - `0001` 은 `CREATE EXTENSION IF NOT EXISTS vector` 를 먼저 실행한다.
   `events.embedding` 과 `normal_pool.embedding` 이 `halfvec(3072)` 이기 때문이다(FN-AI-01).
-- `make verify` 는 DB 없이 `upgrade head --sql`(오프라인 렌더링)로 정합만 확인한다.
+- `uv run tasks.py verify` 는 DB 없이 `upgrade head --sql`(오프라인 렌더링)로 정합만 확인한다.
