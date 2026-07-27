@@ -459,6 +459,17 @@ class EdgeStatus(SpecModel):
     cls_cache_hit_rate: float
     depth_calls_per_min: int
 
+    edge_msg_rejected_total: int = 0
+    """스키마 검증에 실패해 거부된 엣지 메시지 누적 건수. API명세서 §2.2 · FN-SYS-06
+
+    감지된 위반이 검증 단계에서 소리 없이 사라지는 것은 오탐보다 위험하므로,
+    서버는 거부 건수를 반드시 노출한다. 엣지 구현이 바뀌어 필드가 누락되기 시작하면
+    이 값이 오르는 것으로 즉시 드러나야 한다.
+
+    ※ §2.2가 `GET /system/status` 노출을 요구하지만 §4.6 응답 예시에는 이 필드가
+      반영되어 있지 않다. 필드명은 카운터 이름(`edge_msg_rejected_total`)을 따랐다.
+    """
+
 
 class CameraStatus(SpecModel):
     """카메라 스트림 상태. API명세서 §4.6"""
