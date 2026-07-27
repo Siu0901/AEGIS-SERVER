@@ -18,8 +18,8 @@ timeline:
   - at: 0.0
     type: heartbeat
     cameras:
-      - {cam_id: 1, connected: true, fps: 8.2}
-      - {cam_id: 2, connected: true, fps: 8.0}
+      - {cam_id: 1, sub_state: ok, fps: 8.2}
+      - {cam_id: 2, sub_state: ok, fps: 8.0}
     gpu_util: 0.41
     mem_used_mb: 3820
     cls_calls_per_min: 96
@@ -136,8 +136,8 @@ timeline:
   - at: 25.0
     type: heartbeat
     cameras:
-      - {cam_id: 1, connected: true, fps: 8.1}
-      - {cam_id: 2, connected: true, fps: 8.0}
+      - {cam_id: 1, sub_state: ok, fps: 8.1}
+      - {cam_id: 2, sub_state: ok, fps: 8.0}
     gpu_util: 0.39
     mem_used_mb: 3810
     cls_calls_per_min: 92

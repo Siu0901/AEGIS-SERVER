@@ -27,6 +27,7 @@ from .enums import (
     HelmetState,
     ObjectClass,
     Posture,
+    StreamState,
     TrackLostReason,
     ViolationType,
 )
@@ -174,7 +175,12 @@ class CameraHealth(SpecModel):
     """`heartbeat.cameras[]` 원소 — 카메라별 상태. API명세서 §2.4"""
 
     cam_id: int
-    connected: bool
+    sub_state: StreamState
+    """엣지가 보는 **서브 스트림**(640×360, 추론용) 상태.
+
+    메인 스트림은 서버가 따로 보므로 여기 없다. `GET /system/status` 가 둘을 합쳐
+    `main_state` · `sub_state` 로 노출한다(§4.6).
+    """
     fps: float
     """실제 처리 프레임 수. **8 미만 지속 시 대시보드 경고**."""
 

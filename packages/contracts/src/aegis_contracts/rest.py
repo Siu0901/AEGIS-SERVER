@@ -3,25 +3,24 @@
 출처: API명세서 §1.4 (오류) · §4 (전 절)
 
 Base URL: `http://<server-host>:8000/api/v1`
-
-주의 — 명세서에 응답 스키마가 제시되지 않은 엔드포인트가 셋 있다:
-`GET /metrics/timeseries`, `GET /metrics/distribution`, `GET /metrics/repeat`.
-`docs/` 가 SSOT이므로 **응답 모델을 임의로 창작하지 않고 요청(쿼리) 모델만 정의**했다.
-명세서에 응답 정의가 추가되면 여기에 1:1로 옮긴다.
 """
 
 from datetime import date
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import AwareDatetime, Field
 
 from ._base import Homography, PointM, PointPx, SpecModel
 from .enums import (
-    CameraState,
     ChatRoute,
+    DistributionBy,
     EventStatus,
+    MetricBucket,
+    MetricName,
     Posture,
+    RepeatSubject,
     SearchMode,
+    StreamState,
     ViolationType,
 )
 
@@ -32,10 +31,13 @@ __all__ = [
     "CalibrationRequest",
     "CalibrationResponse",
     "CameraStatus",
+    "ChatAttachment",
     "ChatRequest",
     "ChatResponse",
     "ChatSource",
+    "ClipAttachment",
     "CloudStatus",
+    "DistributionBucket",
     "EdgeStatus",
     "ErrorBody",
     "ErrorCode",
@@ -44,17 +46,23 @@ __all__ = [
     "EventListQuery",
     "EventListResponse",
     "EventPatchRequest",
+    "EventRefAttachment",
     "EventSummary",
+    "ImageAttachment",
     "ManualAlertRequest",
     "McuStatus",
     "MetricsDistributionQuery",
+    "MetricsDistributionResponse",
     "MetricsRepeatQuery",
+    "MetricsRepeatResponse",
     "MetricsSummary",
     "MetricsTimeseriesQuery",
+    "MetricsTimeseriesResponse",
     "MuteAlertRequest",
     "NearbySnapshot",
     "ReferencePerson",
     "RegulationRef",
+    "RepeatItem",
     "SceneSearchFilters",
     "SceneSearchItem",
     "SceneSearchRequest",
@@ -62,8 +70,10 @@ __all__ = [
     "SimilarIncident",
     "StorageStatus",
     "SystemStatus",
+    "TableAttachment",
     "TimeSyncStatus",
     "TimelineEntry",
+    "TimeseriesPoint",
     "VehicleClass",
     "VehicleClassPatch",
     "WeeklyReportRequest",
@@ -127,7 +137,11 @@ class EventSummary(SpecModel):
     zone_id: str | None
     status: EventStatus
     detected_at: AwareDatetime
+    """최초 후보 관측 시각."""
+    confirmed_at: AwareDatetime | None
+    """확정 시각. 확정 전이면 `null`."""
     alerted_at: AwareDatetime | None
+    """경고 발동 시각."""
     resolved_at: AwareDatetime | None
     resolution_sec: int | None
     """`alerted_at` → `resolved_at` 소요 초. **시정률 지표의 원천**."""
@@ -236,29 +250,93 @@ class MetricsSummary(SpecModel):
 
 
 class MetricsTimeseriesQuery(SpecModel):
-    """`GET /metrics/timeseries` 쿼리 파라미터. API명세서 §4.2
+    """`GET /metrics/timeseries` 쿼리 파라미터. API명세서 §4.2"""
 
-    응답 스키마는 명세서에 정의되어 있지 않다(모듈 docstring 참조).
-    """
-
-    metric: str
-    bucket: str
+    metric: MetricName
+    bucket: MetricBucket
     from_: AwareDatetime | None = Field(default=None, alias="from")
     to: AwareDatetime | None = None
+
+
+class TimeseriesPoint(SpecModel):
+    """`GET /metrics/timeseries` 의 한 점. API명세서 §4.2"""
+
+    t: str
+    """버킷 시작 시각. 표기는 `bucket` 에 따라 다르다(`day` → `2026-08-12`)."""
+    value: float
+    """지표값. 비율 지표는 0~1, 건수 지표는 정수."""
+    n: int
+    """해당 버킷의 모집단 크기.
+
+    **표본이 작을 때 비율을 신뢰하지 않기 위해** 함께 제공한다. 시정률 3건 중 3건이
+    100%로 보이는 것을 막는 값이므로 화면에서 함께 노출한다.
+    """
+
+
+class MetricsTimeseriesResponse(SpecModel):
+    """`GET /metrics/timeseries` 응답. API명세서 §4.2"""
+
+    metric: MetricName
+    bucket: MetricBucket
+    points: list[TimeseriesPoint]
 
 
 class MetricsDistributionQuery(SpecModel):
-    """`GET /metrics/distribution` — 유형별 건수. API명세서 §4.2"""
+    """`GET /metrics/distribution` 쿼리 파라미터. API명세서 §4.2"""
 
+    by: DistributionBy
     from_: AwareDatetime | None = Field(default=None, alias="from")
     to: AwareDatetime | None = None
+
+
+class DistributionBucket(SpecModel):
+    """`GET /metrics/distribution` 의 한 구간. API명세서 §4.2"""
+
+    key: str
+    """집계 키. `by=hour_of_day` 면 `0`~`23` 을 쓴다."""
+    label: str
+    count: int
+    ratio: float
+
+
+class MetricsDistributionResponse(SpecModel):
+    """`GET /metrics/distribution` 응답. API명세서 §4.2
+
+    `by=hour_of_day` 는 시간대 히트맵(FN-UI-05)의 데이터원이 된다.
+    """
+
+    by: DistributionBy
+    buckets: list[DistributionBucket]
 
 
 class MetricsRepeatQuery(SpecModel):
-    """`GET /metrics/repeat` — 반복 위반 순위. API명세서 §4.2"""
+    """`GET /metrics/repeat` 쿼리 파라미터. API명세서 §4.2"""
 
-    from_: AwareDatetime | None = Field(default=None, alias="from")
-    to: AwareDatetime | None = None
+    days: int = 7
+    limit: int = 10
+
+
+class RepeatItem(SpecModel):
+    """`GET /metrics/repeat` 의 한 항목. API명세서 §4.2"""
+
+    subject: RepeatSubject
+    key: str
+    label: str
+    violation_type: ViolationType
+    count: int
+    """기간 내 반복 횟수."""
+    last_at: AwareDatetime
+
+
+class MetricsRepeatResponse(SpecModel):
+    """`GET /metrics/repeat` 응답. API명세서 §4.2
+
+    **작업자 개인 단위 누적은 하지 않는다.** `track` 은 세션 내 추적 번호일 뿐
+    신원이 아니며, 카메라를 벗어나면 유효하지 않다.
+    """
+
+    days: int
+    items: list[RepeatItem]
 
 
 # --------------------------------------------------------------------------
@@ -315,6 +393,49 @@ class ChatSource(SpecModel):
     detail: str
 
 
+class ClipAttachment(SpecModel):
+    """`attachments[]` 의 클립 첨부. API명세서 §4.4"""
+
+    kind: Literal["clip"] = "clip"
+    event_id: str
+    clip_url: str
+    thumbnail_url: str
+    label: str
+
+
+class ImageAttachment(SpecModel):
+    """`attachments[]` 의 이미지 첨부. API명세서 §4.4"""
+
+    kind: Literal["image"] = "image"
+    image_url: str
+    label: str
+
+
+class TableAttachment(SpecModel):
+    """`attachments[]` 의 표 첨부 — SQL 집계 결과 표시용. API명세서 §4.4"""
+
+    kind: Literal["table"] = "table"
+    columns: list[str]
+    rows: list[list[Any]]
+    label: str
+
+
+class EventRefAttachment(SpecModel):
+    """`attachments[]` 의 이벤트 링크 — 상세 화면으로 이동. API명세서 §4.4"""
+
+    kind: Literal["event_ref"] = "event_ref"
+    event_id: str
+    label: str
+
+
+#: `attachments[]` 원소. `kind` 값으로 구분되는 판별 유니온. API명세서 §4.4
+#: 모든 첨부는 **URL 규약**을 따른다 — 서버 파일 경로를 싣지 않는다.
+ChatAttachment = Annotated[
+    ClipAttachment | ImageAttachment | TableAttachment | EventRefAttachment,
+    Field(discriminator="kind"),
+]
+
+
 class ChatRequest(SpecModel):
     """`POST /assistant/chat` 요청. API명세서 §4.4"""
 
@@ -323,14 +444,11 @@ class ChatRequest(SpecModel):
 
 
 class ChatResponse(SpecModel):
-    """`POST /assistant/chat` 응답. API명세서 §4.4
-
-    `attachments[]`(클립·이미지 첨부)의 원소 스키마는 명세서에 정의되어 있지 않다.
-    """
+    """`POST /assistant/chat` 응답. API명세서 §4.4"""
 
     route: ChatRoute
     answer: str
-    attachments: list[dict[str, Any]] = Field(default_factory=list)
+    attachments: list[ChatAttachment] = Field(default_factory=list)
     sources: list[ChatSource] = Field(default_factory=list)
 
 
@@ -472,12 +590,20 @@ class EdgeStatus(SpecModel):
 
 
 class CameraStatus(SpecModel):
-    """카메라 스트림 상태. API명세서 §4.6"""
+    """카메라 스트림 상태. API명세서 §4.6
+
+    **메인과 서브를 따로 노출한다.** 서로 다른 스트림이고 관측 주체도 다르다 —
+    메인이 끊겨도 추론은 계속되고, 서브가 끊겨도 녹화는 계속된다. 하나로 합치면
+    어느 쪽이 죽었는지 구분할 수 없다.
+    """
 
     cam_id: int
-    state: CameraState
+    main_state: StreamState
+    """**서버가 보는 메인 스트림**(1920×1080, 라이브·녹화용) 상태."""
+    sub_state: StreamState
+    """**엣지가 보는 서브 스트림**(640×360, 추론용) 상태. `heartbeat` 값을 그대로 전달."""
     fps: float
-    """카메라별 처리 fps. §2.4 `heartbeat.cameras[]` 와 동일한 배열 형식을 쓴다."""
+    """엣지의 실제 처리 fps."""
 
 
 class McuStatus(SpecModel):

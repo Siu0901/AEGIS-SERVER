@@ -9,16 +9,21 @@ from typing import Literal
 __all__ = [
     "AlertLevel",
     "AlertState",
-    "CameraState",
+    "AttachmentKind",
     "ChatRoute",
     "ClipStatus",
     "ComponentState",
     "DistanceMethod",
+    "DistributionBy",
     "EventStatus",
     "HelmetState",
+    "MetricBucket",
+    "MetricName",
     "ObjectClass",
     "Posture",
+    "RepeatSubject",
     "SearchMode",
+    "StreamState",
     "SystemComponent",
     "TrackLostReason",
     "ViolationType",
@@ -62,8 +67,11 @@ DistanceMethod = Literal["bbox_center", "mask_nearest"]
 #: 트랙 소실 사유(진단용). API명세서 §2.3.
 TrackLostReason = Literal["occluded", "out_of_view", "low_conf"]
 
-#: 카메라 스트림 상태. API명세서 §4.6 `GET /system/status`.
-CameraState = Literal["ok", "reconnecting", "down"]
+#: 카메라 **스트림** 상태. API명세서 §2.4 `sub_state` · §4.6 `main_state`·`sub_state`.
+#:
+#: `ComponentState` 와 **통합하지 않는다.** 스트림에는 `degraded` 가, API 구성요소에는
+#: `reconnecting` 이 의미가 없기 때문이다(§4.6 「상태 값이 두 종류인 이유」).
+StreamState = Literal["ok", "reconnecting", "down"]
 
 #: 오버레이 박스의 경고 단계. API명세서 §5.1 `objects[].alert_state`.
 #: `EventStatus` 중 **진행 중**인 값만 쓴다(종결 상태 `resolved`·`expired` 는 오지 않는다).
@@ -82,6 +90,22 @@ ComponentState = Literal["ok", "degraded", "down"]
 
 #: 구역 변경 종류. API명세서 §5.4 `zone_updated.action`.
 ZoneAction = Literal["upsert", "delete"]
+
+#: 시계열 지표 이름. API명세서 §4.2 `GET /metrics/timeseries`.
+MetricName = Literal["violations", "correction_rate", "avg_resolution_sec", "undetermined_rate"]
+
+#: 시계열 버킷 단위. API명세서 §4.2.
+MetricBucket = Literal["hour", "day", "week"]
+
+#: 분포 집계 축. API명세서 §4.2 `GET /metrics/distribution`.
+DistributionBy = Literal["violation_type", "zone", "camera", "hour_of_day"]
+
+#: 반복 위반 집계 대상. API명세서 §4.2 `GET /metrics/repeat`.
+#: **작업자 개인 단위 누적은 하지 않는다** — `track` 은 세션 내 추적 번호일 뿐 신원이 아니다.
+RepeatSubject = Literal["zone", "camera", "track"]
+
+#: 챗봇 응답 첨부 종류. API명세서 §4.4.
+AttachmentKind = Literal["clip", "image", "table", "event_ref"]
 
 #: 예약 클립 추출 상태. 기능명세서 §4.2 · §6.
 ClipStatus = Literal["pending", "ready", "failed"]
