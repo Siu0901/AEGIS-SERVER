@@ -231,11 +231,14 @@ FN-ID가 붙지 않는 기반 작업이다. 전부 완료되었고 `make verify`
 분리 근거), §4.1 `confirmed_at`, §4.2 응답 스키마 3종, §4.4 `attachments[]` 4종,
 부록 A-1·B 시안 파일명. — 전부 코드에 반영했다.
 
-### A. v4 갱신분 안에서 새로 생긴 것
+**v5** — §5.3 `system` 이 `component` 로 판별되도록 정리됐다. `stream` 필드가 신설되고
+`component == "camera"` 면 `cam_id`·`stream` 필수 + `StreamState`, 그 외에는 둘 다 금지
++ `ComponentState` 로 확정됐다. 직전에 보고한 값 집합 모순이 해소됐다.
+
+### A. 남아 있는 확인 필요
 
 | 내용 | 상세 |
 |---|---|
-| **§5.3 `system.state` 의 값 집합** | §4.6 표는 이 필드에 `ComponentState`(`ok`/`degraded`/`down`)를 지정하는데, **§5.3의 새 예시는 `component="camera"` 에 `state="reconnecting"`**(`StreamState`)을 쓴다. 카메라는 구성요소이자 스트림이라 두 값 집합이 겹치는 자리다. 두 열거형의 **합집합**으로 열어 두었다 — 확인 필요 |
 | §5.4 `zone` 의 "동일한 형태" | "`GET /zones` 응답 원소와 동일한 형태"라고 하지만 예시와 필수 필드 표에는 `cam_id` 가 없다(메시지 최상위에 있음). 표를 따라 `cam_id` 없이 두었다 |
 | §4.2 `points[].t` 의 타입 | `bucket` 에 따라 표기가 달라진다(`day` → `2026-08-12`, `hour` → ?). 예시가 날짜뿐이라 `str` 로 두었다 |
 | §4.2 `distribution` 의 `key` | `by=hour_of_day` 는 "0~23을 `key` 로 사용"한다는데 int 인지 문자열인지 불명확하다. 다른 축이 전부 문자열이라 `str` 로 통일했다 |
