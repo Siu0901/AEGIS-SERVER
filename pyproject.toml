@@ -4,3 +4,109 @@ version = "0.1.0"
 description = "Add your description here"
 requires-python = ">=3.13"
 dependencies = []
+
+# --------------------------------------------------------------------------
+# uv 워크스페이스
+# --------------------------------------------------------------------------
+# `packages/contracts` 와 `packages/vision` 은 서버·시뮬레이터·엣지가 공유하는
+# 실제 배포 패키지다. `server` · `sim` · `edge` 는 레포 루트에서 실행되는 앱이므로
+# 휠로 빌드하지 않고(`package = false`) 의존성만 워크스페이스 해석에 참여시킨다.
+[tool.uv.workspace]
+members = ["packages/contracts", "packages/vision", "server", "sim", "edge"]
+
+[tool.uv.sources]
+aegis-contracts = { workspace = true }
+aegis-vision = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "aegis-contracts",
+    "aegis-vision",
+    "httpx2>=2.0",     # starlette.testclient 가 요구한다 (httpx 는 deprecated)
+    "mypy>=1.13",
+    "pytest>=8.3",
+    "ruff>=0.8",
+    "types-pyyaml>=6.0",
+]
+
+# --------------------------------------------------------------------------
+# ruff
+# --------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["packages/contracts/src", "packages/vision/src", "."]
+extend-exclude = ["front", "media", "models", "server/infra/db/migrations/versions"]
+
+[tool.ruff.lint]
+select = [
+    "F",    # pyflakes
+    "E",    # pycodestyle error
+    "W",    # pycodestyle warning
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # bugbear
+    "A",    # builtins shadowing
+    "C4",   # comprehensions
+    "DTZ",  # flake8-datetimez — naive datetime 차단
+    "T20",  # print 금지 (시뮬레이터·스크립트는 아래에서 예외)
+    "SIM",  # simplify
+    "TID",  # tidy imports
+    "PTH",  # pathlib 사용
+    "RUF",
+]
+ignore = [
+    "RUF001", # 한글 문자열의 전각 문장부호를 모호 문자로 보고 잡는 것을 끈다
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# 시뮬레이터와 스크립트는 콘솔 출력이 본래 목적이다.
+"sim/**" = ["T20"]
+"scripts/**" = ["T20"]
+# RealClock 구현체는 시스템 시계를 읽는 유일한 곳이다.
+"packages/vision/src/aegis_vision/clock.py" = ["DTZ005"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "parents"
+
+# --------------------------------------------------------------------------
+# mypy (strict)
+# --------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.13"
+strict = true
+mypy_path = "packages/contracts/src:packages/vision/src:."
+files = ["packages", "server", "sim", "scripts"]
+exclude = "(^front/|^media/|^models/|/migrations/versions/)"
+plugins = ["pydantic.mypy"]
+warn_unreachable = true
+disallow_any_generics = true
+namespace_packages = true
+explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = ["pgvector.*"]
+ignore_missing_imports = true
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+
+# --------------------------------------------------------------------------
+# pytest
+# --------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+pythonpath = ["."]
+testpaths = [
+    "packages/contracts/tests",
+    "packages/vision/tests",
+    "server/tests",
+    "sim/tests",
+]
+addopts = "-q --strict-markers --strict-config"
+filterwarnings = ["error"]
