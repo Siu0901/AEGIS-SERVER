@@ -1,0 +1,79 @@
+# AEGIS 로컬 개발 스택
+#
+#   make dev     — 아래 서비스 기동 + 서버 + 프론트
+#   make cams    — mediamtx 경로에 가짜 RTSP 송출
+#
+# 전부 현장 내(Tier 1)에서 도는 것들이다. 인터넷이 끊겨도 감지·경고·기록·시정판정·
+# 라이브뷰·SQL 통계가 정상 동작해야 한다(기능명세서 §7 가용성).
+
+name: aegis
+
+services:
+  postgres:
+    # pgvector 확장 포함 이미지. events.embedding · normal_pool.embedding 이
+    # halfvec(3072) 이므로 확장이 없으면 마이그레이션이 실패한다(FN-AI-01).
+    image: pgvector/pgvector:pg16
+    container_name: aegis-postgres
+    environment:
+      POSTGRES_USER: aegis
+      POSTGRES_PASSWORD: aegis
+      POSTGRES_DB: aegis
+      TZ: UTC
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aegis -d aegis"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: aegis-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  mosquitto:
+    # 서버 → ESP32 경고 발동(aegis/alert), ESP32 → 서버 상태(aegis/device/status)
+    image: eclipse-mosquitto:2
+    container_name: aegis-mosquitto
+    ports:
+      - "1883:1883"   # MQTT
+      - "9001:9001"   # MQTT over WebSocket (브라우저 디버깅용)
+    volumes:
+      - ./deploy/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+    restart: unless-stopped
+
+  mediamtx:
+    # 가짜 IP 카메라용 RTSP 서버. 카메라 2대 × (main 1080p / sub 640p)
+    image: bluenviron/mediamtx:latest
+    container_name: aegis-mediamtx
+    ports:
+      - "8554:8554"   # RTSP
+      - "1935:1935"   # RTMP (송출 편의용)
+      - "8888:8888"   # HLS  — 대시보드 라이브뷰
+      - "8889:8889"   # WebRTC
+      - "9997:9997"   # API
+    volumes:
+      - ./deploy/mediamtx.yml:/mediamtx.yml:ro
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
+  mosquitto_data:
+  mosquitto_log:

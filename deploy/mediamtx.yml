@@ -1,0 +1,56 @@
+# 가짜 IP 카메라 RTSP 서버 설정
+#
+# 영상은 듀얼 스트림으로 분리된다(CLAUDE.md 아키텍처).
+#   main 1080p → 서버  : 라이브 재스트리밍 · 7일 링버퍼 녹화 · 클립 원본
+#   sub   640p → 엣지  : 추론 (엣지는 영상을 중계하지 않고 메타데이터만 올린다)
+#
+# 송출:  make cams          (deploy/fake_cams.sh)
+# 재생:  rtsp://localhost:8554/cam1/main
+
+logLevel: info
+
+# 퍼블리셔·리더 인증 없음 — 로컬 개발 전용이다.
+authMethod: internal
+authInternalUsers:
+  - user: any
+    ips: []
+    permissions:
+      - action: publish
+      - action: read
+      - action: playback
+
+rtsp: yes
+rtspAddress: :8554
+rtspTransports: [tcp, udp]
+
+rtmp: yes
+rtmpAddress: :1935
+
+# 대시보드 라이브뷰. 오버레이 시간 정합(±100ms)을 위해 지연을 최소로 잡는다.
+hls: yes
+hlsAddress: :8888
+hlsVariant: lowLatency
+hlsSegmentCount: 7
+hlsSegmentDuration: 200ms
+hlsPartDuration: 100ms
+hlsAlwaysRemux: yes
+
+webrtc: yes
+webrtcAddress: :8889
+
+api: yes
+apiAddress: :9997
+
+paths:
+  # --- 카메라 1 ---
+  cam1/main:
+    source: publisher
+    # 링버퍼 녹화(FN-REC-02)는 서버가 담당한다. 여기서는 켜지 않는다.
+  cam1/sub:
+    source: publisher
+
+  # --- 카메라 2 ---
+  cam2/main:
+    source: publisher
+  cam2/sub:
+    source: publisher
