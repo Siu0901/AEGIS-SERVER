@@ -67,7 +67,7 @@
 10. **제로샷/오픈보캐블러리 감지는 존재하지 않는다.** 감지 클래스는 `person`·`vehicle`
     2종 고정이다. 「위험요소 자연어 등록」 기능은 채택되지 않았으므로 화면·API·DB
     어디에도 만들지 마라. 디자인 시안에 남아 있어도 무시한다. (기능명세서 부록 A-1)
-11. **디자인 시안보다 명세서가 우선한다.** `docs/front_design.pdf` 는 건설현장 시절에
+11. **디자인 시안보다 명세서가 우선한다.** `docs/AEGIS_front_design.pdf` 는 건설현장 시절에
     작성되어 라벨이 낡았다. 레이아웃·정보구조·색상은 따르되 **텍스트와 도메인 용어는
     명세서를 따른다.** (기능명세서 부록 B)
 
@@ -163,7 +163,7 @@ make types       contracts → front TypeScript 타입 생성
 
 | 내용 | 위치 |
 |---|---|
-| 감지 기능 FN-DET-01~13 | `docs/AEGIS_기능명세서.md` §4.1 |
+| 감지 기능 FN-DET-01~12 | `docs/AEGIS_기능명세서.md` §4.1 |
 | 이벤트 처리 FN-EVT-01~07 (상태 전이표) | §4.2 |
 | 경고 FN-ALM-01~05 | §4.3 |
 | 기록·영상 FN-REC-01~05 | §4.4 |
@@ -178,5 +178,8 @@ make types       contracts → front TypeScript 타입 생성
 | 필드 산출법 (접지점·자세·시정률·이상점수) | §6 |
 | 배경·근거·비용·시연 계획 | `docs/AEGIS_구체화_계획안_최종.md` |
 | FN-ID ↔ 코드 위치 ↔ 테스트 매핑 · 진척 | `docs/INDEX.md` |
-| 화면 디자인 시안 (레이아웃만 참조, 라벨은 명세서 우선) | `docs/front_design.pdf` |
+| 화면 디자인 시안 (레이아웃만 참조, 라벨은 명세서 우선) | `docs/AEGIS_front_design.pdf` |
 | 미채택 기능 · 시안 불일치 대조표 | `docs/AEGIS_기능명세서.md` 부록 A · B |
+
+※ 명세서 부록 A-1·B 는 시안을 `docs/front_design.pdf` 로 표기하지만 실제 파일명은
+`docs/AEGIS_front_design.pdf` 다. 같은 파일을 가리킨다.

@@ -1,6 +1,6 @@
 # AEGIS 진척표 · FN-ID 내비게이션
 
-`docs/AEGIS_기능명세서.md` §4의 모든 기능(56개)을 코드 위치·마일스톤과 함께 묶은 표다.
+`docs/AEGIS_기능명세서.md` §4의 모든 기능(57개)을 코드 위치·마일스톤과 함께 묶은 표다.
 **작업을 마칠 때마다 해당 행의 상태를 갱신한다.**
 
 | 표기 | 뜻 |
@@ -38,8 +38,8 @@
 
 | FN-ID | 기능명 | 우선 | 계층 | 명세 위치 | 마일스톤 | 코드 위치(예정) | 상태 |
 |---|---|---|---|---|---|---|---|
-| FN-DET-01 | 영상 수신 및 하드웨어 디코딩 (NVDEC) | P0 | EDGE | 기능 §4.1 | M9 (sim: M2) | `edge/capture.py` · `sim/edge_sim/` | ⬜ |
-| FN-DET-02 | 1단계 객체 감지 (person·vehicle 단일 모델) | P0 | EDGE | 기능 §4.1 | M9 | `edge/detect.py` | ⬜ |
+| FN-DET-01 | 영상 수신 및 하드웨어 디코딩 (NVDEC · 서브 640×360 15fps) | P0 | EDGE | 기능 §4.1 · API §1.2 | M9 (sim: M2) | `edge/capture.py` · `edge/config.yaml` · `sim/edge_sim/` | ⬜ |
+| FN-DET-02 | 1단계 객체 감지 (person·vehicle 단일 모델 · 640×384 rect) | P0 | EDGE | 기능 §4.1 · §5 | M9 | `edge/detect.py` · `edge/config.yaml` | ⬜ |
 | FN-DET-03 | 객체 추적 및 트랙 ID 부여 (ByteTrack) | P0 | EDGE | 기능 §4.1 | M9 | `edge/track.py` | ⬜ |
 | FN-DET-04 | 2단계 안전모 분류 (크롭 기반 · 게이팅) | P0 | EDGE | 기능 §4.1 | M9 | `edge/classify.py` | ⬜ |
 | FN-DET-05 | 분류 결과 캐싱 (`cls_cache_ms`) | P0 | EDGE | 기능 §4.1 | M9 | `edge/classify.py` | ⬜ |
@@ -163,7 +163,9 @@
 
 ---
 
-## 4.8 시스템 (FN-SYS) · 5건
+## 4.8 시스템 (FN-SYS) · 6건
+
+명세서 §4.8 표는 `01 · 02 · 03 · 05 · 06 · 04` 순서로 적혀 있다. 여기서는 ID 순으로 정렬했다.
 
 | FN-ID | 기능명 | 우선 | 계층 | 명세 위치 | 마일스톤 | 코드 위치(예정) | 상태 |
 |---|---|---|---|---|---|---|---|
@@ -172,6 +174,14 @@
 | FN-SYS-03 | 클라우드 장애 격리 | P1 | SRV | 기능 §4.8 | M7 | `server/ai/adapter.py` | ⬜ |
 | FN-SYS-04 | 지표 집계 (시정률 · 평균 시정 시간 · 판정 불가율 · 분포) | P0 | SRV | 기능 §4.8 · API §4.2·§6.7 | M4 | `server/domain/metrics.py` | ⬜ |
 | FN-SYS-05 | 판정 불가 집계 (`expired` 별도 집계) | P0 | SRV | 기능 §4.8 · API §6.7 | M4 | `server/domain/metrics.py` | ⬜ |
+| FN-SYS-06 | 엣지 메시지 거부 집계 (로깅 · 카운터 · 노출) | P0 | SRV | 기능 §4.8 · API §2.2 | M1 | `server/app/ws_edge.py` · `server/app/routes/system.py` | ⬜ |
+
+> **FN-SYS-06 — 후보를 조용히 버리지 않는다.** 스키마 검증에 실패한 엣지 메시지를
+> 로그 없이 폐기하면 안 된다. 감지된 위반이 검증 단계에서 소리 없이 사라지는 것은
+> 오탐보다 위험하다. 원본 페이로드와 검증 오류를 `WARNING` 이상으로 남기고,
+> `edge_msg_rejected_total{type, reason}` 을 올리고, `GET /system/status` 와 대시보드
+> 시스템 상태에 건수를 노출한다. 엣지 구현이 바뀌어 필드가 누락되기 시작하면
+> 이 값이 오르는 것으로 즉시 드러나야 한다.
 
 > `expired` 는 **시정률 분모·분자 모두에서 제외**하고 `undetermined_rate` 로 따로 집계한다.
 > 두 숫자는 **항상 병기**한다 — `방송 후 시정률 87% (판정 불가 5%)`.
@@ -188,10 +198,12 @@ FN-ID가 붙지 않는 기반 작업이다. 전부 완료되었고 `make verify`
 | 계약 스키마 (§2~§5 전량) | `packages/contracts/src/aegis_contracts/` | API명세서 전 절 | ✅ |
 | 명세서 예시 JSON 회귀 테스트 | `packages/contracts/tests/test_spec_examples.py` | API §2·§3·§4.5·§5 | ✅ |
 | `Clock` 프로토콜 · FakeClock | `packages/vision/src/aegis_vision/clock.py` | CLAUDE.md 절대규칙 1 | ✅ |
-| DB 스키마 (7테이블) · 초기 마이그레이션 | `server/infra/db/` | 기능명세서 §6 | ✅ |
+| DB 스키마 (7테이블) · 마이그레이션 `0001`·`0002` | `server/infra/db/` | 기능명세서 §6 | ✅ |
 | 정책값 시드 | `scripts/seed_policies.py` | API §4.5 | ✅ |
 | 리포지토리 프로토콜 | `server/domain/repository.py` | — | ✅ |
 | 개발 스택 (postgres·redis·mosquitto·mediamtx) | `docker-compose.yml` · `deploy/` | — | ✅ |
+| 카메라 규격 · 화면비 검증 | `deploy/mediamtx.yml` · `deploy/fake_cams.sh` | API §1.2 · 기능 FN-DET-01 | ✅ |
+| 엣지 설정 (모델 경로 · `imgsz [384,640]`) | `edge/config.yaml` | 기능 §5 · 절대규칙 6 | ✅ |
 | 가짜 엣지 · 가짜 MCU | `sim/` | API §2·§3 | ✅ |
 | 검증 파이프라인 | `Makefile` · `scripts/verify.sh` | — | ✅ |
 | 프론트 라우팅·레이아웃 뼈대 | `front/` | 기능 §4.6 · 부록 B | ✅ |
@@ -203,37 +215,46 @@ FN-ID가 붙지 않는 기반 작업이다. 전부 완료되었고 `make verify`
 명세서를 SSOT로 두고 **코드에서 임의로 채우지 않은** 항목이다. 사람이 판단해
 명세서를 갱신하면 그때 코드에 반영한다(CLAUDE.md 절대규칙 8).
 
-### A. §6 데이터 모델에 컬럼이 없어 §4 응답을 채울 수 없는 값
+### 해소됨 (명세서 v2 갱신분 반영 완료)
 
-| 값 | 요구하는 곳 | 문제 |
-|---|---|---|
-| `zones.name` | API §4.5 `GET /zones` 응답 | §6 `zones` 에 `name` 컬럼이 없다. 화면에 "지게차 통행로"를 표시할 근거가 저장되지 않는다 |
-| `events.height_ratio` | API §4.1 `GET /events/{id}` | §6 `events` 에 컬럼이 없다(`stillness_s` · `posture` 는 있다) |
-| `events.nearby_snapshot` | API §4.1 `GET /events/{id}` | 확정 시점 주변 지게차 스냅샷을 저장할 컬럼이 §6에 없다 |
-| `events.similar_incidents` | API §4.1 | 조회 시 임베딩으로 매번 계산하는 것인지, 저장하는 것인지 불명확 |
-| `events.confirmed_at` 대응 REST 필드 | §6에는 있으나 API §4.1 응답에는 없다 | 타임라인에는 상태만 있고 확정 시각이 응답에 노출되지 않는다 |
+§2 필수·선택 규약 명문화, §5 대시보드 스키마 전량 정의, §6 컬럼 추가
+(`zones.name` · `events.height_ratio` · `nearby_snapshot` · `similar_incidents`),
+`keyframe_paths` 배열화, 카메라 규격(640×360 / 1920×1080 / 15fps / 16:9) 확정,
+`fall_*` 임계값 float화, FN-DET 개수·시안 파일명 표기 — 전부 반영했다.
 
-### B. 타입·필수 여부가 불명확했던 필드 (contracts 작성 중)
-
-| 필드 | 위치 | 판단한 내용과 근거 |
-|---|---|---|
-| `events.keyframe_paths` | 기능 §6 | 타입이 `text` 인데 이름은 복수형이고 API §4.1은 `keyframe_urls` **배열**을 반환한다. **§6대로 `text` 로 두었다.** 배열이 맞다면 `jsonb` 로 바꿔야 한다 |
-| `frame.objects[].helmet_conf` · `helmet_checked_at` | API §2.1 | `helmet` 은 "생략" 표기가 있으나 이 둘에는 없다. `helmet` 에 종속된 값이므로 **선택**으로 두었다 |
-| person 전용 필드 전반 (`foot_point` 등) | API §2.1 | 표에 필수 표시가 없다. `helmet`(생략) · `in_zone`(null) 만 명시적 표기가 있으므로 **나머지는 필수**로 해석했다 |
-| vehicle 전용 필드 (`anchor_m` · `moving` · `danger_radius_m`) | API §2.1 | 같은 이유로 **필수**로 해석했다 |
-| `candidate` 의 `cam_id` · `ts` · `bbox` · `conf` · `foot_conf` | API §2.2 | 필드 설명표에는 없고 예시 JSON에만 있다. 예시대로 **필수**로 두었다 |
-| `GET /events` 의 `from` · `to` | API §4.1 | 날짜인지 시각인지 불명확. `POST /search/scenes` 는 날짜(`2026-08-05`)를 쓴다. 이벤트는 **시각(datetime)** 으로 해석했다 |
-| `metrics/timeseries` · `distribution` · `repeat` 응답 | API §4.2 | **응답 스키마가 없다.** 창작하지 않고 쿼리 모델만 정의했다 |
-| `assistant/chat` 의 `attachments[]` | API §4.4 | 원소 스키마가 없다. `dict` 로 열어 두었다 |
-| WS `overlay` · `event_created` · `metric` · `anomaly` · `system` | API §5 | `event_updated` 외에는 전체 JSON이 없다. 한 줄 설명이 가리키는 기존 스키마를 재사용했다(예: `metric` → `MetricsSummary`) |
-| `AlertCommand.level` | API §3 | 값 범위가 1·2·3 이라고 산문에 적혀 있으나 타입은 `int` 다. `int` 로 두었다 |
-
-### C. 문서 간 표기 불일치
+### A. 갱신분 안에서 새로 생긴 불일치
 
 | 내용 | 상세 |
 |---|---|
-| FN-DET 개수 | `CLAUDE.md` 문서 지도는 **FN-DET-01~13**, 기능명세서 §4.1은 **01~12** 까지만 정의한다. 이 표는 명세서를 따라 12건으로 만들었다 |
-| FN-SYS 순서 | 기능명세서 §4.8 표가 `01·02·03·**05**·04` 순서로 적혀 있다 |
-| 디자인 시안 파일명 | `CLAUDE.md` · 부록 A-1 은 `docs/front_design.pdf`, 실제 파일은 `docs/AEGIS_front_design.pdf` |
-| `sub` 스트림 해상도 | "640p" 로만 적혀 있어 640×360인지 640×480인지 불명확하다. 메인이 16:9 1080p이므로 `deploy/fake_cams.sh` 는 **640×360** 을 기본으로 두었다(`SUB_SIZE` 로 변경 가능) |
-| 카메라 송출 fps | 엣지 처리 목표는 8fps 이상인데 카메라 자체 fps는 명시가 없다. `fake_cams.sh` 는 **15fps** 를 기본으로 둔다(`FPS` 로 변경 가능) |
+| §2.4 `heartbeat` 필드 표 | JSON 예시는 `cameras[]` 배열(`cam_id`·`connected`·`fps`)로 바뀌었는데 **아래 필드 표는 그대로다** — 여전히 `fps` 항목이 있고 `cameras` 를 "스트림 상태 ok/reconnecting/down"으로 설명한다. 코드는 JSON 예시를 따랐다 |
+| §2.4 JSON 예시 | `"depth_calls_per_min": 14,` 뒤에 항목이 없는데 쉼표가 남아 있어 그대로는 파싱되지 않는다(문서상 오타) |
+| §4.6 `GET /system/status` | §2.2가 거부 건수 노출을 요구(FN-SYS-06)하지만 §4.6 응답 예시에 반영되지 않았다. **필드명이 정해지지 않아** 카운터 이름을 따라 `edge.edge_msg_rejected_total`(int)로 두었다 |
+| §4.6 `edge.fps` | 여전히 `{"cam1":8.2,"cam2":8.2}` 딕셔너리다. §2.4가 배열로 바뀐 것과 표기가 갈린다. §4.6대로 두었다 |
+| §5.1 `overlay` 의 `bbox` | 예시값이 `[0.42, 0.31, 0.08, 0.24]` 로 **`[x, y, w, h]` 처럼 보인다.** §1.2는 `[x1, y1, x2, y2]`(좌상단·우하단)로 정의한다. 코드는 §1.2를 따랐고 타입은 어느 쪽이든 `float[4]` 라 모델은 같지만, **렌더링이 갈리므로 확정이 필요하다** |
+| `zone_updated` 메시지 | §5.1 본문이 "`zone_updated` 수신 시 갱신한다"고 하는데 **§5 타입 표에도 없고 스키마도 없다.** 7번째 메시지 유형인지 확인 필요. 정의가 없어 만들지 않았다 |
+| §5.2 `violation` | §4.1은 같은 값을 `violation_type` 이라 부른다. 이름만 다르다 |
+| §5.2 `event_updated` | "변경된 필드만 싣는다"고 하는데 **가능한 필드 집합이 열거되지 않았다.** 예시의 `resolved_at`·`resolution_sec` 만 선택 필드로 두었으므로, `lost`·`expired` 전이는 `event_id`+`status` 만 나간다(`lost_at`·`expired_at`·`alert_count` 를 실을 수 없다) |
+| §5.3 `metric` | §4.2 `GET /metrics/summary` 에 있는 `fall_events` 와 `anomaly_flags` 가 §5.3 페이로드에는 없다. 의도적 축소인지 누락인지 불명확. §5.3대로 두었다 |
+| §5.3 `system` | `component` 와 `state` 의 값 목록이 열거되지 않았다(`cloud_api` · `degraded` 예시뿐). `str` 로 열어 두었다 |
+| §5.2 `severity` | 새 필드다. §3 `AlertCommand.level`(1=주의/2=경고/3=긴급)과 같은 척도로 보이나 명시가 없다. `int` 로 두었다 |
+| §6 `keyframe_paths` | 지시대로 `jsonb` 배열로 바꿨으나 **§6 표기는 여전히 `text`** 다. 명세서 갱신이 필요하다 |
+
+### B. 판단이 필요했던 타입 (지시 반영 과정)
+
+| 필드 | 판단 |
+|---|---|
+| `anomaly_sample_interval_min` | "분 단위 주기"라 개수로 볼 수도 있으나 **지속시간 계열로 보아 `float`** 로 했다. 정수만 허용해야 한다면 되돌려야 한다 |
+| `cls_min_crop_px` | Policies 에서 **유일하게 `int` 로 남긴 값**이다(픽셀 수는 셀 수 있는 값). 서브 640×360 기준 64px = 프레임 높이의 17.8% 로, FN-DET-04 카메라 설치 지침의 "약 18%"와 일치한다 |
+| `overlay.objects[].violations` · `event_ids` · `nearby` | "없으면 빈 배열"이므로 **필드는 항상 실리는 것**으로 보고 기본값을 주지 않았다 |
+| `event_created.zone_id` · `alerted_at` | §5.2 예시에는 값이 있으나 §4.1이 둘 다 nullable 이므로 **필수 + null 허용**으로 두었다 |
+| `anomaly.note` · `keyframe_url` | 클라우드 미가용 시 설명이 없을 수 있어(FN-SYS-03) **필수 + null 허용**으로 두었다 |
+
+### C. 이전부터 남아 있는 항목
+
+| 내용 | 상세 |
+|---|---|
+| `metrics/timeseries` · `distribution` · `repeat` 응답 | **응답 스키마가 여전히 없다.** 창작하지 않고 쿼리 모델만 정의했다 |
+| `assistant/chat` 의 `attachments[]` | 원소 스키마가 없다. `dict` 로 열어 두었다 |
+| `events.confirmed_at` | §6에는 있으나 §4.1 응답에는 노출되지 않는다(§5.2 `event_created` 에는 있다) |
+| `AlertCommand.level` | 값 범위가 산문에만 있고 타입은 `int` 다 |
+| 명세서 부록 A-1·B | 시안을 `docs/front_design.pdf` 로 표기하지만 실제 파일은 `docs/AEGIS_front_design.pdf` 다. `CLAUDE.md` 는 고쳤고 명세서는 수정 대상이 아니라 두었다 |

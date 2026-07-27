@@ -23,3 +23,11 @@ description: 프론트 — 디자인 시안 준수, 오버레이 시간 정합
 - 박스는 `person` 과 `vehicle` 에만 그린다. **안전모는 별도 박스가 없고** 사람 박스의
   색과 라벨로 표현한다.
 - 지표는 항상 병기한다 — `방송 후 시정률 87% (판정 불가 5%)`.
+
+**위반 여부를 클라이언트가 추론하지 않는다.** 서버가 `overlay.objects[]` 에
+`violations` · `event_ids` · `alert_state` 를 실어 보낸다. 박스 색은 `violations` 로
+정하고, 거리선은 `nearby[].dist_m`(라벨)과 `nearby[].anchor`(반대편 끝점)로 긋는다.
+`helmet` 값으로 위반을 유추하지 마라 — `proximity` · `fall` 을 놓친다.
+
+**금지구역 폴리곤은 `overlay` 에 오지 않는다.** 매 프레임 변하지 않으므로
+`GET /zones` 로 한 번 조회해 캐시한다.
