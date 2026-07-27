@@ -2,10 +2,9 @@
 
 출처: `docs/AEGIS_기능명세서.md` §6 (데이터 모델)
 
-**§6에 적힌 컬럼만 정의한다.** §4 REST 응답이 요구하지만 §6에 컬럼이 없는 값
-(`zones.name`, `events.height_ratio`, `events.nearby_snapshot` 등)은 여기서 임의로
-만들지 않았다. `docs/INDEX.md` 의 「명세서 확인 필요」 절에 목록으로 남겨 두었고,
-명세서가 갱신되면 그때 반영한다(CLAUDE.md 절대규칙 8).
+**§6에 적힌 컬럼만 정의한다.** 명세서에 없는 컬럼을 여기서 만들지 않으며,
+필요해 보이면 `docs/INDEX.md` 의 「명세서 확인 필요」 절에 남기고 사람의 판단을
+기다린다(CLAUDE.md 절대규칙 8).
 """
 
 from __future__ import annotations
@@ -14,7 +13,7 @@ from datetime import datetime
 from typing import Any
 
 from pgvector.sqlalchemy import HALFVEC
-from sqlalchemy import Column, DateTime
+from sqlalchemy import REAL, Column, DateTime
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
@@ -75,11 +74,33 @@ class Event(SQLModel, table=True):
     min_distance_m: float | None = Field(default=None)
     depth_verified: bool | None = Field(default=None)
     posture: str | None = Field(default=None)
-    stillness_s: float | None = Field(default=None, description="쓰러짐 판정 근거")
+    stillness_s: float | None = Field(default=None, description="쓰러짐 판정 근거 ③")
+    height_ratio: float | None = Field(
+        default=None,
+        # §6이 이 컬럼만 `real` 로 명시한다. SQLModel 기본 매핑(double precision)을
+        # 쓰면 마이그레이션과 타입이 어긋나므로 명시적으로 REAL 을 준다.
+        sa_column=Column(REAL, nullable=True),
+        description="쓰러짐 판정 근거 ① (확정 시점 값)",
+    )
     helmet_conf: float | None = Field(default=None, description="2단계 분류 신뢰도")
 
+    nearby_snapshot: list[dict[str, Any]] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, nullable=False, server_default="[]"),
+        description="확정 시점 주변 차량 목록 [{track_id, dist_m, moving}]",
+    )
+    similar_incidents: list[dict[str, Any]] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, nullable=False, server_default="[]"),
+        description="유사 사고사례. 확정 시 1회 계산해 저장한다",
+    )
+
     clip_path: str | None = Field(default=None)
-    keyframe_paths: str | None = Field(default=None)
+    keyframe_paths: list[str] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, nullable=False, server_default="[]"),
+        description="키프레임 저장 경로 배열 (2~3장)",
+    )
     clip_status: str | None = Field(
         default=None,
         description="pending / ready / failed — 예약 추출 상태",
@@ -111,6 +132,7 @@ class Zone(SQLModel, table=True):
 
     zone_id: str = Field(primary_key=True)
     cam_id: int = Field(index=True)
+    name: str = Field(description="표시 이름. 예: 지게차 통행로")
     polygon_m: list[list[float]] = Field(
         default_factory=list,
         sa_column=Column(JSONB, nullable=False, server_default="[]"),

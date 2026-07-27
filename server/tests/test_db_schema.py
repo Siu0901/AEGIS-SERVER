@@ -42,6 +42,9 @@ SPEC_EVENT_COLUMNS = {
     "posture",
     "stillness_s",
     "helmet_conf",
+    "height_ratio",
+    "nearby_snapshot",
+    "similar_incidents",
     "clip_path",
     "keyframe_paths",
     "clip_status",
@@ -51,6 +54,9 @@ SPEC_EVENT_COLUMNS = {
     "is_false_positive",
 }
 
+#: 기능명세서 §6 `zones` 컬럼 전량.
+SPEC_ZONE_COLUMNS = {"zone_id", "cam_id", "name", "polygon_m", "buffer_m", "active"}
+
 
 def test_all_spec_tables_exist() -> None:
     assert set(SQLModel.metadata.tables) == SPEC_TABLES
@@ -59,6 +65,31 @@ def test_all_spec_tables_exist() -> None:
 def test_events_columns_match_spec_exactly() -> None:
     columns = set(SQLModel.metadata.tables["events"].columns.keys())
     assert columns == SPEC_EVENT_COLUMNS
+
+
+def test_zones_columns_match_spec_exactly() -> None:
+    columns = set(SQLModel.metadata.tables["zones"].columns.keys())
+    assert columns == SPEC_ZONE_COLUMNS
+
+
+def test_height_ratio_is_real() -> None:
+    """§6이 이 컬럼만 `real` 로 명시한다. 마이그레이션과 타입이 어긋나면 안 된다."""
+    kind = SQLModel.metadata.tables["events"].columns["height_ratio"].type
+    assert type(kind).__name__ == "REAL"
+
+
+@pytest.mark.parametrize(
+    "column",
+    ["keyframe_paths", "nearby_snapshot", "similar_incidents", "regulation_refs", "prev_track_ids"],
+)
+def test_list_valued_columns_are_jsonb(column: str) -> None:
+    """복수 값을 담는 컬럼은 text 가 아니라 jsonb 다.
+
+    `keyframe_paths` 는 키프레임 2~3장을 담고 `GET /events/{id}` 가 `keyframe_urls`
+    **배열**로 반환하므로 text 로는 성립하지 않는다.
+    """
+    kind = SQLModel.metadata.tables["events"].columns[column].type
+    assert type(kind).__name__ == "JSONB"
 
 
 @pytest.mark.parametrize("table", ["events", "normal_pool"])
