@@ -1,10 +1,21 @@
 # 가짜 IP 카메라 RTSP 서버 설정
 #
 # 영상은 듀얼 스트림으로 분리된다(CLAUDE.md 아키텍처).
-#   main 1080p → 서버  : 라이브 재스트리밍 · 7일 링버퍼 녹화 · 클립 원본
-#   sub   640p → 엣지  : 추론 (엣지는 영상을 중계하지 않고 메타데이터만 올린다)
 #
-# 송출:  make cams          (deploy/fake_cams.sh)
+#   경로            해상도       코덱    fps  화면비  용도
+#   camN/main   1920×1080   H.264   15   16:9   서버 — 라이브 · 7일 녹화 · 클립 원본
+#   camN/sub      640×360   H.264   15   16:9   엣지 — 추론
+#
+# **두 스트림의 화면비는 반드시 16:9로 같아야 한다**(API명세서 §1.2).
+# 엣지는 서브에서 정규화 좌표를 산출하고 대시보드는 그 좌표를 메인 위에 그리므로,
+# 화면비가 다르면 좌표가 한쪽 축으로 눌려 박스가 어긋난다.
+# 서브를 정사각(640×640)으로 설정하면 화각이 잘리므로 쓰지 않는다.
+# (모델 입력의 640×384 rect letterbox 는 엣지 내부 전처리이며 스트림 규격과 무관하다.)
+#
+# 실제 IP 카메라로 교체할 때도 위 표를 그대로 맞춘다. 어긋나면 엣지 추론 예산
+# (기능명세서 §5)과 오버레이 정합(±100ms) 실측이 의미를 잃는다.
+#
+# 송출:  make cams          (deploy/fake_cams.sh — 화면비를 검증한다)
 # 재생:  rtsp://localhost:8554/cam1/main
 
 logLevel: info
@@ -43,14 +54,14 @@ apiAddress: :9997
 
 paths:
   # --- 카메라 1 ---
-  cam1/main:
+  cam1/main:  # 1920×1080 · H.264 · 15fps → 서버
     source: publisher
     # 링버퍼 녹화(FN-REC-02)는 서버가 담당한다. 여기서는 켜지 않는다.
-  cam1/sub:
+  cam1/sub:  # 640×360 · H.264 · 15fps → 엣지
     source: publisher
 
   # --- 카메라 2 ---
-  cam2/main:
+  cam2/main:  # 1920×1080 · H.264 · 15fps → 서버
     source: publisher
-  cam2/sub:
+  cam2/sub:  # 640×360 · H.264 · 15fps → 엣지
     source: publisher

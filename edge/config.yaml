@@ -1,0 +1,69 @@
+# 엣지(Jetson Orin Nano) 설정
+#
+# 모델 경로·엔진·입력 형태는 **코드에 하드코딩하지 않는다**(CLAUDE.md 절대규칙 6).
+# 여기 있는 것은 엣지 장비에 종속된 값뿐이고, 판정 임계값(확정/해소 지속시간, 근접
+# 임계, 분류 게이트 등)은 서버 DB `policies` 테이블에서 받아온다 — 현장에서 관리자가
+# 화면으로 조정하는 값이기 때문이다.
+#
+# M9 에서 실물 러너가 이 파일을 읽는다. 그 전까지는 규격 기록 겸 자리다.
+
+streams:
+  # 서브 스트림만 엣지가 받는다. 메인(1920×1080)은 서버가 따로 받는다.
+  # 두 스트림의 화면비는 반드시 16:9로 같아야 한다(API명세서 §1.2).
+  # 다르면 정규화 좌표가 한쪽 축으로 눌려 대시보드 박스가 어긋난다.
+  - cam_id: 1
+    rtsp_sub: rtsp://localhost:8554/cam1/sub
+    width: 640
+    height: 360
+    fps: 15
+  - cam_id: 2
+    rtsp_sub: rtsp://localhost:8554/cam2/sub
+    width: 640
+    height: 360
+    fps: 15
+
+decode:
+  # NVDEC 하드웨어 디코더. CPU 디코딩 금지 — 2채널만으로 CPU가 포화된다(FN-DET-01).
+  backend: nvdec
+  target_fps: 8
+
+detect:
+  # 1단계 감지 — YOLO26-s-seg 단일 모델, person·vehicle 2클래스 (FN-DET-02).
+  engine: models/engines/yolo26s_seg_person_vehicle_fp16.engine
+  weights: models/weights/yolo26s_seg_person_vehicle.pt
+  precision: fp16
+
+  # 모델 입력 형태. **정사각이 아니다.**
+  # 프레임이 640×360(16:9)이라 정사각 레터박스(640×640)를 쓰면 위아래에 회색 패딩이
+  # 140px씩 붙고 그 영역까지 전부 연산한다. stride 32에 맞춘 640×384 rect 추론이면
+  # 패딩이 12px씩으로 줄어 픽셀 수가 약 40% 감소한다(기능명세서 §5).
+  #
+  #   640×640 정사각 레터박스 : 409,600 px
+  #   640×384 rect letterbox : 245,760 px
+  #
+  # 형식은 [height, width] 다.
+  # 학습과 추론의 입력 형태를 반드시 일치시킨다 — 다르면 도메인 시프트가 생긴다.
+  imgsz: [384, 640]
+  rect: true
+
+classify:
+  # 2단계 안전모 분류 — 사람 크롭 224×224 (FN-DET-04).
+  # 크기·신뢰도 게이트 값(cls_min_crop_px · cls_min_conf)은 서버 policies 에서 받는다.
+  engine: models/engines/yolo26_cls_helmet_fp16.engine
+  weights: models/weights/yolo26_cls_helmet.pt
+  input_size: 224
+  batch: true
+
+depth:
+  # 온디맨드 뎁스 검증 — Depth Anything V2 Small (FN-DET-11).
+  # 트리거 조건과 캐시 유효기간은 서버 policies 에서 받는다.
+  engine: models/engines/depth_anything_v2_small_fp16.engine
+  weights: models/weights/depth_anything_v2_small.pt
+
+track:
+  # ByteTrack (CPU). person·vehicle 모두에 track_id 를 부여한다(FN-DET-03).
+  backend: bytetrack
+
+server:
+  ws_url: ws://localhost:8000/ws/edge
+  heartbeat_interval_s: 5
