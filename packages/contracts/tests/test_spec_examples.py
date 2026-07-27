@@ -16,8 +16,10 @@ from aegis_contracts import (
     AnomalyMsg,
     CameraHealth,
     CameraStatus,
+    CameraSystemMsg,
     CandidateMsg,
     ChatResponse,
+    ComponentSystemMsg,
     DashboardMessage,
     DetectedPerson,
     DetectedVehicle,
@@ -37,7 +39,6 @@ from aegis_contracts import (
     OverlayPerson,
     OverlayVehicle,
     Policies,
-    SystemMsg,
     TrackLostMsg,
     ViolationType,
     ZoneUpdatedMsg,
@@ -632,13 +633,14 @@ SYSTEM_EXAMPLE: dict[str, Any] = {
     "at": "2026-08-14T05:30:00Z",
 }
 
-#: API명세서 §5.3 두 번째 예시 — `component == "camera"` 는 `cam_id` 를 함께 싣는다.
+#: API명세서 §5.3 두 번째 예시 — `component == "camera"` 는 `cam_id` 와 `stream` 을 싣는다.
 SYSTEM_CAMERA_EXAMPLE: dict[str, Any] = {
     "type": "system",
     "component": "camera",
     "cam_id": 2,
+    "stream": "main",
     "state": "reconnecting",
-    "detail": "메인 스트림 재연결 중",
+    "detail": "RTSP 재연결 시도 2회",
     "at": "2026-08-14T05:31:12Z",
 }
 
@@ -714,8 +716,8 @@ def test_overlay_zone_polygon_is_not_carried() -> None:
         (EVENT_UPDATED_EXAMPLE, EventUpdatedMsg),
         (METRIC_EXAMPLE, MetricMsg),
         (ANOMALY_EXAMPLE, AnomalyMsg),
-        (SYSTEM_EXAMPLE, SystemMsg),
-        (SYSTEM_CAMERA_EXAMPLE, SystemMsg),
+        (SYSTEM_EXAMPLE, ComponentSystemMsg),
+        (SYSTEM_CAMERA_EXAMPLE, CameraSystemMsg),
         (ZONE_UPDATED_EXAMPLE, ZoneUpdatedMsg),
     ],
 )
@@ -723,11 +725,57 @@ def test_dashboard_union_dispatches_on_type(payload: dict[str, Any], expected: t
     assert isinstance(_dashboard_adapter.validate_python(payload), expected)
 
 
-def test_system_camera_example_carries_cam_id() -> None:
-    """§5.3 — `component == "camera"` 면 `cam_id` 를 함께 싣는다."""
-    msg = SystemMsg.model_validate(SYSTEM_CAMERA_EXAMPLE)
+# --- §5.3 system — component 로 판별된다 ------------------------------------
+
+
+def test_system_camera_example_parses() -> None:
+    """§5.3 — `component == "camera"` 면 `cam_id` 와 `stream` 이 함께 온다."""
+    msg = CameraSystemMsg.model_validate(SYSTEM_CAMERA_EXAMPLE)
     assert msg.cam_id == 2
-    assert SystemMsg.model_validate(SYSTEM_EXAMPLE).cam_id is None
+    assert msg.stream == "main"
+    assert msg.state == "reconnecting"
+
+
+@pytest.mark.parametrize("missing", ["cam_id", "stream"])
+def test_camera_system_requires_cam_id_and_stream(missing: str) -> None:
+    """어느 카메라의 어느 스트림인지 모르면 대시보드가 캐시를 갱신할 수 없다."""
+    payload = {k: v for k, v in SYSTEM_CAMERA_EXAMPLE.items() if k != missing}
+    with pytest.raises(ValueError, match=missing):
+        _dashboard_adapter.validate_python(payload)
+
+
+@pytest.mark.parametrize("extra", [{"cam_id": 1}, {"stream": "main"}])
+def test_non_camera_system_forbids_stream_fields(extra: dict[str, Any]) -> None:
+    """카메라가 아닌 구성요소는 스트림이 없다 — `cam_id`·`stream` 을 싣지 않는다."""
+    key = next(iter(extra))
+    with pytest.raises(ValueError, match=key):
+        _dashboard_adapter.validate_python(SYSTEM_EXAMPLE | extra)
+
+
+def test_system_state_is_narrowed_by_component() -> None:
+    """두 열거형을 합집합으로 열어두지 않는다 (§5.3 검증 규칙)."""
+    # 스트림에는 `degraded` 가 없다.
+    with pytest.raises(ValueError, match="state"):
+        _dashboard_adapter.validate_python(SYSTEM_CAMERA_EXAMPLE | {"state": "degraded"})
+
+    # 구성요소에는 `reconnecting` 이 없다.
+    with pytest.raises(ValueError, match="state"):
+        _dashboard_adapter.validate_python(SYSTEM_EXAMPLE | {"state": "reconnecting"})
+
+    # 공통값은 양쪽 다 통과한다.
+    for shared in ("ok", "down"):
+        assert (
+            _dashboard_adapter.validate_python(SYSTEM_CAMERA_EXAMPLE | {"state": shared}).state
+            == shared
+        )
+        assert (
+            _dashboard_adapter.validate_python(SYSTEM_EXAMPLE | {"state": shared}).state == shared
+        )
+
+
+def test_camera_stream_kind_is_main_or_sub() -> None:
+    with pytest.raises(ValueError, match="stream"):
+        _dashboard_adapter.validate_python(SYSTEM_CAMERA_EXAMPLE | {"stream": "both"})
 
 
 #: §5 구조 규약이 허용하는 단일 객체 중첩 — REST 리소스를 그대로 전달하는 경우뿐이다.

@@ -19,10 +19,12 @@ __all__ = [
     "HelmetState",
     "MetricBucket",
     "MetricName",
+    "NonCameraComponent",
     "ObjectClass",
     "Posture",
     "RepeatSubject",
     "SearchMode",
+    "StreamKind",
     "StreamState",
     "SystemComponent",
     "TrackLostReason",
@@ -67,10 +69,13 @@ DistanceMethod = Literal["bbox_center", "mask_nearest"]
 #: 트랙 소실 사유(진단용). API명세서 §2.3.
 TrackLostReason = Literal["occluded", "out_of_view", "low_conf"]
 
-#: 카메라 **스트림** 상태. API명세서 §2.4 `sub_state` · §4.6 `main_state`·`sub_state`.
+#: 카메라 **스트림** 상태. API명세서 §2.4 `sub_state` · §4.6 `main_state`·`sub_state`
+#: · §5.3 `component == "camera"` 인 경우의 `state`.
 #:
-#: `ComponentState` 와 **통합하지 않는다.** 스트림에는 `degraded` 가, API 구성요소에는
-#: `reconnecting` 이 의미가 없기 때문이다(§4.6 「상태 값이 두 종류인 이유」).
+#: 연결이 있거나, 재시도 중이거나, 끊김.
+#:
+#: `ComponentState` 와 **통합하지 않는다.** 스트림에는 "동작하나 성능 저하"라는 중간
+#: 상태가 없고 대신 "재연결 중"이 있다(§4.6 「상태 값이 두 종류인 이유」).
 StreamState = Literal["ok", "reconnecting", "down"]
 
 #: 오버레이 박스의 경고 단계. API명세서 §5.1 `objects[].alert_state`.
@@ -84,8 +89,18 @@ AlertLevel = Literal[1, 2, 3]
 #: 상태 변화를 보고하는 구성요소. API명세서 §5.3 `system.component`.
 SystemComponent = Literal["edge", "camera", "mcu", "cloud_api", "storage", "db"]
 
-#: 구성요소 상태. API명세서 §5.3 `system.state`.
-#: `CameraState`(§4.6 스트림 상태)와 값이 다르다 — 이쪽은 `degraded`, 저쪽은 `reconnecting`.
+#: `camera` 를 뺀 구성요소. API명세서 §5.3
+#:
+#: 카메라만 따로 두는 이유: 카메라는 구성요소가 아니라 **스트림 두 개를 가진 대상**이라
+#: `cam_id` · `stream` 이 함께 필요하고 상태 값 집합도 다르다.
+NonCameraComponent = Literal["edge", "mcu", "cloud_api", "storage", "db"]
+
+#: 어느 스트림인지. API명세서 §5.3 `system.stream`.
+#: `main` = 1920×1080 라이브·녹화(서버 관측) / `sub` = 640×360 추론(엣지 관측).
+StreamKind = Literal["main", "sub"]
+
+#: 구성요소 상태. API명세서 §5.3 — **`component != "camera"` 인 경우**.
+#: 정상 / 동작하나 성능·한도 저하 / 사용 불가.
 ComponentState = Literal["ok", "degraded", "down"]
 
 #: 구역 변경 종류. API명세서 §5.4 `zone_updated.action`.

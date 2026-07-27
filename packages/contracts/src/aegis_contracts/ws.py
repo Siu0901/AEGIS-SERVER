@@ -21,15 +21,18 @@ from .enums import (
     ComponentState,
     EventStatus,
     HelmetState,
+    NonCameraComponent,
     Posture,
+    StreamKind,
     StreamState,
-    SystemComponent,
     ViolationType,
     ZoneAction,
 )
 
 __all__ = [
     "AnomalyMsg",
+    "CameraSystemMsg",
+    "ComponentSystemMsg",
     "DashboardMessage",
     "EventCreatedMsg",
     "EventUpdatedMsg",
@@ -245,26 +248,49 @@ class AnomalyMsg(SpecModel):
     keyframe_url: str | None
 
 
-class SystemMsg(SpecModel):
-    """`system` — 구성요소 상태 변화. API명세서 §5.3
+class CameraSystemMsg(SpecModel):
+    """`system` — 카메라 **스트림** 상태 변화. API명세서 §5.3
 
-    **변화한 구성요소 하나만** 보낸다. 전체 스냅샷이 필요하면 `GET /system/status` 를 쓴다.
+    카메라는 구성요소가 아니라 **스트림 두 개**(메인 1080p / 서브 640×360)를 가진
+    대상이다. 둘은 독립적으로 끊기므로 어느 쪽이 바뀌었는지를 `stream` 으로 지정한다.
+
+    이 메시지를 받으면 대시보드는 캐시된 `GET /system/status` 의 해당 카메라
+    `main_state` 또는 `sub_state` 를 갱신한다.
     """
 
     type: Literal["system"] = "system"
-    component: SystemComponent
-    state: ComponentState | StreamState
-    """구성요소 상태.
-
-    §4.6 표는 이 필드에 `ComponentState`(`ok`/`degraded`/`down`)를 지정하지만,
-    §5.3 두 번째 예시는 `component="camera"` 에 `state="reconnecting"`(`StreamState`)
-    을 쓴다. 카메라는 구성요소이자 스트림이라 두 값 집합이 겹치는 자리다.
-    **명세서 확인이 필요해** 두 열거형의 합집합으로 열어 두었다.
-    """
+    component: Literal["camera"] = "camera"
+    cam_id: int
+    stream: StreamKind
+    state: StreamState
+    """스트림에는 "동작하나 성능 저하"가 없고 대신 "재연결 중"이 있다."""
     detail: str
     at: AwareDatetime
-    cam_id: int | None = None
-    """`component == "camera"` 인 경우에만 함께 싣는다(§5.3 component 표)."""
+
+
+class ComponentSystemMsg(SpecModel):
+    """`system` — 카메라 외 구성요소 상태 변화. API명세서 §5.3
+
+    `cam_id` · `stream` 을 싣지 않는다 — 스트림이 아니라 구성요소이기 때문이다.
+    """
+
+    type: Literal["system"] = "system"
+    component: NonCameraComponent
+    state: ComponentState
+    detail: str
+    at: AwareDatetime
+
+
+#: `system` — 구성요소 상태 변화. API명세서 §5.3
+#:
+#: **변화한 구성요소 하나만** 보낸다. 전체 스냅샷이 필요하면 `GET /system/status` 를 쓴다.
+#:
+#: `component` 로 판별되는 유니온이다. 두 열거형을 합집합으로 열어두지 않는다 —
+#: `camera` 는 `StreamState`, 나머지는 `ComponentState` 로 각각 좁혀진다.
+SystemMsg = Annotated[
+    CameraSystemMsg | ComponentSystemMsg,
+    Field(discriminator="component"),
+]
 
 
 # --------------------------------------------------------------------------
