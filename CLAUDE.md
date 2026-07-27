@@ -180,6 +180,3 @@ make types       contracts → front TypeScript 타입 생성
 | FN-ID ↔ 코드 위치 ↔ 테스트 매핑 · 진척 | `docs/INDEX.md` |
 | 화면 디자인 시안 (레이아웃만 참조, 라벨은 명세서 우선) | `docs/AEGIS_front_design.pdf` |
 | 미채택 기능 · 시안 불일치 대조표 | `docs/AEGIS_기능명세서.md` 부록 A · B |
-
-※ 명세서 부록 A-1·B 는 시안을 `docs/front_design.pdf` 로 표기하지만 실제 파일명은
-`docs/AEGIS_front_design.pdf` 다. 같은 파일을 가리킨다.

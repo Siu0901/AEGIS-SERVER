@@ -217,26 +217,28 @@ FN-ID가 붙지 않는 기반 작업이다. 전부 완료되었고 `make verify`
 
 ### 해소됨
 
-**v2 갱신분** — §2 필수·선택 규약 명문화, §5 대시보드 스키마 정의, §6 컬럼 추가,
-`keyframe_paths` 배열화, 카메라 규격 확정, `fall_*` 임계값 float화, FN-DET 개수·시안
-파일명 표기.
+**v2** — §2 필수·선택 규약 명문화, §5 대시보드 스키마 정의, §6 컬럼 추가,
+`keyframe_paths` 배열화, 카메라 규격 확정, `fall_*` 임계값 float화.
 
-**v3 갱신분 (직전에 보고한 12건 전량)** — §2.4 필드 표 재작성·JSON 오타, §4.6
-`edge.fps` 제거와 `cameras[].fps` 통일, `edge.msg_rejected_total` 신설, §5.1 `bbox`
-`[x1,y1,x2,y2]` 확정, §5.4 `zone_updated` 신설, `violation` → `violation_type`,
-`event_updated` 전이별 동반 필드 표, `severity` = `AlertCommand.level` 동일 척도,
-§5.3 `metric` 에 `fall_events`·`anomaly_flags` 추가, `component`·`state` 값 목록,
-§6 `keyframe_paths` jsonb 표기. — 전부 코드에 반영했다.
+**v3** — §2.4 필드 표 재작성, §4.6 `edge.fps` 제거, `edge.msg_rejected_total` 신설,
+§5.1 `bbox` 코너 형식 확정, §5.4 `zone_updated` 신설, `violation_type` 통일,
+`event_updated` 전이별 동반 필드, `severity` = `AlertCommand.level`, §5.3 `metric`
+필드 추가, `component`·`state` 값 목록, §6 `keyframe_paths` jsonb 표기.
 
-### A. v3 갱신분 안에서 새로 생긴 것
+**v4 (직전에 보고한 A 5건 · C 4건 전량)** — §5 구조 규약에 "REST 리소스 단일 객체"
+중첩 허용 명시, §5.3 `system.cam_id` 와 camera 예시, §5.4 `action` 별 필수 필드 표,
+카메라 상태 모델 재정비(`sub_state` / `main_state` + `StreamState`·`ComponentState`
+분리 근거), §4.1 `confirmed_at`, §4.2 응답 스키마 3종, §4.4 `attachments[]` 4종,
+부록 A-1·B 시안 파일명. — 전부 코드에 반영했다.
+
+### A. v4 갱신분 안에서 새로 생긴 것
 
 | 내용 | 상세 |
 |---|---|
-| §5.4 `zone_updated` 의 중첩 | §5 구조 규약은 "모든 메시지는 평면이고 중첩은 배열 원소에만 허용"인데, `zone_updated` 는 `zone` **객체**를 중첩한다. 명세서 예시대로 구현했고 평면 검사에서 이 유형만 제외했다. 규약을 고칠지 메시지를 펼칠지 확인 필요 |
-| §5.3 `system.cam_id` | `component` 표가 "`camera` — `cam_id` 필드를 함께 실음"이라고 하는데 **JSON 예시와 필드 표에는 `cam_id` 가 없다.** 선택 필드로 추가했다 |
-| §5.4 `zone` 의 필수 여부 | "`delete` 시에는 `zone_id` 만 포함"이라 타입만으로는 표현되지 않는다. `action == "upsert"` 면 `name`·`polygon_m`·`buffer_m`·`active` 를 요구하는 검증을 넣었다 — 폴리곤 없는 upsert 가 통과하면 대시보드 캐시가 망가진다 |
-| 카메라 상태 표현이 두 가지 | §2.4 `heartbeat.cameras[]` 는 `connected`(bool), §4.6 `system/status` 의 `cameras[]` 는 `state`(`ok`/`reconnecting`/`down`)다. `fps` 는 통일됐지만 상태 표현은 갈린 채로 남았다. 각 절대로 두었다 |
-| §5.3 `system.state` vs §4.6 `cameras[].state` | 값 집합이 다르다 — 전자는 `ok`/`degraded`/`down`, 후자는 `ok`/`reconnecting`/`down`. 별도 타입(`ComponentState` · `CameraState`)으로 뒀다 |
+| **§5.3 `system.state` 의 값 집합** | §4.6 표는 이 필드에 `ComponentState`(`ok`/`degraded`/`down`)를 지정하는데, **§5.3의 새 예시는 `component="camera"` 에 `state="reconnecting"`**(`StreamState`)을 쓴다. 카메라는 구성요소이자 스트림이라 두 값 집합이 겹치는 자리다. 두 열거형의 **합집합**으로 열어 두었다 — 확인 필요 |
+| §5.4 `zone` 의 "동일한 형태" | "`GET /zones` 응답 원소와 동일한 형태"라고 하지만 예시와 필수 필드 표에는 `cam_id` 가 없다(메시지 최상위에 있음). 표를 따라 `cam_id` 없이 두었다 |
+| §4.2 `points[].t` 의 타입 | `bucket` 에 따라 표기가 달라진다(`day` → `2026-08-12`, `hour` → ?). 예시가 날짜뿐이라 `str` 로 두었다 |
+| §4.2 `distribution` 의 `key` | `by=hour_of_day` 는 "0~23을 `key` 로 사용"한다는데 int 인지 문자열인지 불명확하다. 다른 축이 전부 문자열이라 `str` 로 통일했다 |
 
 ### B. 판단이 필요했던 타입
 
@@ -248,12 +250,4 @@ FN-ID가 붙지 않는 기반 작업이다. 전부 완료되었고 `make verify`
 | `overlay.objects[].violations` · `event_ids` · `nearby` | "없으면 빈 배열"이므로 **필드는 항상 실리는 것**으로 보고 기본값을 주지 않았다 |
 | `event_created.zone_id` · `alerted_at` | §5.2 예시에는 값이 있으나 §4.1이 둘 다 nullable 이므로 **필수 + null 허용**으로 두었다 |
 | `anomaly.note` · `keyframe_url` | 클라우드 미가용 시 설명이 없을 수 있어(FN-SYS-03) **필수 + null 허용**으로 두었다 |
-
-### C. 이전부터 남아 있는 항목
-
-| 내용 | 상세 |
-|---|---|
-| `metrics/timeseries` · `distribution` · `repeat` 응답 | **응답 스키마가 여전히 없다.** 창작하지 않고 쿼리 모델만 정의했다 |
-| `assistant/chat` 의 `attachments[]` | 원소 스키마가 없다. `dict` 로 열어 두었다 |
-| `events.confirmed_at` | §6에는 있으나 §4.1 응답에는 노출되지 않는다(§5.2 `event_created` 에는 있다) |
-| 명세서 부록 A-1·B | 시안을 `docs/front_design.pdf` 로 표기하지만 실제 파일은 `docs/AEGIS_front_design.pdf` 다. `CLAUDE.md` 는 고쳤고 명세서는 수정 대상이 아니라 두었다 |
+| `table` 첨부의 `rows[][]` | 셀 타입이 명시되지 않았다(예시에 문자열·정수 혼재). `list[list[Any]]` 로 두었다 |
