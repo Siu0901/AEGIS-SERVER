@@ -1,0 +1,21 @@
+[project]
+name = "aegis-server"
+version = "0.1.0"
+description = "AEGIS 메인 서버 — 상태머신 · REST · WebSocket · 스트리밍 · 클립 · 경고 · AI"
+requires-python = ">=3.13"
+dependencies = [
+    "aegis-contracts",
+    "aegis-vision",
+    "alembic>=1.14",
+    "fastapi>=0.115",
+    "paho-mqtt>=2.1",
+    "pgvector>=0.3.6",
+    "psycopg[binary]>=3.2",
+    "pydantic-settings>=2.6",
+    "sqlmodel>=0.0.22",
+    "uvicorn[standard]>=0.32",
+]
+
+# 휠로 빌드하지 않는다. `server` 는 레포 루트를 기준으로 import 되는 앱 패키지다.
+[tool.uv]
+package = false

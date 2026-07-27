@@ -1,0 +1,205 @@
+"""데이터 모델 — SQLModel 테이블 정의.
+
+출처: `docs/AEGIS_기능명세서.md` §6 (데이터 모델)
+
+**§6에 적힌 컬럼만 정의한다.** §4 REST 응답이 요구하지만 §6에 컬럼이 없는 값
+(`zones.name`, `events.height_ratio`, `events.nearby_snapshot` 등)은 여기서 임의로
+만들지 않았다. `docs/INDEX.md` 의 「명세서 확인 필요」 절에 목록으로 남겨 두었고,
+명세서가 갱신되면 그때 반영한다(CLAUDE.md 절대규칙 8).
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+
+from pgvector.sqlalchemy import HALFVEC
+from sqlalchemy import Column, DateTime
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlmodel import Field, SQLModel
+
+__all__ = [
+    "EMBEDDING_DIM",
+    "Anomaly",
+    "Camera",
+    "Event",
+    "NormalPoolSample",
+    "Policy",
+    "VehicleClassRow",
+    "Zone",
+]
+
+#: Gemini Embedding 2 차원 수. FN-AI-01 — pgvector `halfvec(3072)`.
+EMBEDDING_DIM = 3072
+
+
+def _timestamptz(*, nullable: bool = True) -> Column[Any]:
+    """`timestamptz` 컬럼. 저장은 UTC, 표시는 KST (API명세서 §1.2)."""
+    return Column(DateTime(timezone=True), nullable=nullable)
+
+
+class Event(SQLModel, table=True):
+    """확정된 위반 사건. 기능명세서 §6 `events`
+
+    상태 전이는 §4.2 상태 전이표를 따른다. `expired` 는 판정 불가이며
+    **시정률 분모·분자 모두에서 제외**된다(§4.8).
+    """
+
+    __tablename__ = "events"
+
+    event_id: str = Field(primary_key=True, description="EV-YYYYMMDD-NNNN")
+    cam_id: int = Field(index=True)
+    track_id: int = Field(index=True)
+    violation_type: str = Field(index=True)
+    zone_id: str | None = Field(default=None, index=True)
+    status: str = Field(index=True)
+
+    detected_at: datetime | None = Field(default=None, sa_column=_timestamptz())
+    confirmed_at: datetime | None = Field(default=None, sa_column=_timestamptz())
+    alerted_at: datetime | None = Field(default=None, sa_column=_timestamptz())
+    resolved_at: datetime | None = Field(default=None, sa_column=_timestamptz())
+
+    resolution_sec: int | None = Field(default=None, description="경고→시정 소요")
+    alert_count: int = Field(default=0, description="재경고 포함 횟수")
+
+    lost_at: datetime | None = Field(default=None, sa_column=_timestamptz())
+    expired_at: datetime | None = Field(default=None, sa_column=_timestamptz())
+
+    reassoc_count: int = Field(default=0, description="재결합 횟수")
+    prev_track_ids: list[int] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, nullable=False, server_default="[]"),
+        description="재결합 이전 트랙 번호 이력",
+    )
+
+    min_distance_m: float | None = Field(default=None)
+    depth_verified: bool | None = Field(default=None)
+    posture: str | None = Field(default=None)
+    stillness_s: float | None = Field(default=None, description="쓰러짐 판정 근거")
+    helmet_conf: float | None = Field(default=None, description="2단계 분류 신뢰도")
+
+    clip_path: str | None = Field(default=None)
+    keyframe_paths: str | None = Field(default=None)
+    clip_status: str | None = Field(
+        default=None,
+        description="pending / ready / failed — 예약 추출 상태",
+    )
+
+    embedding: Any | None = Field(
+        default=None,
+        sa_column=Column(HALFVEC(EMBEDDING_DIM), nullable=True),
+        description="키프레임 임베딩",
+    )
+
+    llm_analysis: str | None = Field(default=None, description="심층 분석문")
+    regulation_refs: list[dict[str, Any]] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, nullable=False, server_default="[]"),
+        description="매핑 조항",
+    )
+    is_false_positive: bool = Field(default=False, description="수동 정정")
+
+
+class Zone(SQLModel, table=True):
+    """금지구역. 기능명세서 §6 `zones`
+
+    `polygon_m` 은 **지면 실좌표(m)** 꼭짓점 배열이다. 화면에서 그린 픽셀 좌표는
+    서버가 호모그래피로 변환해 저장한다(API명세서 §4.5).
+    """
+
+    __tablename__ = "zones"
+
+    zone_id: str = Field(primary_key=True)
+    cam_id: int = Field(index=True)
+    polygon_m: list[list[float]] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, nullable=False, server_default="[]"),
+    )
+    buffer_m: float = Field(default=0.0, description="경계 여유 — 호모그래피 오차 흡수")
+    active: bool = Field(default=True)
+
+
+class Camera(SQLModel, table=True):
+    """카메라와 캘리브레이션 결과. 기능명세서 §6 `cameras`
+
+    카메라를 물리적으로 움직이면 재캘리브레이션이 필요하다(API명세서 §6.2).
+    """
+
+    __tablename__ = "cameras"
+
+    cam_id: int = Field(primary_key=True)
+    name: str
+    rtsp_main: str = Field(description="1080p 메인 — 서버(라이브 · 녹화 · 클립 원본)")
+    rtsp_sub: str = Field(description="640p 서브 — 엣지(추론)")
+    homography: list[list[float]] | None = Field(
+        default=None,
+        sa_column=Column(JSONB, nullable=True),
+        description="3×3 픽셀→지면 변환 행렬",
+    )
+    ref_height_px_at_m: dict[str, Any] | None = Field(
+        default=None,
+        sa_column=Column(JSONB, nullable=True),
+        description="높이 비율 기준값 (reference_person)",
+    )
+    calibrated_at: datetime | None = Field(default=None, sa_column=_timestamptz())
+
+
+class VehicleClassRow(SQLModel, table=True):
+    """클래스별 위험 반경. 기능명세서 §6 `vehicle_classes`
+
+    위험 반경은 장비를 따라다니는 **동적 영역**이고, 근접 임계값
+    (`proximity_threshold_m`)은 **즉시 경고 기준**이다. 둘은 2단계로 동작한다.
+    """
+
+    __tablename__ = "vehicle_classes"
+
+    class_name: str = Field(primary_key=True)
+    danger_radius_m: float = Field(default=3.0, description="지게차 기본 3.0m")
+    active: bool = Field(default=True)
+
+
+class Policy(SQLModel, table=True):
+    """정책값 key-value. 기능명세서 §6 `policies`
+
+    임계값·타이머는 코드가 아니라 **여기서 읽는다**(CLAUDE.md 절대규칙 6).
+    기본값의 원천은 `aegis_contracts.Policies` 이며 `scripts/seed_policies.py` 로 시드한다.
+    """
+
+    __tablename__ = "policies"
+
+    key: str = Field(primary_key=True)
+    value: Any = Field(sa_column=Column(JSONB, nullable=False))
+
+
+class NormalPoolSample(SQLModel, table=True):
+    """정상 풀 샘플. 기능명세서 §6 `normal_pool` · FN-AI-04
+
+    서버가 자체 1080p 스트림에서 캡처하므로 **엣지 추론 예산과 무관**하다.
+    """
+
+    __tablename__ = "normal_pool"
+
+    id: int | None = Field(default=None, primary_key=True)
+    cam_id: int = Field(index=True)
+    time_bucket: str = Field(index=True, description="시간대별 분리 축적")
+    embedding: Any | None = Field(
+        default=None,
+        sa_column=Column(HALFVEC(EMBEDDING_DIM), nullable=True),
+    )
+    sampled_at: datetime | None = Field(default=None, sa_column=_timestamptz())
+
+
+class Anomaly(SQLModel, table=True):
+    """이상 탐지 플래그. 기능명세서 §6 `anomalies` · FN-AI-04
+
+    **경고 방송·경광등을 발동하지 않는다.** 대시보드 '주의' 알림으로만 표시한다.
+    """
+
+    __tablename__ = "anomalies"
+
+    id: int | None = Field(default=None, primary_key=True)
+    cam_id: int = Field(index=True)
+    score: float
+    keyframe_path: str | None = Field(default=None)
+    llm_note: str | None = Field(default=None)
+    detected_at: datetime | None = Field(default=None, sa_column=_timestamptz())
