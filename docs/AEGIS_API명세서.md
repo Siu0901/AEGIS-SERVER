@@ -717,8 +717,8 @@ v2.0 · 2026-07-18
 
 | 열거형 | 값 | 적용 대상 |
 |---|---|---|
-| `StreamState` | `ok` / `reconnecting` / `down` | 카메라 스트림 (`main_state`, `sub_state`) |
-| `ComponentState` | `ok` / `degraded` / `down` | 시스템 구성요소 (§5.3 `system.state`) |
+| `StreamState` | `ok` / `reconnecting` / `down` | 카메라 스트림 (`main_state`, `sub_state`, §5.3 `component == "camera"` 인 경우의 `state`) |
+| `ComponentState` | `ok` / `degraded` / `down` | 시스템 구성요소 (§5.3 `system.state`, **`component != "camera"` 인 경우**) |
 
 스트림에는 `degraded` 가, API에는 `reconnecting` 이 의미가 없으므로 두 열거형을 통합하지 않는다.
 | `edge.msg_rejected_total` | 스키마 검증에 실패해 거부된 엣지 메시지 누적 건수 (FN-SYS-06). 0이 아니면 대시보드에 경고를 띄운다 |
@@ -876,27 +876,41 @@ FN-UI-02 표시 규칙(위반자 적색·근접 거리선·거리 라벨)을 채
 ```
 
 ```json
-{ "type":"system","component":"camera","cam_id":2,"state":"reconnecting",
-  "detail":"메인 스트림 재연결 중","at":"2026-08-14T05:31:12Z" }
+{ "type":"system","component":"camera","cam_id":2,"stream":"main",
+  "state":"reconnecting","detail":"RTSP 재연결 시도 2회",
+  "at":"2026-08-14T05:31:12Z" }
 ```
 
 `system` 은 **변화한 구성요소 하나만** 보낸다. 전체 스냅샷이 필요하면
 `GET /system/status` 를 사용한다.
 
-| `component` | 대상 |
-|---|---|
-| `edge` | Jetson 추론 프로세스 |
-| `camera` | 카메라 스트림 (`cam_id` 필드를 함께 실음) |
-| `mcu` | ESP32 경고 장치 |
-| `cloud_api` | Gemini API |
-| `storage` | 영상 저장소 |
-| `db` | PostgreSQL |
+**`component` 에 따라 `state` 의 값 집합과 필수 필드가 달라진다.**
 
-| `state` | 의미 |
-|---|---|
-| `ok` | 정상 |
-| `degraded` | 동작하나 성능·한도 저하 (예: 쿼터 62%, fps 미달) |
-| `down` | 사용 불가 |
+| `component` | 대상 | 추가 필수 필드 | `state` 값 집합 |
+|---|---|---|---|
+| `camera` | 카메라 **스트림** | `cam_id`, `stream` | `StreamState` |
+| `edge` | Jetson 추론 프로세스 | — | `ComponentState` |
+| `mcu` | ESP32 경고 장치 | — | `ComponentState` |
+| `cloud_api` | Gemini API | — | `ComponentState` |
+| `storage` | 영상 저장소 | — | `ComponentState` |
+| `db` | PostgreSQL | — | `ComponentState` |
+
+| 열거형 | 값 | 의미 |
+|---|---|---|
+| `StreamState` | `ok` / `reconnecting` / `down` | 연결이 있거나, 재시도 중이거나, 끊김 |
+| `ComponentState` | `ok` / `degraded` / `down` | 정상이거나, 동작하나 성능·한도 저하이거나, 사용 불가 |
+
+**`camera` 만 다른 이유**: 카메라는 구성요소가 아니라 **스트림 두 개**(메인 1080p / 서브 640×360)를 가진 대상이다. 둘은 독립적으로 끊기므로 어느 쪽이 바뀌었는지를 `stream` 필드로 지정한다. 그리고 스트림에는 "동작하나 성능 저하"라는 중간 상태가 없고 대신 "재연결 중"이 있으므로 값 집합이 다르다.
+
+| `stream` | 대상 | 관측 주체 |
+|---|---|---|
+| `main` | 1920×1080, 라이브·녹화·클립 | 서버 |
+| `sub` | 640×360, 추론 | 엣지 (`heartbeat` 경유) |
+
+이 메시지를 받으면 대시보드는 캐시된 `GET /system/status` 의 해당 카메라
+`main_state` 또는 `sub_state` 를 갱신한다.
+
+**검증 규칙**: `component == "camera"` 이면 `cam_id` 와 `stream` 이 필수이고 `state` 는 `StreamState` 로 좁힌다. 그 외 `component` 에서는 `cam_id` 와 `stream` 을 싣지 않으며 `state` 는 `ComponentState` 다. 두 열거형을 합집합으로 열어두지 않는다.
 
 ---
 
