@@ -63,9 +63,11 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# 시뮬레이터와 스크립트는 콘솔 출력이 본래 목적이다.
+# 시뮬레이터·스크립트·태스크 러너는 콘솔 출력이 본래 목적이다.
 "sim/**" = ["T20"]
 "scripts/**" = ["T20"]
+"tasks.py" = ["T20"]
+"deploy/**" = ["T20"]
 # RealClock 구현체는 시스템 시계를 읽는 유일한 곳이다.
 "packages/vision/src/aegis_vision/clock.py" = ["DTZ005"]
 
@@ -79,7 +81,7 @@ ban-relative-imports = "parents"
 python_version = "3.13"
 strict = true
 mypy_path = "packages/contracts/src:packages/vision/src:."
-files = ["packages", "server", "sim", "scripts"]
+files = ["packages", "server", "sim", "scripts", "deploy", "tasks.py"]
 exclude = "(^front/|^media/|^models/|/migrations/versions/)"
 plugins = ["pydantic.mypy"]
 warn_unreachable = true
@@ -107,6 +109,7 @@ testpaths = [
     "packages/vision/tests",
     "server/tests",
     "sim/tests",
+    "scripts/tests",
 ]
 addopts = "-q --strict-markers --strict-config"
 filterwarnings = ["error"]
