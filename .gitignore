@@ -1,1 +1,27 @@
 .idea
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+*.egg-info/
+
+# --- 환경 ---
+.env
+
+# --- 모델 가중치 · 엔진 (사람이 관리) ---
+models/weights/
+models/engines/
+*.engine
+*.onnx
+
+# --- 런타임 저장소 (녹화 · 클립 · 키프레임) ---
+media/*
+!media/README.md
+
+# --- 프론트 ---
+front/dist
+front/node_modules
