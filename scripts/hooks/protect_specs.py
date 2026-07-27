@@ -41,7 +41,9 @@ def block(message: str) -> None:
 
 def main() -> int:
     try:
-        payload = json.loads(sys.stdin.buffer.read().decode("utf-8") or "{}")
+        # `utf-8-sig` — BOM 이 붙어 오면 `utf-8` 로는 파싱이 깨지고, 아래 except 가
+        # 그것을 삼켜 이 가드가 조용히 꺼진다.
+        payload = json.loads(sys.stdin.buffer.read().decode("utf-8-sig") or "{}")
     except (ValueError, UnicodeDecodeError):
         return 0  # 훅이 작업을 막는 쪽으로 실패하면 안 된다.
 
