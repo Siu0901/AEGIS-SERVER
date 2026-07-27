@@ -593,7 +593,8 @@ stride 32에 맞춘 `640×384` 로 rect 추론하면 패딩이 12px씩으로 줄
 | `posture` | text | `standing` / `fallen` / `unknown` |
 | `stillness_s` | float | 정지 지속 시간(쓰러짐 판정 근거) |
 | `helmet_conf` | float | 분류 신뢰도 |
-| `clip_path` / `keyframe_paths` | text | 저장 경로 |
+| `clip_path` | text | 클립 파일 경로 |
+| `keyframe_paths` | jsonb | 키프레임 경로 **배열**. 클라이언트에는 `keyframe_urls` 로 변환해 내려준다 |
 | `clip_status` | text | `pending` / `ready` / `failed` (예약 추출 상태) |
 | `height_ratio` | real | 쓰러짐 판정 근거 ① (확정 시점 값) |
 | `nearby_snapshot` | jsonb | 확정 시점 주변 차량 목록 `[{track_id, dist_m, moving}]` |

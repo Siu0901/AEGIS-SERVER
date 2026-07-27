@@ -278,17 +278,19 @@ v2.0 · 2026-07-18
   "gpu_util": 0.41, "mem_used_mb": 3820,
   "cls_calls_per_min": 96,
   "cls_cache_hit_rate": 0.87,
-  "depth_calls_per_min": 14,
+  "depth_calls_per_min": 14
 }
 ```
 
 | 필드 | 설명 |
 |---|---|
-| `fps` | 카메라별 실제 처리 프레임 수. 8 미만 지속 시 대시보드 경고 |
+| `cameras[]` | 카메라별 상태 배열. **`cam_id` 는 int** 이며 §2.1 `cam_id` 와 같은 값이다 |
+| `cameras[].connected` | RTSP 연결 여부 |
+| `cameras[].fps` | 해당 카메라의 실제 처리 프레임 수. 8 미만 지속 시 대시보드 경고 |
+| `gpu_util` / `mem_used_mb` | GPU 사용률과 메모리 사용량 |
 | `cls_calls_per_min` | 2단계 분류 호출 횟수 |
 | `cls_cache_hit_rate` | 분류 캐시 적중률. 낮으면 캐시 유효기간 조정 필요 |
 | `depth_calls_per_min` | 뎁스 호출 빈도. 과다하면 회색지대 밴드 재조정 필요 |
-| `cameras` | 스트림 상태 `ok` / `reconnecting` / `down` |
 
 ---
 
@@ -631,9 +633,11 @@ v2.0 · 2026-07-18
 
 ```json
 {
-  "edge": { "online": true, "fps": {"cam1":8.2,"cam2":8.0}, "gpu_util":0.41,
-            "cls_cache_hit_rate":0.87, "depth_calls_per_min":14 },
-  "cameras": [{"cam_id":1,"state":"ok"},{"cam_id":2,"state":"ok"}],
+  "edge": { "online": true, "gpu_util":0.41,
+            "cls_cache_hit_rate":0.87, "depth_calls_per_min":14,
+            "msg_rejected_total":0 },
+  "cameras": [{"cam_id":1,"state":"ok","fps":8.2},
+              {"cam_id":2,"state":"ok","fps":8.0}],
   "mcu": { "online": true, "last_seen":"2026-08-14T05:39:58Z" },
   "cloud": { "available": true, "quota_used": 0.62 },
   "storage": { "retention_days":7, "free_gb":512 },
@@ -643,6 +647,8 @@ v2.0 · 2026-07-18
 
 | 필드 | 설명 |
 |---|---|
+| `cameras[].fps` | 카메라별 처리 fps. **§2.4 `heartbeat.cameras[]` 와 동일한 배열 형식**을 쓴다 |
+| `edge.msg_rejected_total` | 스키마 검증에 실패해 거부된 엣지 메시지 누적 건수 (FN-SYS-06). 0이 아니면 대시보드에 경고를 띄운다 |
 | `cloud.quota_used` | 무료 한도 사용률. 초과 시 분석 기능만 중단되고 안전 기능은 무관 |
 | `time_sync.edge_offset_ms` | 엣지-서버 시각 차이. 크면 클립 추출 구간이 어긋남 |
 
@@ -686,8 +692,8 @@ FN-UI-02 표시 규칙(위반자 적색·근접 거리선·거리 라벨)을 채
     {
       "class": "person",
       "track_id": 3,
-      "bbox": [0.42, 0.31, 0.08, 0.24],
-      "foot_point": [0.46, 0.55],
+      "bbox": [0.197, 0.364, 0.273, 0.764],
+      "foot_point": [0.235, 0.762],
       "in_zone": "forklift_lane",
       "helmet": "off",
       "posture": "standing",
@@ -695,15 +701,15 @@ FN-UI-02 표시 규칙(위반자 적색·근접 거리선·거리 라벨)을 채
       "event_ids": ["EV-20260814-0231", "EV-20260814-0232"],
       "alert_state": "alerted",
       "nearby": [
-        { "track_id": 7, "class": "vehicle", "dist_m": 3.2,
-          "anchor": [0.71, 0.62], "in_danger_zone": false }
+        { "track_id": 11, "class": "vehicle", "dist_m": 3.2,
+          "anchor": [0.714, 0.754], "in_danger_zone": false }
       ]
     },
     {
       "class": "vehicle",
-      "track_id": 7,
-      "bbox": [0.66, 0.44, 0.18, 0.22],
-      "anchor": [0.71, 0.62],
+      "track_id": 11,
+      "bbox": [0.591, 0.389, 0.838, 0.756],
+      "anchor": [0.714, 0.754],
       "moving": true,
       "danger_radius_m": 3.0,
       "violations": [],
@@ -718,6 +724,7 @@ FN-UI-02 표시 규칙(위반자 적색·근접 거리선·거리 라벨)을 채
 | 필드 | 타입 | 설명 |
 |---|---|---|
 | `ts` | string | **원본 프레임 시각.** 시간 정합의 기준이며 반드시 포함한다 |
+| `objects[].bbox` | float[4] | **`[x1, y1, x2, y2]`** 좌상단·우하단 정규화 좌표(§1.2). `[x, y, w, h]` 가 아니다 |
 | `objects[].violations` | string[] | 현재 이 트랙에 걸려 있는 위반 유형. 없으면 빈 배열. **박스 색을 결정한다** |
 | `objects[].event_ids` | string[] | 대응하는 진행 중 이벤트 ID. 클릭 시 상세로 이동 |
 | `objects[].alert_state` | string·null | `active` / `alerted` / `re_alerted` / `lost` 중 하나. 없으면 `null` |
@@ -736,7 +743,7 @@ FN-UI-02 표시 규칙(위반자 적색·근접 거리선·거리 라벨)을 채
 
 ```json
 { "type":"event_created","event_id":"EV-20260814-0231","cam_id":1,
-  "violation":"no_helmet","track_id":3,"zone_id":"forklift_lane",
+  "violation_type":"no_helmet","track_id":3,"zone_id":"forklift_lane",
   "status":"alerted","confirmed_at":"2026-08-14T05:37:03Z",
   "alerted_at":"2026-08-14T05:37:03Z","severity":2,
   "keyframe_url":"/media/keyframes/EV-20260814-0231_0.jpg" }
@@ -749,6 +756,23 @@ FN-UI-02 표시 규칙(위반자 적색·근접 거리선·거리 라벨)을 채
 
 `event_updated` 는 변경된 필드만 싣는다. `event_id` 와 `status` 는 항상 포함한다.
 
+**전이별 동반 필드**
+
+| 전이 | 함께 싣는 필드 |
+|---|---|
+| → `alerted` | `alerted_at`, `alert_count`, `severity` |
+| → `re_alerted` | `alerted_at`(최근), `alert_count` |
+| → `lost` | `lost_at` |
+| `lost` → 복귀 | `track_id`(갱신된 값), `reassoc_count` |
+| → `resolved` | `resolved_at`, `resolution_sec` |
+| → `expired` | `expired_at` |
+| 클립 준비 완료 | `clip_status`, `clip_url` |
+| 수동 정정 | `is_false_positive`, `note` |
+
+**`severity`**: `1`(주의) / `2`(경고) / `3`(긴급). §3 `AlertCommand.level` 과 동일한 척도이며 같은 값을 쓴다.
+
+**필드명 규약**: 위반 유형 필드는 REST(§4.1)와 동일하게 `violation_type` 을 쓴다.
+
 ---
 
 ### 5.3 `metric` / `anomaly` / `system`
@@ -756,7 +780,8 @@ FN-UI-02 표시 규칙(위반자 적색·근접 거리선·거리 라벨)을 채
 ```json
 { "type":"metric","period":"today","correction_rate":0.87,
   "undetermined_rate":0.05,"total_violations":23,"resolved":20,
-  "unresolved":2,"undetermined":1,"avg_resolution_sec":41 }
+  "unresolved":2,"undetermined":1,"avg_resolution_sec":41,
+  "fall_events":0,"anomaly_flags":1 }
 ```
 
 ```json
@@ -772,6 +797,44 @@ FN-UI-02 표시 규칙(위반자 적색·근접 거리선·거리 라벨)을 채
 
 `system` 은 **변화한 구성요소 하나만** 보낸다. 전체 스냅샷이 필요하면
 `GET /system/status` 를 사용한다.
+
+| `component` | 대상 |
+|---|---|
+| `edge` | Jetson 추론 프로세스 |
+| `camera` | 카메라 스트림 (`cam_id` 필드를 함께 실음) |
+| `mcu` | ESP32 경고 장치 |
+| `cloud_api` | Gemini API |
+| `storage` | 영상 저장소 |
+| `db` | PostgreSQL |
+
+| `state` | 의미 |
+|---|---|
+| `ok` | 정상 |
+| `degraded` | 동작하나 성능·한도 저하 (예: 쿼터 62%, fps 미달) |
+| `down` | 사용 불가 |
+
+---
+
+### 5.4 `zone_updated`
+
+금지구역 폴리곤은 `overlay` 에 매 프레임 싣지 않는다(§5.1). 대시보드는
+`GET /zones` 로 한 번 조회해 캐시하고, 설정 화면에서 구역이 변경되면
+이 메시지를 받아 캐시를 갱신한다.
+
+```json
+{ "type":"zone_updated","cam_id":1,"action":"upsert",
+  "zone": { "zone_id":"forklift_lane","name":"지게차 통행로",
+            "polygon_m":[[3.0,6.0],[9.0,6.0],[9.0,11.0],[3.0,11.0]],
+            "buffer_m":0.3,"active":true } }
+```
+
+| 필드 | 설명 |
+|---|---|
+| `action` | `upsert` / `delete` |
+| `zone` | `delete` 시에는 `zone_id` 만 포함 |
+
+캘리브레이션(호모그래피)이 변경된 경우에도 지면 좌표계가 바뀌므로
+해당 카메라의 모든 구역에 대해 `upsert` 를 순차 발행한다.
 
 **오버레이 시간 정합 (중요)**
 
