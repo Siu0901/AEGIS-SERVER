@@ -7,18 +7,22 @@ from enum import StrEnum
 from typing import Literal
 
 __all__ = [
+    "AlertLevel",
     "AlertState",
     "CameraState",
     "ChatRoute",
     "ClipStatus",
+    "ComponentState",
     "DistanceMethod",
     "EventStatus",
     "HelmetState",
     "ObjectClass",
     "Posture",
     "SearchMode",
+    "SystemComponent",
     "TrackLostReason",
     "ViolationType",
+    "ZoneAction",
 ]
 
 
@@ -64,6 +68,20 @@ CameraState = Literal["ok", "reconnecting", "down"]
 #: 오버레이 박스의 경고 단계. API명세서 §5.1 `objects[].alert_state`.
 #: `EventStatus` 중 **진행 중**인 값만 쓴다(종결 상태 `resolved`·`expired` 는 오지 않는다).
 AlertState = Literal["active", "alerted", "re_alerted", "lost"]
+
+#: 위험 등급. API명세서 §3 `AlertCommand.level` · §5.2 `severity` — **같은 척도, 같은 값**.
+#: 1=주의(부저 없음) / 2=경고 / 3=긴급(연속 부저). **`fall` 은 항상 3** 이다.
+AlertLevel = Literal[1, 2, 3]
+
+#: 상태 변화를 보고하는 구성요소. API명세서 §5.3 `system.component`.
+SystemComponent = Literal["edge", "camera", "mcu", "cloud_api", "storage", "db"]
+
+#: 구성요소 상태. API명세서 §5.3 `system.state`.
+#: `CameraState`(§4.6 스트림 상태)와 값이 다르다 — 이쪽은 `degraded`, 저쪽은 `reconnecting`.
+ComponentState = Literal["ok", "degraded", "down"]
+
+#: 구역 변경 종류. API명세서 §5.4 `zone_updated.action`.
+ZoneAction = Literal["upsert", "delete"]
 
 #: 예약 클립 추출 상태. 기능명세서 §4.2 · §6.
 ClipStatus = Literal["pending", "ready", "failed"]

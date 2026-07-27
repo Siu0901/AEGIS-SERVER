@@ -29,18 +29,22 @@ from .edge import (
     TrackLostMsg,
 )
 from .enums import (
+    AlertLevel,
     AlertState,
     CameraState,
     ChatRoute,
     ClipStatus,
+    ComponentState,
     DistanceMethod,
     EventStatus,
     HelmetState,
     ObjectClass,
     Posture,
     SearchMode,
+    SystemComponent,
     TrackLostReason,
     ViolationType,
+    ZoneAction,
 )
 from .mqtt import ALERT_TOPIC, DEVICE_STATUS_TOPIC, AlertCommand, DeviceStatus
 from .policies import Policies, PolicyPatch
@@ -101,12 +105,15 @@ from .ws import (
     OverlayPerson,
     OverlayVehicle,
     SystemMsg,
+    ZoneUpdatedMsg,
+    ZoneUpdatedPayload,
 )
 
 __all__ = [
     "ALERT_TOPIC",
     "DEVICE_STATUS_TOPIC",
     "AlertCommand",
+    "AlertLevel",
     "AlertState",
     "AnomalyMsg",
     "Bbox",
@@ -125,6 +132,7 @@ __all__ = [
     "ChatSource",
     "ClipStatus",
     "CloudStatus",
+    "ComponentState",
     "DashboardMessage",
     "DetectedObject",
     "DetectedPerson",
@@ -179,6 +187,7 @@ __all__ = [
     "SimilarIncident",
     "SpecModel",
     "StorageStatus",
+    "SystemComponent",
     "SystemMsg",
     "SystemStatus",
     "TimeSyncStatus",
@@ -191,4 +200,7 @@ __all__ = [
     "WeeklyReportRequest",
     "WeeklyReportResponse",
     "Zone",
+    "ZoneAction",
+    "ZoneUpdatedMsg",
+    "ZoneUpdatedPayload",
 ]

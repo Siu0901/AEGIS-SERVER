@@ -9,12 +9,23 @@
 서버 파일시스템 경로(`clip_path` · `keyframe_paths`)를 그대로 실어보내지 않는다.
 """
 
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Self
 
-from pydantic import AwareDatetime, Field
+from pydantic import AwareDatetime, Field, model_validator
 
-from ._base import Bbox, PointPx, SpecModel
-from .enums import AlertState, EventStatus, HelmetState, Posture, ViolationType
+from ._base import Bbox, PointM, PointPx, SpecModel
+from .enums import (
+    AlertLevel,
+    AlertState,
+    ClipStatus,
+    ComponentState,
+    EventStatus,
+    HelmetState,
+    Posture,
+    SystemComponent,
+    ViolationType,
+    ZoneAction,
+)
 
 __all__ = [
     "AnomalyMsg",
@@ -28,6 +39,8 @@ __all__ = [
     "OverlayPerson",
     "OverlayVehicle",
     "SystemMsg",
+    "ZoneUpdatedMsg",
+    "ZoneUpdatedPayload",
 ]
 
 
@@ -132,29 +145,59 @@ class EventCreatedMsg(SpecModel):
     type: Literal["event_created"] = "event_created"
     event_id: str
     cam_id: int
-    violation: ViolationType
-    """§4.1 의 `violation_type` 과 같은 값이다. 이름만 §5.2 표기를 따른다."""
+    violation_type: ViolationType
+    """위반 유형 필드 이름은 REST(§4.1)와 동일하게 `violation_type` 을 쓴다."""
     track_id: int
     zone_id: str | None
     status: EventStatus
     confirmed_at: AwareDatetime
     alerted_at: AwareDatetime | None
-    severity: int
-    """경고 등급. `AlertCommand.level`(§3)과 같은 척도 — 1=주의 / 2=경고 / 3=긴급."""
+    severity: AlertLevel
+    """§3 `AlertCommand.level` 과 동일한 척도이며 같은 값을 쓴다."""
     keyframe_url: str
 
 
 class EventUpdatedMsg(SpecModel):
     """`event_updated` — 상태 변경(경고·해소·재경고·소실·종결). API명세서 §5.2
 
-    **변경된 필드만 싣는다.** `event_id` 와 `status` 는 항상 포함한다.
+    **변경된 필드만 싣는다.** `event_id` 와 `status` 는 항상 포함하고, 나머지는
+    전이 종류에 따라 동반된다(§5.2 전이별 동반 필드).
+
+    | 전이 | 함께 싣는 필드 |
+    |---|---|
+    | → `alerted` | `alerted_at` · `alert_count` · `severity` |
+    | → `re_alerted` | `alerted_at`(최근) · `alert_count` |
+    | → `lost` | `lost_at` |
+    | `lost` → 복귀 | `track_id`(갱신된 값) · `reassoc_count` |
+    | → `resolved` | `resolved_at` · `resolution_sec` |
+    | → `expired` | `expired_at` |
+    | 클립 준비 완료 | `clip_status` · `clip_url` |
+    | 수동 정정 | `is_false_positive` · `note` |
     """
 
     type: Literal["event_updated"] = "event_updated"
     event_id: str
     status: EventStatus
+
+    alerted_at: AwareDatetime | None = None
+    alert_count: int | None = None
+    severity: AlertLevel | None = None
+
+    lost_at: AwareDatetime | None = None
+
+    track_id: int | None = None
+    reassoc_count: int | None = None
+
     resolved_at: AwareDatetime | None = None
     resolution_sec: int | None = None
+
+    expired_at: AwareDatetime | None = None
+
+    clip_status: ClipStatus | None = None
+    clip_url: str | None = None
+
+    is_false_positive: bool | None = None
+    note: str | None = None
 
 
 # --------------------------------------------------------------------------
@@ -180,6 +223,9 @@ class MetricMsg(SpecModel):
     unresolved: int
     undetermined: int
     avg_resolution_sec: int
+    fall_events: int
+    """쓰러짐은 자력 시정이 불가능하므로 시정률에서 빼고 별도로 센다."""
+    anomaly_flags: int
 
 
 class AnomalyMsg(SpecModel):
@@ -205,16 +251,72 @@ class SystemMsg(SpecModel):
     """
 
     type: Literal["system"] = "system"
-    component: str
-    """예: `cloud_api` · `edge` · `mcu` · `camera_1`. 명세서가 값 목록을 열거하지 않았다."""
-    state: str
-    """예: `degraded`. 명세서가 값 목록을 열거하지 않았다."""
+    component: SystemComponent
+    state: ComponentState
     detail: str
     at: AwareDatetime
+    cam_id: int | None = None
+    """`component == "camera"` 인 경우에만 함께 싣는다(§5.3 component 표)."""
+
+
+# --------------------------------------------------------------------------
+# §5.4 zone_updated
+# --------------------------------------------------------------------------
+
+
+class ZoneUpdatedPayload(SpecModel):
+    """`zone_updated.zone`. API명세서 §5.4
+
+    `upsert` 면 전 필드가 실리고, `delete` 면 `zone_id` 만 실린다.
+    `cam_id` 는 메시지 최상위에 있으므로 여기에는 없다(§4.5 `Zone` 과 다른 점).
+    """
+
+    zone_id: str
+    name: str | None = None
+    polygon_m: list[PointM] | None = None
+    buffer_m: float | None = None
+    active: bool | None = None
+
+
+class ZoneUpdatedMsg(SpecModel):
+    """`zone_updated` — 금지구역 변경 통지. API명세서 §5.4
+
+    구역 폴리곤은 매 프레임 변하지 않으므로 `overlay` 에 싣지 않는다(§5.1).
+    대시보드는 `GET /zones` 로 한 번 조회해 캐시하고 이 메시지로 갱신한다.
+
+    캘리브레이션(호모그래피)이 바뀌면 지면 좌표계 자체가 바뀌므로, 해당 카메라의
+    **모든 구역에 대해 `upsert` 를 순차 발행**한다.
+    """
+
+    type: Literal["zone_updated"] = "zone_updated"
+    cam_id: int
+    action: ZoneAction
+    zone: ZoneUpdatedPayload
+
+    @model_validator(mode="after")
+    def _upsert_carries_full_zone(self) -> Self:
+        """`upsert` 인데 폴리곤이 없으면 캐시를 망가뜨린다 — 여기서 막는다."""
+        if self.action != "upsert":
+            return self
+        missing = [
+            name
+            for name in ("name", "polygon_m", "buffer_m", "active")
+            if getattr(self.zone, name) is None
+        ]
+        if missing:
+            msg = f"action='upsert' 면 zone 에 {', '.join(missing)} 가 있어야 한다"
+            raise ValueError(msg)
+        return self
 
 
 #: `/ws/dashboard` 로 내려가는 모든 메시지. `type` 값으로 구분되는 판별 유니온.
 DashboardMessage = Annotated[
-    OverlayMsg | EventCreatedMsg | EventUpdatedMsg | MetricMsg | AnomalyMsg | SystemMsg,
+    OverlayMsg
+    | EventCreatedMsg
+    | EventUpdatedMsg
+    | MetricMsg
+    | AnomalyMsg
+    | SystemMsg
+    | ZoneUpdatedMsg,
     Field(discriminator="type"),
 ]

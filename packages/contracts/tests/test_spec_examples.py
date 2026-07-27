@@ -33,6 +33,7 @@ from aegis_contracts import (
     SystemMsg,
     TrackLostMsg,
     ViolationType,
+    ZoneUpdatedMsg,
 )
 
 _edge_adapter: TypeAdapter[Any] = TypeAdapter(EdgeMessage)
@@ -372,8 +373,8 @@ OVERLAY_EXAMPLE: dict[str, Any] = {
         {
             "class": "person",
             "track_id": 3,
-            "bbox": [0.42, 0.31, 0.08, 0.24],
-            "foot_point": [0.46, 0.55],
+            "bbox": [0.197, 0.364, 0.273, 0.764],
+            "foot_point": [0.235, 0.762],
             "in_zone": "forklift_lane",
             "helmet": "off",
             "posture": "standing",
@@ -382,19 +383,19 @@ OVERLAY_EXAMPLE: dict[str, Any] = {
             "alert_state": "alerted",
             "nearby": [
                 {
-                    "track_id": 7,
+                    "track_id": 11,
                     "class": "vehicle",
                     "dist_m": 3.2,
-                    "anchor": [0.71, 0.62],
+                    "anchor": [0.714, 0.754],
                     "in_danger_zone": False,
                 }
             ],
         },
         {
             "class": "vehicle",
-            "track_id": 7,
-            "bbox": [0.66, 0.44, 0.18, 0.22],
-            "anchor": [0.71, 0.62],
+            "track_id": 11,
+            "bbox": [0.591, 0.389, 0.838, 0.756],
+            "anchor": [0.714, 0.754],
             "moving": True,
             "danger_radius_m": 3.0,
             "violations": [],
@@ -410,7 +411,7 @@ EVENT_CREATED_EXAMPLE: dict[str, Any] = {
     "type": "event_created",
     "event_id": "EV-20260814-0231",
     "cam_id": 1,
-    "violation": "no_helmet",
+    "violation_type": "no_helmet",
     "track_id": 3,
     "zone_id": "forklift_lane",
     "status": "alerted",
@@ -439,6 +440,8 @@ METRIC_EXAMPLE: dict[str, Any] = {
     "unresolved": 2,
     "undetermined": 1,
     "avg_resolution_sec": 41,
+    "fall_events": 0,
+    "anomaly_flags": 1,
 }
 
 ANOMALY_EXAMPLE: dict[str, Any] = {
@@ -459,6 +462,20 @@ SYSTEM_EXAMPLE: dict[str, Any] = {
     "at": "2026-08-14T05:30:00Z",
 }
 
+#: API명세서 §5.4
+ZONE_UPDATED_EXAMPLE: dict[str, Any] = {
+    "type": "zone_updated",
+    "cam_id": 1,
+    "action": "upsert",
+    "zone": {
+        "zone_id": "forklift_lane",
+        "name": "지게차 통행로",
+        "polygon_m": [[3.0, 6.0], [9.0, 6.0], [9.0, 11.0], [3.0, 11.0]],
+        "buffer_m": 0.3,
+        "active": True,
+    },
+}
+
 
 def test_overlay_example_parses() -> None:
     msg = OverlayMsg.model_validate(OVERLAY_EXAMPLE)
@@ -472,13 +489,26 @@ def test_overlay_example_parses() -> None:
     assert vehicle.violations == []
 
 
+@pytest.mark.parametrize("index", [0, 1])
+def test_overlay_bbox_is_corner_form(index: int) -> None:
+    """`[x1, y1, x2, y2]` 좌상단·우하단이다 — `[x, y, w, h]` 가 아니다 (§1.2 · §5.1)."""
+    x1, y1, x2, y2 = OverlayMsg.model_validate(OVERLAY_EXAMPLE).objects[index].bbox
+    assert x1 < x2, "x2 는 우하단이므로 x1 보다 커야 한다"
+    assert y1 < y2, "y2 는 우하단이므로 y1 보다 커야 한다"
+
+
 def test_overlay_carries_distance_line_data() -> None:
     """FN-UI-02 근접 거리선 — `dist_m` 라벨과 반대편 끝점 `anchor` 가 있어야 한다."""
     person = OverlayMsg.model_validate(OVERLAY_EXAMPLE).objects[0]
     nearest = person.nearby[0]
     assert nearest.dist_m == 3.2
-    assert nearest.anchor == (0.71, 0.62)
+    assert nearest.anchor == (0.714, 0.754)
     assert nearest.in_danger_zone is False
+    # 거리선의 반대편 끝점은 실제 그 차량의 접지 좌표와 같아야 한다.
+    vehicle = OverlayMsg.model_validate(OVERLAY_EXAMPLE).objects[1]
+    assert isinstance(vehicle, OverlayVehicle)
+    assert nearest.track_id == vehicle.track_id
+    assert nearest.anchor == vehicle.anchor
 
 
 def test_overlay_alert_state_field_is_mandatory() -> None:
@@ -505,6 +535,7 @@ def test_overlay_zone_polygon_is_not_carried() -> None:
         (METRIC_EXAMPLE, MetricMsg),
         (ANOMALY_EXAMPLE, AnomalyMsg),
         (SYSTEM_EXAMPLE, SystemMsg),
+        (ZONE_UPDATED_EXAMPLE, ZoneUpdatedMsg),
     ],
 )
 def test_dashboard_union_dispatches_on_type(payload: dict[str, Any], expected: type) -> None:
@@ -523,7 +554,10 @@ def test_dashboard_union_dispatches_on_type(payload: dict[str, Any], expected: t
     ],
 )
 def test_dashboard_messages_are_flat(payload: dict[str, Any]) -> None:
-    """중첩은 배열 원소에만 허용된다 (§5 구조 규약)."""
+    """중첩은 배열 원소에만 허용된다 (§5 구조 규약).
+
+    `zone_updated`(§5.4)는 예외다 — 명세서 예시가 `zone` 객체를 중첩한다.
+    """
     nested = [k for k, v in payload.items() if isinstance(v, dict)]
     assert not nested, f"평면이어야 하는데 중첩 필드가 있다: {nested}"
 
@@ -552,6 +586,94 @@ def test_event_updated_carries_only_changed_fields() -> None:
         {"type": "event_updated", "event_id": "EV-20260814-0231", "status": "lost"}
     )
     assert msg.resolved_at is None
+
+
+#: §5.2 전이별 동반 필드 표 전량.
+TRANSITION_FIELDS: dict[str, dict[str, Any]] = {
+    "alerted": {
+        "alerted_at": "2026-08-14T05:37:03Z",
+        "alert_count": 1,
+        "severity": 2,
+    },
+    "re_alerted": {"alerted_at": "2026-08-14T05:37:33Z", "alert_count": 2},
+    "lost": {"lost_at": "2026-08-14T05:37:20Z"},
+    "alerted_after_reassoc": {"track_id": 12, "reassoc_count": 1},
+    "resolved": {"resolved_at": "2026-08-14T05:37:40Z", "resolution_sec": 37},
+    "expired": {"expired_at": "2026-08-14T05:37:35Z"},
+    "clip_ready": {"clip_status": "ready", "clip_url": "/media/clips/EV-1.mp4"},
+    "manual": {"is_false_positive": True, "note": "허리 굽혀 작업 중이었음"},
+}
+
+
+@pytest.mark.parametrize(("label", "extra"), list(TRANSITION_FIELDS.items()))
+def test_event_updated_accepts_every_transition_payload(label: str, extra: dict[str, Any]) -> None:
+    """§5.2 전이별 동반 필드가 전부 실릴 수 있어야 한다."""
+    status = label.split("_after_")[0] if "_after_" in label else label
+    if status in {"clip", "manual", "clip_ready"}:
+        status = "alerted"
+    payload = {"type": "event_updated", "event_id": "EV-1", "status": status} | extra
+    assert _dashboard_adapter.validate_python(payload).event_id == "EV-1"
+
+
+def test_severity_shares_scale_with_alert_command_level() -> None:
+    """§5.2 `severity` 와 §3 `AlertCommand.level` 은 같은 척도, 같은 값이다."""
+    created = EventCreatedMsg.model_validate(EVENT_CREATED_EXAMPLE)
+    command = AlertCommand.model_validate(
+        {
+            "event_id": created.event_id,
+            "type": created.violation_type,
+            "level": created.severity,
+            "zone_id": created.zone_id,
+            "duration_s": 5,
+            "repeat": False,
+        }
+    )
+    assert command.level == created.severity == 2
+
+    for bad in (0, 4):
+        with pytest.raises(ValueError, match="severity"):
+            EventCreatedMsg.model_validate(EVENT_CREATED_EXAMPLE | {"severity": bad})
+        with pytest.raises(ValueError, match="level"):
+            AlertCommand.model_validate(
+                {
+                    "event_id": "EV-1",
+                    "type": "fall",
+                    "level": bad,
+                    "duration_s": 5,
+                    "repeat": False,
+                }
+            )
+
+
+# --- §5.4 zone_updated ----------------------------------------------------
+
+
+def test_zone_updated_example_parses() -> None:
+    msg = ZoneUpdatedMsg.model_validate(ZONE_UPDATED_EXAMPLE)
+    assert msg.action == "upsert"
+    assert msg.zone.name == "지게차 통행로"
+    assert msg.zone.polygon_m is not None
+    assert len(msg.zone.polygon_m) == 4
+
+
+def test_zone_updated_delete_carries_only_zone_id() -> None:
+    """`delete` 시에는 `zone_id` 만 포함한다 (§5.4)."""
+    msg = ZoneUpdatedMsg.model_validate(
+        {
+            "type": "zone_updated",
+            "cam_id": 1,
+            "action": "delete",
+            "zone": {"zone_id": "forklift_lane"},
+        }
+    )
+    assert msg.zone.polygon_m is None
+
+
+def test_zone_updated_upsert_requires_full_zone() -> None:
+    """폴리곤 없는 upsert 를 통과시키면 대시보드 캐시가 망가진다."""
+    payload = dict(ZONE_UPDATED_EXAMPLE) | {"zone": {"zone_id": "forklift_lane"}}
+    with pytest.raises(ValueError, match="polygon_m"):
+        ZoneUpdatedMsg.model_validate(payload)
 
 
 def test_event_status_covers_full_state_machine() -> None:

@@ -6,7 +6,7 @@
 from pydantic import AwareDatetime
 
 from ._base import SpecModel
-from .enums import ViolationType
+from .enums import AlertLevel, ViolationType
 
 __all__ = ["ALERT_TOPIC", "DEVICE_STATUS_TOPIC", "AlertCommand", "DeviceStatus"]
 
@@ -26,7 +26,8 @@ class AlertCommand(SpecModel):
 
     event_id: str
     type: ViolationType
-    level: int
+    level: AlertLevel
+    """§5.2 `event_created.severity` 와 **같은 척도이며 같은 값**을 쓴다."""
     zone_id: str | None = None
     duration_s: int
     repeat: bool
