@@ -14,7 +14,10 @@ from pydantic import TypeAdapter
 from aegis_contracts import (
     AlertCommand,
     AnomalyMsg,
+    CameraHealth,
+    CameraStatus,
     CandidateMsg,
+    ChatResponse,
     DashboardMessage,
     DetectedPerson,
     DetectedVehicle,
@@ -22,10 +25,14 @@ from aegis_contracts import (
     EdgeMessage,
     EventCreatedMsg,
     EventStatus,
+    EventSummary,
     EventUpdatedMsg,
     FrameMsg,
     HeartbeatMsg,
     MetricMsg,
+    MetricsDistributionResponse,
+    MetricsRepeatResponse,
+    MetricsTimeseriesResponse,
     OverlayMsg,
     OverlayPerson,
     OverlayVehicle,
@@ -223,8 +230,8 @@ HEARTBEAT_EXAMPLE: dict[str, Any] = {
     "type": "heartbeat",
     "ts": "2026-08-14T05:37:05.000Z",
     "cameras": [
-        {"cam_id": 1, "connected": True, "fps": 8.2},
-        {"cam_id": 2, "connected": True, "fps": 8.0},
+        {"cam_id": 1, "sub_state": "ok", "fps": 8.2},
+        {"cam_id": 2, "sub_state": "ok", "fps": 8.0},
     ],
     "gpu_util": 0.41,
     "mem_used_mb": 3820,
@@ -251,7 +258,24 @@ def test_heartbeat_example_parses() -> None:
     msg = HeartbeatMsg.model_validate(HEARTBEAT_EXAMPLE)
     assert [camera.cam_id for camera in msg.cameras] == [1, 2]
     assert msg.cameras[0].fps == 8.2
-    assert msg.cameras[1].connected is True
+    assert msg.cameras[1].sub_state == "ok"
+
+
+def test_heartbeat_reports_sub_stream_only() -> None:
+    """엣지는 서브 스트림만 본다. 메인 상태는 서버 몫이라 여기 없다 (§2.4 · §4.6)."""
+    assert "main_state" not in CameraHealth.model_fields
+    payload = dict(HEARTBEAT_EXAMPLE)
+    payload["cameras"] = [{"cam_id": 1, "main_state": "ok", "sub_state": "ok", "fps": 8.2}]
+    with pytest.raises(ValueError, match="main_state"):
+        HeartbeatMsg.model_validate(payload)
+
+
+def test_stream_state_rejects_component_state_values() -> None:
+    """`degraded` 는 구성요소 상태이지 스트림 상태가 아니다 (§4.6)."""
+    payload = dict(HEARTBEAT_EXAMPLE)
+    payload["cameras"] = [{"cam_id": 1, "sub_state": "degraded", "fps": 8.2}]
+    with pytest.raises(ValueError, match="sub_state"):
+        HeartbeatMsg.model_validate(payload)
 
 
 def test_heartbeat_has_no_top_level_fps() -> None:
@@ -303,6 +327,152 @@ def test_device_status_example_parses() -> None:
     )
     assert msg.device == "esp32-01"
     assert msg.last_alert is not None
+
+
+# --- §4.1 이벤트 · §4.2 지표 · §4.4 챗봇 · §4.6 시스템 ----------------------
+
+
+def test_event_summary_carries_confirmed_at() -> None:
+    """§4.1 — 단계별 시각 셋(`detected_at`·`confirmed_at`·`alerted_at`)이 모두 나온다."""
+    payload: dict[str, Any] = {
+        "event_id": "EV-20260814-0231",
+        "cam_id": 1,
+        "track_id": 3,
+        "violation_type": "no_helmet",
+        "zone_id": "forklift_lane",
+        "status": "alerted",
+        "detected_at": "2026-08-14T05:37:02.183Z",
+        "confirmed_at": "2026-08-14T05:37:03.005Z",
+        "alerted_at": "2026-08-14T05:37:03.010Z",
+        "resolved_at": None,
+        "resolution_sec": None,
+        "alert_count": 1,
+        "min_distance_m": 3.2,
+        "posture": "standing",
+        "repeat_count_7d": 4,
+        "thumbnail_url": "/media/kf/EV-20260814-0231_0.jpg",
+    }
+    summary = EventSummary.model_validate(payload)
+    assert summary.confirmed_at is not None
+    assert summary.detected_at < summary.confirmed_at < summary.alerted_at  # type: ignore[operator]
+
+
+def test_metrics_timeseries_example_parses() -> None:
+    """§4.2 — `n` 은 표본 크기다. 비율만 보고 판단하지 않기 위해 함께 온다."""
+    response = MetricsTimeseriesResponse.model_validate(
+        {
+            "metric": "correction_rate",
+            "bucket": "day",
+            "points": [
+                {"t": "2026-08-12", "value": 0.81, "n": 18},
+                {"t": "2026-08-13", "value": 0.87, "n": 23},
+            ],
+        }
+    )
+    assert [point.n for point in response.points] == [18, 23]
+
+
+def test_metrics_distribution_example_parses() -> None:
+    response = MetricsDistributionResponse.model_validate(
+        {
+            "by": "violation_type",
+            "buckets": [
+                {"key": "no_helmet", "label": "안전모 미착용", "count": 13, "ratio": 0.57},
+                {"key": "zone_intrusion", "label": "금지구역 침입", "count": 7, "ratio": 0.30},
+            ],
+        }
+    )
+    assert response.buckets[0].count == 13
+
+
+def test_metrics_repeat_example_parses() -> None:
+    """§4.2 — 집계 대상은 zone/camera/track 이며 **개인 단위 누적은 없다**."""
+    response = MetricsRepeatResponse.model_validate(
+        {
+            "days": 7,
+            "items": [
+                {
+                    "subject": "zone",
+                    "key": "forklift_lane",
+                    "label": "지게차 통행로",
+                    "violation_type": "no_helmet",
+                    "count": 9,
+                    "last_at": "2026-08-14T05:37:03Z",
+                }
+            ],
+        }
+    )
+    assert response.items[0].subject == "zone"
+
+    with pytest.raises(ValueError, match="subject"):
+        MetricsRepeatResponse.model_validate(
+            {
+                "days": 7,
+                "items": [
+                    {
+                        "subject": "worker",
+                        "key": "w-1",
+                        "label": "작업자",
+                        "violation_type": "no_helmet",
+                        "count": 9,
+                        "last_at": "2026-08-14T05:37:03Z",
+                    }
+                ],
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "attachment",
+    [
+        {
+            "kind": "clip",
+            "event_id": "EV-20260814-0231",
+            "clip_url": "/media/clips/EV-20260814-0231.mp4",
+            "thumbnail_url": "/media/keyframes/EV-20260814-0231_0.jpg",
+            "label": "안전모 미착용 · 카메라 1 · 8/13 15:22",
+        },
+        {"kind": "image", "image_url": "/media/keyframes/x.jpg", "label": "현재 화면"},
+        {
+            "kind": "table",
+            "columns": ["구역", "건수"],
+            "rows": [["지게차 통행로", 9], ["프레스 구역", 4]],
+            "label": "구역별 위반",
+        },
+        {"kind": "event_ref", "event_id": "EV-20260814-0231", "label": "상세 보기"},
+    ],
+)
+def test_chat_attachment_kinds_parse(attachment: dict[str, Any]) -> None:
+    """§4.4 — `kind` 로 구분되는 4종."""
+    response = ChatResponse.model_validate(
+        {"route": "sql", "answer": "…", "attachments": [attachment], "sources": []}
+    )
+    assert response.attachments[0].kind == attachment["kind"]
+
+
+def test_chat_attachments_use_urls_not_paths() -> None:
+    """§4.4 — 서버 파일 경로를 싣지 않는다."""
+    bad = {
+        "kind": "clip",
+        "event_id": "EV-1",
+        "clip_path": "/srv/media/clips/EV-1.mp4",
+        "thumbnail_url": "/media/kf/EV-1_0.jpg",
+        "label": "x",
+    }
+    with pytest.raises(ValueError, match=r"clip_path|clip_url"):
+        ChatResponse.model_validate({"route": "sql", "answer": "…", "attachments": [bad]})
+
+
+def test_system_status_camera_splits_main_and_sub() -> None:
+    """§4.6 — 메인이 끊겨도 추론은 돌고, 서브가 끊겨도 녹화는 돈다. 합치면 구분 불가."""
+    camera = CameraStatus.model_validate(
+        {"cam_id": 1, "main_state": "reconnecting", "sub_state": "ok", "fps": 8.2}
+    )
+    assert camera.main_state == "reconnecting"
+    assert camera.sub_state == "ok"
+
+    with pytest.raises(ValueError, match="main_state"):
+        CameraStatus.model_validate({"cam_id": 1, "state": "ok", "fps": 8.2})
 
 
 # --- §4.5 policies --------------------------------------------------------
@@ -462,6 +632,16 @@ SYSTEM_EXAMPLE: dict[str, Any] = {
     "at": "2026-08-14T05:30:00Z",
 }
 
+#: API명세서 §5.3 두 번째 예시 — `component == "camera"` 는 `cam_id` 를 함께 싣는다.
+SYSTEM_CAMERA_EXAMPLE: dict[str, Any] = {
+    "type": "system",
+    "component": "camera",
+    "cam_id": 2,
+    "state": "reconnecting",
+    "detail": "메인 스트림 재연결 중",
+    "at": "2026-08-14T05:31:12Z",
+}
+
 #: API명세서 §5.4
 ZONE_UPDATED_EXAMPLE: dict[str, Any] = {
     "type": "zone_updated",
@@ -535,11 +715,23 @@ def test_overlay_zone_polygon_is_not_carried() -> None:
         (METRIC_EXAMPLE, MetricMsg),
         (ANOMALY_EXAMPLE, AnomalyMsg),
         (SYSTEM_EXAMPLE, SystemMsg),
+        (SYSTEM_CAMERA_EXAMPLE, SystemMsg),
         (ZONE_UPDATED_EXAMPLE, ZoneUpdatedMsg),
     ],
 )
 def test_dashboard_union_dispatches_on_type(payload: dict[str, Any], expected: type) -> None:
     assert isinstance(_dashboard_adapter.validate_python(payload), expected)
+
+
+def test_system_camera_example_carries_cam_id() -> None:
+    """§5.3 — `component == "camera"` 면 `cam_id` 를 함께 싣는다."""
+    msg = SystemMsg.model_validate(SYSTEM_CAMERA_EXAMPLE)
+    assert msg.cam_id == 2
+    assert SystemMsg.model_validate(SYSTEM_EXAMPLE).cam_id is None
+
+
+#: §5 구조 규약이 허용하는 단일 객체 중첩 — REST 리소스를 그대로 전달하는 경우뿐이다.
+ALLOWED_NESTED_FIELDS = {("zone_updated", "zone")}
 
 
 @pytest.mark.parametrize(
@@ -551,15 +743,23 @@ def test_dashboard_union_dispatches_on_type(payload: dict[str, Any], expected: t
         METRIC_EXAMPLE,
         ANOMALY_EXAMPLE,
         SYSTEM_EXAMPLE,
+        SYSTEM_CAMERA_EXAMPLE,
+        ZONE_UPDATED_EXAMPLE,
     ],
 )
-def test_dashboard_messages_are_flat(payload: dict[str, Any]) -> None:
-    """중첩은 배열 원소에만 허용된다 (§5 구조 규약).
+def test_dashboard_messages_follow_nesting_rule(payload: dict[str, Any]) -> None:
+    """중첩은 배열 원소와 **REST 리소스 단일 객체**에만 허용된다 (§5 구조 규약).
 
-    `zone_updated`(§5.4)는 예외다 — 명세서 예시가 `zone` 객체를 중첩한다.
+    후자는 `zone_updated.zone` 하나뿐이다. 클라이언트가 `GET /zones` 응답과 같은
+    형태로 캐시를 갱신할 수 있게 하려는 것이며, 이 경우 외에 새 중첩을 만들지 않는다.
     """
-    nested = [k for k, v in payload.items() if isinstance(v, dict)]
-    assert not nested, f"평면이어야 하는데 중첩 필드가 있다: {nested}"
+    kind = payload["type"]
+    nested = [
+        key
+        for key, value in payload.items()
+        if isinstance(value, dict) and (kind, key) not in ALLOWED_NESTED_FIELDS
+    ]
+    assert not nested, f"허용되지 않은 중첩 필드: {nested}"
 
 
 @pytest.mark.parametrize(

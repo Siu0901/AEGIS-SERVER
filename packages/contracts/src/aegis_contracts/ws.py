@@ -22,6 +22,7 @@ from .enums import (
     EventStatus,
     HelmetState,
     Posture,
+    StreamState,
     SystemComponent,
     ViolationType,
     ZoneAction,
@@ -252,7 +253,14 @@ class SystemMsg(SpecModel):
 
     type: Literal["system"] = "system"
     component: SystemComponent
-    state: ComponentState
+    state: ComponentState | StreamState
+    """구성요소 상태.
+
+    §4.6 표는 이 필드에 `ComponentState`(`ok`/`degraded`/`down`)를 지정하지만,
+    §5.3 두 번째 예시는 `component="camera"` 에 `state="reconnecting"`(`StreamState`)
+    을 쓴다. 카메라는 구성요소이자 스트림이라 두 값 집합이 겹치는 자리다.
+    **명세서 확인이 필요해** 두 열거형의 합집합으로 열어 두었다.
+    """
     detail: str
     at: AwareDatetime
     cam_id: int | None = None
@@ -265,10 +273,15 @@ class SystemMsg(SpecModel):
 
 
 class ZoneUpdatedPayload(SpecModel):
-    """`zone_updated.zone`. API명세서 §5.4
+    """`zone_updated.zone` — 구역 리소스. API명세서 §5.4
 
-    `upsert` 면 전 필드가 실리고, `delete` 면 `zone_id` 만 실린다.
-    `cam_id` 는 메시지 최상위에 있으므로 여기에는 없다(§4.5 `Zone` 과 다른 점).
+    `GET /zones` 응답 원소와 같은 형태이며, 클라이언트가 캐시를 그대로 갱신할 수
+    있게 하기 위한 것이다. 다만 `cam_id` 는 메시지 최상위에 있으므로 여기엔 없다.
+
+    | `action` | 필요한 필드 |
+    |---|---|
+    | `upsert` | `zone_id` · `name` · `polygon_m` · `buffer_m` · `active` 전부 |
+    | `delete` | `zone_id` 만 |
     """
 
     zone_id: str
@@ -295,7 +308,7 @@ class ZoneUpdatedMsg(SpecModel):
 
     @model_validator(mode="after")
     def _upsert_carries_full_zone(self) -> Self:
-        """`upsert` 인데 폴리곤이 없으면 캐시를 망가뜨린다 — 여기서 막는다."""
+        """폴리곤 없는 `upsert` 는 대시보드 캐시를 손상시키므로 수신 측에서 거부한다(§5.4)."""
         if self.action != "upsert":
             return self
         missing = [
