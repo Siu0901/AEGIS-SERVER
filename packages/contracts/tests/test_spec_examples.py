@@ -13,17 +13,24 @@ from pydantic import TypeAdapter
 
 from aegis_contracts import (
     AlertCommand,
+    AnomalyMsg,
     CandidateMsg,
     DashboardMessage,
     DetectedPerson,
     DetectedVehicle,
     DeviceStatus,
     EdgeMessage,
+    EventCreatedMsg,
     EventStatus,
     EventUpdatedMsg,
     FrameMsg,
     HeartbeatMsg,
+    MetricMsg,
+    OverlayMsg,
+    OverlayPerson,
+    OverlayVehicle,
     Policies,
+    SystemMsg,
     TrackLostMsg,
     ViolationType,
 )
@@ -90,14 +97,30 @@ def test_frame_round_trips_to_spec_json() -> None:
     assert FrameMsg.model_validate(dumped) == msg
 
 
-def test_helmet_field_may_be_omitted() -> None:
-    """게이트 미통과 · 캐시 없음이면 `helmet` 필드 자체가 생략된다 (§6.3)."""
+# --- §2 필수 · 선택 규약 ---------------------------------------------------
+#
+#   `·생략` → 선택 (필드가 아예 안 실릴 수 있다)
+#   `·null` → 필수, 값만 null (필드는 항상 실린다)
+
+
+def test_helmet_trio_is_optional() -> None:
+    """`helmet` / `helmet_conf` / `helmet_checked_at` 은 모두 `·생략` 이다 (§2.1)."""
     obj = dict(FRAME_EXAMPLE["objects"][0])
     for key in ("helmet", "helmet_conf", "helmet_checked_at"):
         obj.pop(key)
     person = DetectedPerson.model_validate(obj)
     assert person.helmet is None
     assert "helmet" not in person.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+
+def test_in_zone_field_is_mandatory_even_when_null() -> None:
+    """`in_zone` 은 `·null` — 값은 null 이 되어도 **필드는 항상 실린다** (§2.1)."""
+    obj = dict(FRAME_EXAMPLE["objects"][0])
+    assert DetectedPerson.model_validate({**obj, "in_zone": None}).in_zone is None
+
+    obj.pop("in_zone")
+    with pytest.raises(ValueError, match="in_zone"):
+        DetectedPerson.model_validate(obj)
 
 
 def test_helmet_has_no_unknown_value() -> None:
@@ -112,6 +135,14 @@ def test_unknown_field_is_rejected() -> None:
     obj = dict(FRAME_EXAMPLE["objects"][0]) | {"helmet_bbox": [0.1, 0.1, 0.2, 0.2]}
     with pytest.raises(ValueError, match="helmet_bbox"):
         DetectedPerson.model_validate(obj)
+
+
+def test_field_name_alias_is_not_accepted() -> None:
+    """명세서의 키는 `class` 뿐이다. `class_` 로는 들어올 수 없다."""
+    obj = dict(FRAME_EXAMPLE["objects"][1])
+    obj["class_"] = obj.pop("class")
+    with pytest.raises(ValueError, match="class"):
+        DetectedVehicle.model_validate(obj)
 
 
 # --- §2.2 candidate -------------------------------------------------------
@@ -159,6 +190,21 @@ def test_candidate_nearby_defaults_to_empty() -> None:
     assert CandidateMsg.model_validate(payload).nearby == []
 
 
+def test_candidate_foot_conf_is_optional() -> None:
+    """`fall` 처럼 접지점이 무의미한 경우 `foot_conf` 는 생략된다 (§2.2)."""
+    payload = {k: v for k, v in CANDIDATE_EXAMPLE.items() if k != "foot_conf"}
+    assert CandidateMsg.model_validate(payload).foot_conf is None
+
+
+def test_candidate_zone_id_field_is_mandatory_even_when_null() -> None:
+    """`zone_id` 는 `·null` ✔ — 값은 null 이 되어도 필드는 항상 실린다 (§2.2)."""
+    assert CandidateMsg.model_validate({**CANDIDATE_EXAMPLE, "zone_id": None}).zone_id is None
+
+    payload = {k: v for k, v in CANDIDATE_EXAMPLE.items() if k != "zone_id"}
+    with pytest.raises(ValueError, match="zone_id"):
+        CandidateMsg.model_validate(payload)
+
+
 # --- §2.3 track_lost · §2.4 heartbeat -------------------------------------
 
 TRACK_LOST_EXAMPLE: dict[str, Any] = {
@@ -175,13 +221,15 @@ TRACK_LOST_EXAMPLE: dict[str, Any] = {
 HEARTBEAT_EXAMPLE: dict[str, Any] = {
     "type": "heartbeat",
     "ts": "2026-08-14T05:37:05.000Z",
-    "fps": {"cam1": 8.2, "cam2": 8.0},
+    "cameras": [
+        {"cam_id": 1, "connected": True, "fps": 8.2},
+        {"cam_id": 2, "connected": True, "fps": 8.0},
+    ],
     "gpu_util": 0.41,
     "mem_used_mb": 3820,
     "cls_calls_per_min": 96,
     "cls_cache_hit_rate": 0.87,
     "depth_calls_per_min": 14,
-    "cameras": {"cam1": "ok", "cam2": "ok"},
 }
 
 
@@ -192,10 +240,24 @@ def test_track_lost_example_parses() -> None:
     assert msg.last_foot_point_m == (4.55, 7.90)
 
 
+def test_track_lost_last_helmet_is_optional() -> None:
+    payload = {k: v for k, v in TRACK_LOST_EXAMPLE.items() if k != "last_helmet"}
+    assert TrackLostMsg.model_validate(payload).last_helmet is None
+
+
 def test_heartbeat_example_parses() -> None:
+    """`cameras` 는 카메라별 객체 배열이다 (§2.4)."""
     msg = HeartbeatMsg.model_validate(HEARTBEAT_EXAMPLE)
-    assert msg.fps["cam1"] == 8.2
-    assert msg.cameras["cam2"] == "ok"
+    assert [camera.cam_id for camera in msg.cameras] == [1, 2]
+    assert msg.cameras[0].fps == 8.2
+    assert msg.cameras[1].connected is True
+
+
+def test_heartbeat_has_no_top_level_fps() -> None:
+    """`fps` 는 `cameras[]` 안으로 들어갔다 (§2.4)."""
+    payload = dict(HEARTBEAT_EXAMPLE) | {"fps": {"cam1": 8.2}}
+    with pytest.raises(ValueError, match="fps"):
+        HeartbeatMsg.model_validate(payload)
 
 
 @pytest.mark.parametrize(
@@ -268,8 +330,8 @@ POLICIES_EXAMPLE: dict[str, Any] = {
     "overlay_buffer_ms": 300,
     "overlay_stale_ms": 1000,
     "fall_height_ratio_max": 0.5,
-    "fall_axis_angle_min_deg": 55,
-    "fall_stillness_s": 5,
+    "fall_axis_angle_min_deg": 55.0,
+    "fall_stillness_s": 5.0,
     "anomaly_sample_interval_min": 5,
 }
 
@@ -283,21 +345,213 @@ def test_policy_key_set_matches_spec() -> None:
     assert set(Policies.model_fields) == set(POLICIES_EXAMPLE)
 
 
+def test_durations_and_thresholds_accept_fractions() -> None:
+    """튜닝은 정수 경계에서 멈추지 않는다 — 지속시간·임계값은 전부 float."""
+    tuned = Policies.model_validate(
+        {"fall_stillness_s": 2.5, "fall_axis_angle_min_deg": 57.5, "confirm_duration_s": 2.5}
+    )
+    assert tuned.fall_stillness_s == 2.5
+    assert tuned.fall_axis_angle_min_deg == 57.5
+    assert tuned.confirm_duration_s == 2.5
+
+
+def test_pixel_count_stays_integral() -> None:
+    """셀 수 있는 값만 `int` 로 남는다."""
+    with pytest.raises(ValueError, match="cls_min_crop_px"):
+        Policies.model_validate({"cls_min_crop_px": 64.5})
+
+
 # --- §5 대시보드 WebSocket -------------------------------------------------
+
+#: API명세서 §5.1
+OVERLAY_EXAMPLE: dict[str, Any] = {
+    "type": "overlay",
+    "cam_id": 1,
+    "ts": "2026-08-14T05:37:12.480Z",
+    "objects": [
+        {
+            "class": "person",
+            "track_id": 3,
+            "bbox": [0.42, 0.31, 0.08, 0.24],
+            "foot_point": [0.46, 0.55],
+            "in_zone": "forklift_lane",
+            "helmet": "off",
+            "posture": "standing",
+            "violations": ["no_helmet", "proximity"],
+            "event_ids": ["EV-20260814-0231", "EV-20260814-0232"],
+            "alert_state": "alerted",
+            "nearby": [
+                {
+                    "track_id": 7,
+                    "class": "vehicle",
+                    "dist_m": 3.2,
+                    "anchor": [0.71, 0.62],
+                    "in_danger_zone": False,
+                }
+            ],
+        },
+        {
+            "class": "vehicle",
+            "track_id": 7,
+            "bbox": [0.66, 0.44, 0.18, 0.22],
+            "anchor": [0.71, 0.62],
+            "moving": True,
+            "danger_radius_m": 3.0,
+            "violations": [],
+            "event_ids": [],
+            "alert_state": None,
+            "nearby": [],
+        },
+    ],
+}
+
+#: API명세서 §5.2
+EVENT_CREATED_EXAMPLE: dict[str, Any] = {
+    "type": "event_created",
+    "event_id": "EV-20260814-0231",
+    "cam_id": 1,
+    "violation": "no_helmet",
+    "track_id": 3,
+    "zone_id": "forklift_lane",
+    "status": "alerted",
+    "confirmed_at": "2026-08-14T05:37:03Z",
+    "alerted_at": "2026-08-14T05:37:03Z",
+    "severity": 2,
+    "keyframe_url": "/media/keyframes/EV-20260814-0231_0.jpg",
+}
+
+EVENT_UPDATED_EXAMPLE: dict[str, Any] = {
+    "type": "event_updated",
+    "event_id": "EV-20260814-0231",
+    "status": "resolved",
+    "resolved_at": "2026-08-14T05:37:40Z",
+    "resolution_sec": 37,
+}
+
+#: API명세서 §5.3
+METRIC_EXAMPLE: dict[str, Any] = {
+    "type": "metric",
+    "period": "today",
+    "correction_rate": 0.87,
+    "undetermined_rate": 0.05,
+    "total_violations": 23,
+    "resolved": 20,
+    "unresolved": 2,
+    "undetermined": 1,
+    "avg_resolution_sec": 41,
+}
+
+ANOMALY_EXAMPLE: dict[str, Any] = {
+    "type": "anomaly",
+    "anomaly_id": 91,
+    "cam_id": 1,
+    "score": 0.71,
+    "detected_at": "2026-08-14T02:14:00Z",
+    "note": "평소와 다른 상황",
+    "keyframe_url": "/media/keyframes/anom_91.jpg",
+}
+
+SYSTEM_EXAMPLE: dict[str, Any] = {
+    "type": "system",
+    "component": "cloud_api",
+    "state": "degraded",
+    "detail": "쿼터 62%",
+    "at": "2026-08-14T05:30:00Z",
+}
+
+
+def test_overlay_example_parses() -> None:
+    msg = OverlayMsg.model_validate(OVERLAY_EXAMPLE)
+    person, vehicle = msg.objects
+    assert isinstance(person, OverlayPerson)
+    assert isinstance(vehicle, OverlayVehicle)
+    assert person.violations == [ViolationType.NO_HELMET, ViolationType.PROXIMITY]
+    assert person.event_ids == ["EV-20260814-0231", "EV-20260814-0232"]
+    assert person.alert_state == "alerted"
+    assert vehicle.alert_state is None
+    assert vehicle.violations == []
+
+
+def test_overlay_carries_distance_line_data() -> None:
+    """FN-UI-02 근접 거리선 — `dist_m` 라벨과 반대편 끝점 `anchor` 가 있어야 한다."""
+    person = OverlayMsg.model_validate(OVERLAY_EXAMPLE).objects[0]
+    nearest = person.nearby[0]
+    assert nearest.dist_m == 3.2
+    assert nearest.anchor == (0.71, 0.62)
+    assert nearest.in_danger_zone is False
+
+
+def test_overlay_alert_state_field_is_mandatory() -> None:
+    """`alert_state` 는 `·null` — 값은 null 이 되어도 필드는 항상 실린다."""
+    obj = dict(OVERLAY_EXAMPLE["objects"][1])
+    obj.pop("alert_state")
+    with pytest.raises(ValueError, match="alert_state"):
+        OverlayVehicle.model_validate(obj)
+
+
+def test_overlay_zone_polygon_is_not_carried() -> None:
+    """금지구역 폴리곤은 `GET /zones` 소관이다 (§5.1)."""
+    payload = dict(OVERLAY_EXAMPLE) | {"zones": [{"zone_id": "forklift_lane"}]}
+    with pytest.raises(ValueError, match="zones"):
+        OverlayMsg.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        (OVERLAY_EXAMPLE, OverlayMsg),
+        (EVENT_CREATED_EXAMPLE, EventCreatedMsg),
+        (EVENT_UPDATED_EXAMPLE, EventUpdatedMsg),
+        (METRIC_EXAMPLE, MetricMsg),
+        (ANOMALY_EXAMPLE, AnomalyMsg),
+        (SYSTEM_EXAMPLE, SystemMsg),
+    ],
+)
+def test_dashboard_union_dispatches_on_type(payload: dict[str, Any], expected: type) -> None:
+    assert isinstance(_dashboard_adapter.validate_python(payload), expected)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        OVERLAY_EXAMPLE,
+        EVENT_CREATED_EXAMPLE,
+        EVENT_UPDATED_EXAMPLE,
+        METRIC_EXAMPLE,
+        ANOMALY_EXAMPLE,
+        SYSTEM_EXAMPLE,
+    ],
+)
+def test_dashboard_messages_are_flat(payload: dict[str, Any]) -> None:
+    """중첩은 배열 원소에만 허용된다 (§5 구조 규약)."""
+    nested = [k for k, v in payload.items() if isinstance(v, dict)]
+    assert not nested, f"평면이어야 하는데 중첩 필드가 있다: {nested}"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [EVENT_CREATED_EXAMPLE, ANOMALY_EXAMPLE],
+)
+def test_dashboard_file_references_are_urls(payload: dict[str, Any]) -> None:
+    """서버 파일시스템 경로를 그대로 실어보내지 않는다 (§5 경로 규약)."""
+    keys = set(payload)
+    assert not {k for k in keys if k.endswith(("_path", "_paths"))}
+    assert {k for k in keys if k.endswith(("_url", "_urls"))}
 
 
 def test_event_updated_example_parses() -> None:
-    payload: dict[str, Any] = {
-        "type": "event_updated",
-        "event_id": "EV-20260814-0231",
-        "status": "resolved",
-        "resolved_at": "2026-08-14T05:37:40Z",
-        "resolution_sec": 37,
-    }
-    msg = _dashboard_adapter.validate_python(payload)
+    msg = _dashboard_adapter.validate_python(EVENT_UPDATED_EXAMPLE)
     assert isinstance(msg, EventUpdatedMsg)
     assert msg.status is EventStatus.RESOLVED
     assert msg.resolution_sec == 37
+
+
+def test_event_updated_carries_only_changed_fields() -> None:
+    """`event_id` 와 `status` 만으로도 성립한다 (§5.2)."""
+    msg = EventUpdatedMsg.model_validate(
+        {"type": "event_updated", "event_id": "EV-20260814-0231", "status": "lost"}
+    )
+    assert msg.resolved_at is None
 
 
 def test_event_status_covers_full_state_machine() -> None:

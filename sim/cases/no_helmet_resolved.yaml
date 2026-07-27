@@ -17,13 +17,14 @@ cam_id: 1
 timeline:
   - at: 0.0
     type: heartbeat
-    fps: {cam1: 8.2, cam2: 8.0}
+    cameras:
+      - {cam_id: 1, connected: true, fps: 8.2}
+      - {cam_id: 2, connected: true, fps: 8.0}
     gpu_util: 0.41
     mem_used_mb: 3820
     cls_calls_per_min: 96
     cls_cache_hit_rate: 0.87
     depth_calls_per_min: 14
-    cameras: {cam1: ok, cam2: ok}
 
   # --- 위반 관측 시작 ---
   - at: 0.0
@@ -134,10 +135,11 @@ timeline:
 
   - at: 25.0
     type: heartbeat
-    fps: {cam1: 8.1, cam2: 8.0}
+    cameras:
+      - {cam_id: 1, connected: true, fps: 8.1}
+      - {cam_id: 2, connected: true, fps: 8.0}
     gpu_util: 0.39
     mem_used_mb: 3810
     cls_calls_per_min: 92
     cls_cache_hit_rate: 0.88
     depth_calls_per_min: 11
-    cameras: {cam1: ok, cam2: ok}

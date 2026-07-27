@@ -17,6 +17,7 @@
 
 from ._base import Bbox, Homography, PointM, PointPx, SpecModel
 from .edge import (
+    CameraHealth,
     CandidateMsg,
     DetectedObject,
     DetectedPerson,
@@ -28,6 +29,7 @@ from .edge import (
     TrackLostMsg,
 )
 from .enums import (
+    AlertState,
     CameraState,
     ChatRoute,
     ClipStatus,
@@ -94,6 +96,10 @@ from .ws import (
     EventUpdatedMsg,
     MetricMsg,
     OverlayMsg,
+    OverlayNearby,
+    OverlayObject,
+    OverlayPerson,
+    OverlayVehicle,
     SystemMsg,
 )
 
@@ -101,6 +107,7 @@ __all__ = [
     "ALERT_TOPIC",
     "DEVICE_STATUS_TOPIC",
     "AlertCommand",
+    "AlertState",
     "AnomalyMsg",
     "Bbox",
     "BriefingRequest",
@@ -108,6 +115,7 @@ __all__ = [
     "CalibrationPoint",
     "CalibrationRequest",
     "CalibrationResponse",
+    "CameraHealth",
     "CameraState",
     "CameraStatus",
     "CandidateMsg",
@@ -152,6 +160,10 @@ __all__ = [
     "NearbyVehicle",
     "ObjectClass",
     "OverlayMsg",
+    "OverlayNearby",
+    "OverlayObject",
+    "OverlayPerson",
+    "OverlayVehicle",
     "PointM",
     "PointPx",
     "Policies",

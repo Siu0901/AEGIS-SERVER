@@ -4,6 +4,17 @@
 
 엣지는 **판단하지 않는다.** 규칙에 걸리면 후보(`CandidateMsg`)만 올리고
 확정·경고·시정판정은 전부 서버가 한다.
+
+**필수 · 선택 규약** (API명세서 §2.1 말미, §2.1~§2.4 전체 적용)
+
+| 명세서 표기 | 코드 표현 |
+|---|---|
+| `·생략` | `X \\| None = None` — 필드가 아예 안 실릴 수 있다 |
+| `·null` | `X \\| None` (기본값 없음) — **필드는 항상 실리고 값만 null** |
+| 표기 없음 | 기본값 없는 필수 필드 |
+
+`·null` 에 기본값을 주면 안 된다. 값이 null인 것과 필드가 없는 것은 다른 사실이고,
+엣지 구현이 필드를 빠뜨리기 시작해도 드러나지 않게 된다.
 """
 
 from typing import Annotated, Literal
@@ -12,7 +23,6 @@ from pydantic import AwareDatetime, Field
 
 from ._base import Bbox, PointM, PointPx, SpecModel
 from .enums import (
-    CameraState,
     DistanceMethod,
     HelmetState,
     ObjectClass,
@@ -22,6 +32,7 @@ from .enums import (
 )
 
 __all__ = [
+    "CameraHealth",
     "CandidateMsg",
     "DetectedObject",
     "DetectedPerson",
@@ -46,6 +57,7 @@ class DetectedPerson(SpecModel):
     conf: float
     bbox: Bbox
 
+    # `helmet` 이 실린 경우에만 함께 실린다 — 셋은 한 묶음이다.
     helmet: HelmetState | None = None
     helmet_conf: float | None = None
     helmet_checked_at: AwareDatetime | None = None
@@ -57,7 +69,9 @@ class DetectedPerson(SpecModel):
     height_ratio: float
     axis_angle_deg: float
     stillness_s: float
+
     in_zone: str | None
+    """구역 밖이면 `null`. **필드 자체는 항상 실린다**(기본값 없음)."""
 
 
 class DetectedVehicle(SpecModel):
@@ -121,17 +135,21 @@ class CandidateMsg(SpecModel):
     ts: AwareDatetime
     track_id: int
     violations: list[ViolationType]
-    zone_id: str | None = None
     bbox: Bbox
     conf: float
     foot_point_m: PointM
-    foot_conf: float
+    observed_ms: int
+
+    zone_id: str | None
+    """침입한 구역이 없으면 `null`. **필드 자체는 항상 실린다**(§2.1 `in_zone` 과 동일 규약)."""
+
+    foot_conf: float | None = None
+    """`fall` 처럼 접지점이 무의미한 경우 생략된다."""
 
     helmet: HelmetState | None = None
     helmet_conf: float | None = None
     posture: Posture | None = None
 
-    observed_ms: int
     nearby: list[NearbyVehicle] = Field(default_factory=list)
 
 
@@ -152,18 +170,26 @@ class TrackLostMsg(SpecModel):
     reason: TrackLostReason
 
 
+class CameraHealth(SpecModel):
+    """`heartbeat.cameras[]` 원소 — 카메라별 상태. API명세서 §2.4"""
+
+    cam_id: int
+    connected: bool
+    fps: float
+    """실제 처리 프레임 수. **8 미만 지속 시 대시보드 경고**."""
+
+
 class HeartbeatMsg(SpecModel):
     """`heartbeat` — 상태 보고 (5초 주기). API명세서 §2.4"""
 
     type: Literal["heartbeat"] = "heartbeat"
     ts: AwareDatetime
-    fps: dict[str, float]
+    cameras: list[CameraHealth]
     gpu_util: float
     mem_used_mb: int
     cls_calls_per_min: int
     cls_cache_hit_rate: float
     depth_calls_per_min: int
-    cameras: dict[str, CameraState]
 
 
 #: `/ws/edge` 로 올라오는 모든 메시지. `type` 값으로 구분되는 판별 유니온.

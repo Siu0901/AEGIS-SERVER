@@ -13,9 +13,13 @@ class SpecModel(BaseModel):
 
     `extra="forbid"` 는 의도적이다. 스키마는 `packages/contracts` 에만 정의하므로
     명세서에 없는 필드가 실려 오면 그것은 계약 위반이며 조용히 통과시키면 안 된다.
+
+    `populate_by_name` 은 켜지 않는다. 켜면 `class` 별칭을 가진 필드가 명세서에 없는
+    `class_` 라는 키로도 들어올 수 있어, 위 원칙에 구멍이 생긴다. 파이썬 코드에서
+    이런 모델을 만들 때는 `model_validate({"class": ...})` 를 쓴다.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(extra="forbid")
 
 
 #: 정규화 경계상자 `[x1, y1, x2, y2]` (좌상단, 우하단). 값 0.0~1.0.

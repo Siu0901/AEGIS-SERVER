@@ -7,6 +7,7 @@ from enum import StrEnum
 from typing import Literal
 
 __all__ = [
+    "AlertState",
     "CameraState",
     "ChatRoute",
     "ClipStatus",
@@ -57,8 +58,12 @@ DistanceMethod = Literal["bbox_center", "mask_nearest"]
 #: 트랙 소실 사유(진단용). API명세서 §2.3.
 TrackLostReason = Literal["occluded", "out_of_view", "low_conf"]
 
-#: 카메라 스트림 상태. API명세서 §2.4 · §4.6.
+#: 카메라 스트림 상태. API명세서 §4.6 `GET /system/status`.
 CameraState = Literal["ok", "reconnecting", "down"]
+
+#: 오버레이 박스의 경고 단계. API명세서 §5.1 `objects[].alert_state`.
+#: `EventStatus` 중 **진행 중**인 값만 쓴다(종결 상태 `resolved`·`expired` 는 오지 않는다).
+AlertState = Literal["active", "alerted", "re_alerted", "lost"]
 
 #: 예약 클립 추출 상태. 기능명세서 §4.2 · §6.
 ClipStatus = Literal["pending", "ready", "failed"]
