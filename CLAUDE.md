@@ -62,12 +62,16 @@
    (`utils/`, `common/`, `lib/`, `helpers/` 같은 걸 임의로 만들지 말 것)
 8. **`docs/` 가 SSOT다.** 코드와 충돌하면 명세서가 맞다.
    명세서를 고쳐야 한다고 판단되면 **코드를 바꾸기 전에 사람에게 보고**한다.
-9. **기능을 임의로 축소하지 않는다.** "일단 간단히", "나중에 확장 가능하게"로
+   단 `docs/INDEX.md` 는 작업마다 갱신하는 진척표이므로 자유롭게 수정한다.
+9. **가드가 조용히 꺼지지 않게 한다.** 훅·검증·테스트는 실패했을 때 반드시 드러나야 한다.
+   예외를 삼키거나, 도구 부재를 건너뛰거나, 실패를 `exit 0` 으로 덮지 않는다.
+   실행할 수 없으면 통과가 아니라 오류다.
+10. **기능을 임의로 축소하지 않는다.** "일단 간단히", "나중에 확장 가능하게"로
    명세된 기능을 생략하지 마라. 못 하겠으면 생략하지 말고 보고해라.
-10. **제로샷/오픈보캐블러리 감지는 존재하지 않는다.** 감지 클래스는 `person`·`vehicle`
+11. **제로샷/오픈보캐블러리 감지는 존재하지 않는다.** 감지 클래스는 `person`·`vehicle`
     2종 고정이다. 「위험요소 자연어 등록」 기능은 채택되지 않았으므로 화면·API·DB
     어디에도 만들지 마라. 디자인 시안에 남아 있어도 무시한다. (기능명세서 부록 A-1)
-11. **디자인 시안보다 명세서가 우선한다.** `docs/front_design.pdf` 는 건설현장 시절에
+12. **디자인 시안보다 명세서가 우선한다.** `docs/AEGIS_front_design.pdf` 는 건설현장 시절에
     작성되어 라벨이 낡았다. 레이아웃·정보구조·색상은 따르되 **텍스트와 도메인 용어는
     명세서를 따른다.** (기능명세서 부록 B)
 
@@ -145,7 +149,7 @@ front/               React + Vite 관제 화면 (7개)
 sim/edge_sim/        가짜 젯슨 — frame·candidate·track_lost·heartbeat 생성
 sim/mcu_sim/         가짜 ESP32 — aegis/alert 구독, device/status 발행
 sim/cases/           시나리오 파일
-deploy/              mediamtx.yml · fake_cams.py · mosquitto.conf
+deploy/              mediamtx.yml · fake_cams.sh · mosquitto.conf
 edge/                실물 젯슨 러너 (M9에서 작업, 그 전까지 비워둠)
 models/              가중치·엔진 (git 제외, 사람이 관리)
 assets/              경고 음원 wav · 규정 매핑 · 사고사례 시드
@@ -163,14 +167,12 @@ media/               런타임 저장소 — 녹화·클립·키프레임 (git �
 
 ```
 uv run tasks.py verify     lint + typecheck + pytest + 마이그레이션 + 스모크 + 프론트 빌드
-uv run tasks.py fmt        포매팅과 자동 수정
 uv run tasks.py dev        docker-compose + 서버 + 프론트
 uv run tasks.py cams       가짜 RTSP 2채널 송출
-uv run tasks.py cams-stop  cams 가 띄운 ffmpeg 종료
 uv run tasks.py sim --case <이름>    가짜 엣지 실행
 uv run tasks.py mcu        가짜 ESP32 실행
 uv run tasks.py migrate    alembic upgrade head
-uv run tasks.py types      contracts → front TypeScript 타입 생성 (M5 전까지 실패한다)
+uv run tasks.py types      contracts → front TypeScript 타입 생성
 ```
 
 작업을 마쳤다고 판단하기 전에 반드시 `uv run tasks.py verify` 가 통과해야 한다.
@@ -205,7 +207,7 @@ uv run tasks.py types      contracts → front TypeScript 타입 생성 (M5 전�
 
 | 내용 | 위치 |
 |---|---|
-| 감지 기능 FN-DET-01~13 | `docs/AEGIS_기능명세서.md` §4.1 |
+| 감지 기능 FN-DET-01~12 | `docs/AEGIS_기능명세서.md` §4.1 |
 | 이벤트 처리 FN-EVT-01~07 (상태 전이표) | §4.2 |
 | 경고 FN-ALM-01~05 | §4.3 |
 | 기록·영상 FN-REC-01~05 | §4.4 |
@@ -220,5 +222,5 @@ uv run tasks.py types      contracts → front TypeScript 타입 생성 (M5 전�
 | 필드 산출법 (접지점·자세·시정률·이상점수) | §6 |
 | 배경·근거·비용·시연 계획 | `docs/AEGIS_구체화_계획안_최종.md` |
 | FN-ID ↔ 코드 위치 ↔ 테스트 매핑 · 진척 | `docs/INDEX.md` |
-| 화면 디자인 시안 (레이아웃만 참조, 라벨은 명세서 우선) | `docs/front_design.pdf` |
+| 화면 디자인 시안 (레이아웃만 참조, 라벨은 명세서 우선) | `docs/AEGIS_front_design.pdf` |
 | 미채택 기능 · 시안 불일치 대조표 | `docs/AEGIS_기능명세서.md` 부록 A · B |
