@@ -28,6 +28,20 @@ v2.0 · 2026-07-18
 | **지면 실좌표** | 접미사 `_m` | 캘리브레이션 기준점을 원점으로 하는 현장 평면 좌표, 단위 미터 |
 
 - **bbox 형식**: `[x1, y1, x2, y2]` (좌상단, 우하단, 정규화)
+
+**화면비 제약 (중요)**
+
+정규화 좌표가 성립하려면 **메인 스트림과 서브 스트림의 화면비가 같아야 한다.**
+엣지는 서브(추론용)에서 좌표를 산출하지만, 대시보드는 그 좌표를 메인(라이브 영상) 위에 그린다.
+화면비가 다르면 정규화 좌표가 한쪽 축으로 눌려 박스가 어긋난다.
+
+| 스트림 | 해상도 | 화면비 | 용도 |
+|---|---|---|---|
+| 메인 | 1920×1080 | 16:9 | 서버 — 라이브·녹화·클립 |
+| 서브 | 640×360 | **16:9 (동일)** | 엣지 — 추론 |
+
+카메라 설정 변경 시 두 스트림의 화면비를 반드시 함께 확인한다.
+서브를 정사각(640×640)으로 설정하면 화각이 잘리거나 좌표가 어긋나므로 사용하지 않는다.
 - **거리**: 미터, 소수점 둘째 자리
 - **시각**: ISO 8601 UTC 밀리초 포함. 저장 UTC, 표시 KST
 - **track_id**: 카메라 내에서만 유효. 전역 식별은 `cam_id`와 조합. **person과 vehicle 모두에 부여된다**
@@ -112,8 +126,8 @@ v2.0 · 2026-07-18
 | 필드 | 타입 | 설명 |
 |---|---|---|
 | `helmet` | string·생략 | **2단계 분류 결과.** `on`(착용) / `off`(미착용) **2값만 존재한다.** 크기·신뢰도 게이트를 통과하지 못하고 직전 캐시도 없으면 **필드 자체를 생략**한다(§6.3) |
-| `helmet_conf` | float | 분류 신뢰도 0~1 |
-| `helmet_checked_at` | string | 분류를 실제 **채택**한 시각. 이 값이 현재 `ts`보다 과거이면 캐시 또는 게이팅 보류로 값이 갱신되지 않고 있음을 의미한다 |
+| `helmet_conf` | float·생략 | 분류 신뢰도 0~1. **`helmet` 이 실린 경우에만 함께 싣는다** |
+| `helmet_checked_at` | string·생략 | 분류를 실제 **채택**한 시각. `helmet` 과 함께 싣는다. 이 값이 현재 `ts`보다 과거이면 캐시 또는 게이팅 보류로 값이 갱신되지 않고 있음을 의미한다 |
 | `foot_point` | float[2] | 접지점의 정규화 픽셀 좌표 (산출법 §6.1) |
 | `foot_point_m` | float[2] | 접지점의 지면 실좌표(m). 거리·구역 판정 기준 |
 | `foot_conf` | float | 접지점 신뢰도. 낮으면 뎁스 검증이 트리거됨 |
@@ -121,7 +135,7 @@ v2.0 · 2026-07-18
 | `height_ratio` | float | 마스크 높이 ÷ 해당 거리 기대 높이. 낮을수록 서 있지 않은 상태 |
 | `axis_angle_deg` | float | 마스크 주축과 수직축의 각도(도). 0에 가까우면 수직, 90에 가까우면 수평 |
 | `stillness_s` | float | 정지 상태 지속 시간(초) |
-| `in_zone` | string·null | 접지점이 포함된 구역 ID |
+| `in_zone` | string·null | 접지점이 포함된 구역 ID. **필드는 항상 싣고, 해당 없으면 `null`** |
 
 **vehicle(지게차) 전용 필드**
 
@@ -130,6 +144,14 @@ v2.0 · 2026-07-18
 | `anchor_m` | float[2] | 지게차의 지면 기준점 실좌표. 지게차는 지면 주행 장비라 접점이 명확하다 |
 | `moving` | bool | 최근 프레임 대비 위치 변화 여부. **이동 중이면 위험도를 상향 조정**한다 |
 | `danger_radius_m` | float | 해당 클래스에 설정된 위험 반경. 지게차 기본 3.0m |
+
+---
+
+**필수 · 선택 규약**
+
+위 표에서 **`·생략` 표기가 있는 필드만 선택**이며, 나머지는 모두 필수다.
+`·null` 표기가 있는 필드는 **필드 자체는 항상 싣고 값만 `null`** 이 될 수 있다.
+이 규약은 §2.1~§2.4 전체에 동일하게 적용된다.
 
 ---
 
@@ -173,9 +195,12 @@ v2.0 · 2026-07-18
 |---|---|---|---|
 | `track_id` | int | ✔ | 위반 대상 사람의 추적 번호. 서버는 이 값으로 중복 병합과 시정 추적을 수행 |
 | `violations[]` | string[] | ✔ | 동시 발생 가능. `no_helmet` / `zone_intrusion` / `proximity` / `fall` |
-| `zone_id` | string·null | | 침입한 구역 ID |
+| `zone_id` | string·null | ✔ | 침입한 구역 ID. **필드는 항상 싣고, 해당 없으면 `null`** (§2.1 `in_zone` 과 동일 규약) |
 | `foot_point_m` | float[2] | ✔ | 위반 발생 지점 실좌표 |
 | `helmet` / `helmet_conf` | string / float | | 2단계 분류 결과. `no_helmet` 위반의 근거 |
+| `cam_id` / `ts` | int / string | ✔ | 카메라 번호와 후보 발생 시각 |
+| `bbox` / `conf` | float[4] / float | ✔ | 대상의 박스와 감지 신뢰도 |
+| `foot_conf` | float | | 접지점 신뢰도. **`fall` 등 접지점이 무의미한 경우 생략 가능** |
 | `posture` | string | | `fall` 위반의 근거 |
 | `observed_ms` | int | ✔ | 엣지가 이 조건을 연속 관측한 시간(ms). 서버 확정 판정의 참고값 |
 | `nearby[]` | array | | **주변 위험 지게차 목록** — 아래 상세 |
@@ -195,6 +220,21 @@ v2.0 · 2026-07-18
 | `within_danger_radius` | bool | 지게차 위험 반경(기본 3.0m) 이내인지 |
 
 **용도**: ① `proximity` 위반 판정의 근거, ② LLM 분석 컨텍스트("이동 중인 지게차 3.2m 이내").
+
+---
+
+**후보를 조용히 버리지 않는다 (중요)**
+
+서버는 수신한 `candidate` 가 스키마 검증에 실패해도 **로그 없이 폐기해서는 안 된다.**
+안전 시스템에서 감지된 위반이 검증 단계에서 소리 없이 사라지는 것은 오탐보다 위험하다.
+
+| 처리 | 내용 |
+|---|---|
+| 기록 | 원본 페이로드와 검증 오류를 `WARNING` 이상으로 로깅 |
+| 집계 | `edge_msg_rejected_total{type, reason}` 카운터 증가 |
+| 노출 | `GET /system/status` 와 대시보드 시스템 상태에 거부 건수를 표시 |
+
+엣지 구현이 바뀌어 필드가 누락되기 시작하면 이 카운터로 즉시 드러나야 한다. (FN-SYS-06)
 
 ---
 
@@ -231,12 +271,14 @@ v2.0 · 2026-07-18
 ```json
 {
   "type": "heartbeat", "ts": "2026-08-14T05:37:05.000Z",
-  "fps": {"cam1": 8.2, "cam2": 8.0},
+  "cameras": [
+    {"cam_id": 1, "connected": true, "fps": 8.2},
+    {"cam_id": 2, "connected": true, "fps": 8.0}
+  ],
   "gpu_util": 0.41, "mem_used_mb": 3820,
   "cls_calls_per_min": 96,
   "cls_cache_hit_rate": 0.87,
   "depth_calls_per_min": 14,
-  "cameras": {"cam1": "ok", "cam2": "ok"}
 }
 ```
 
@@ -542,8 +584,8 @@ v2.0 · 2026-07-18
   "overlay_buffer_ms": 300,
   "overlay_stale_ms": 1000,
   "fall_height_ratio_max": 0.5,
-  "fall_axis_angle_min_deg": 55,
-  "fall_stillness_s": 5,
+  "fall_axis_angle_min_deg": 55.0,
+  "fall_stillness_s": 5.0,
   "anomaly_sample_interval_min": 5
 }
 ```
@@ -610,17 +652,126 @@ v2.0 · 2026-07-18
 
 | `type` | 내용 |
 |---|---|
-| `overlay` | 엣지 `frame`을 가공한 오버레이 좌표. **원본 프레임 시각 `ts`를 반드시 포함**한다 |
-| `event_created` | 신규 확정 이벤트 요약 |
-| `event_updated` | 상태 변경(경고·해소·재경고) |
+| `overlay` | 엣지 `frame`을 서버가 이벤트 상태로 보강한 오버레이 데이터 |
+| `event_created` | 신규 확정 이벤트 |
+| `event_updated` | 상태 변경(경고·해소·재경고·소실·종결) |
 | `metric` | 지표 갱신 |
 | `anomaly` | 이상 탐지 플래그 |
 | `system` | 구성요소 상태 변화 |
+
+**구조 규약**
+
+모든 대시보드 메시지는 **평면(flat)** 구조다. `type` 과 나머지 필드가 같은 깊이에 온다.
+중첩은 배열 원소(`objects[]`, `nearby[]`)에만 허용한다.
+
+**경로 규약**
+
+클라이언트로 내려가는 모든 파일 참조는 **URL**이다(`*_url`, `*_urls`).
+서버 파일시스템 경로(`clip_path`, `keyframe_paths`)를 그대로 실어보내지 않는다.
+
+---
+
+### 5.1 `overlay`
+
+`frame`(§2.1)을 그대로 전달하지 않는다. 서버가 **진행 중인 이벤트 상태와 근접 거리를
+합쳐서** 내려보낸다. 클라이언트가 위반 여부를 스스로 추론하지 않게 하기 위함이며,
+FN-UI-02 표시 규칙(위반자 적색·근접 거리선·거리 라벨)을 채우려면 이 정보가 필요하다.
+
+```json
+{
+  "type": "overlay",
+  "cam_id": 1,
+  "ts": "2026-08-14T05:37:12.480Z",
+  "objects": [
+    {
+      "class": "person",
+      "track_id": 3,
+      "bbox": [0.42, 0.31, 0.08, 0.24],
+      "foot_point": [0.46, 0.55],
+      "in_zone": "forklift_lane",
+      "helmet": "off",
+      "posture": "standing",
+      "violations": ["no_helmet", "proximity"],
+      "event_ids": ["EV-20260814-0231", "EV-20260814-0232"],
+      "alert_state": "alerted",
+      "nearby": [
+        { "track_id": 7, "class": "vehicle", "dist_m": 3.2,
+          "anchor": [0.71, 0.62], "in_danger_zone": false }
+      ]
+    },
+    {
+      "class": "vehicle",
+      "track_id": 7,
+      "bbox": [0.66, 0.44, 0.18, 0.22],
+      "anchor": [0.71, 0.62],
+      "moving": true,
+      "danger_radius_m": 3.0,
+      "violations": [],
+      "event_ids": [],
+      "alert_state": null,
+      "nearby": []
+    }
+  ]
+}
+```
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `ts` | string | **원본 프레임 시각.** 시간 정합의 기준이며 반드시 포함한다 |
+| `objects[].violations` | string[] | 현재 이 트랙에 걸려 있는 위반 유형. 없으면 빈 배열. **박스 색을 결정한다** |
+| `objects[].event_ids` | string[] | 대응하는 진행 중 이벤트 ID. 클릭 시 상세로 이동 |
+| `objects[].alert_state` | string·null | `active` / `alerted` / `re_alerted` / `lost` 중 하나. 없으면 `null` |
+| `objects[].nearby[].dist_m` | float | 사람↔차량 지면 거리. **거리선 라벨(예: 3.2 m)의 원천** |
+| `objects[].nearby[].anchor` | float[2] | 상대 차량의 정규화 접지 좌표. 거리선의 반대편 끝점 |
+| `objects[].nearby[].in_danger_zone` | bool | 위험 반경 이내 여부 |
+
+`objects[]` 의 좌표·자세·분류 필드는 §2.1 과 동일한 의미와 규약을 따른다.
+
+**금지구역 폴리곤은 이 메시지에 싣지 않는다.** 매 프레임 변하지 않으므로
+`GET /zones` 로 한 번 조회해 캐시하고, `zone_updated` 수신 시 갱신한다.
+
+---
+
+### 5.2 `event_created` / `event_updated`
+
+```json
+{ "type":"event_created","event_id":"EV-20260814-0231","cam_id":1,
+  "violation":"no_helmet","track_id":3,"zone_id":"forklift_lane",
+  "status":"alerted","confirmed_at":"2026-08-14T05:37:03Z",
+  "alerted_at":"2026-08-14T05:37:03Z","severity":2,
+  "keyframe_url":"/media/keyframes/EV-20260814-0231_0.jpg" }
+```
 
 ```json
 { "type":"event_updated","event_id":"EV-20260814-0231",
   "status":"resolved","resolved_at":"2026-08-14T05:37:40Z","resolution_sec":37 }
 ```
+
+`event_updated` 는 변경된 필드만 싣는다. `event_id` 와 `status` 는 항상 포함한다.
+
+---
+
+### 5.3 `metric` / `anomaly` / `system`
+
+```json
+{ "type":"metric","period":"today","correction_rate":0.87,
+  "undetermined_rate":0.05,"total_violations":23,"resolved":20,
+  "unresolved":2,"undetermined":1,"avg_resolution_sec":41 }
+```
+
+```json
+{ "type":"anomaly","anomaly_id":91,"cam_id":1,"score":0.71,
+  "detected_at":"2026-08-14T02:14:00Z",
+  "note":"평소와 다른 상황","keyframe_url":"/media/keyframes/anom_91.jpg" }
+```
+
+```json
+{ "type":"system","component":"cloud_api","state":"degraded",
+  "detail":"쿼터 62%","at":"2026-08-14T05:30:00Z" }
+```
+
+`system` 은 **변화한 구성요소 하나만** 보낸다. 전체 스냅샷이 필요하면
+`GET /system/status` 를 사용한다.
 
 **오버레이 시간 정합 (중요)**
 
