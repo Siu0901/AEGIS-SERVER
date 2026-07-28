@@ -332,15 +332,25 @@ def task_dev() -> int:
     say()
 
     exit_code = 0
+    watched = list(processes)
     try:
         while True:
-            dead = [(name, proc) for name, proc in processes if proc.poll() is not None]
-            if dead:
-                # 하나가 죽으면 전부 내린다. 카메라만 죽은 스택은 화면상 "전부 끊김"과
-                # 구분되지 않아서, 반쯤 살아 있는 상태로 두는 편이 더 헷갈린다.
-                for name, proc in dead:
-                    say(f"[dev] {name} 종료 (코드 {proc.returncode}) - 스택을 내린다")
-                exit_code = 1
+            dead = [(name, proc) for name, proc in watched if proc.poll() is not None]
+            for name, proc in dead:
+                watched.remove((name, proc))
+                if proc.returncode == 0:
+                    # 사람이 일부러 내린 것이다 (예: `cams-stop --cams 2` 로 한 대만
+                    # 끊어 재연결을 확인하는 중). 나머지를 같이 내리면 그 확인 자체가
+                    # 불가능해진다. 다시 켤 명령을 알려주고 계속 돈다.
+                    say(f"[dev] {name} 이(가) 정상 종료됐다 (외부에서 내린 것으로 본다)")
+                    if name.startswith("cam"):
+                        say(f"       다시 켜기: uv run tasks.py cams --cams {name[3:]}")
+                else:
+                    # 예기치 않게 죽었다. 반쯤 살아 있는 스택은 화면상 "전부 끊김"과
+                    # 구분되지 않아 더 헷갈리므로 전부 내린다.
+                    say(f"[dev] {name} 이(가) 코드 {proc.returncode} 로 죽었다 - 스택을 내린다")
+                    exit_code = 1
+            if exit_code or not watched:
                 break
             time.sleep(0.5)
     except KeyboardInterrupt:
