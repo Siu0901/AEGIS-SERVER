@@ -1,0 +1,392 @@
+# 안전모를 쓰지 않은 작업자가 지게차 통행로(금지구역)로 걸어 들어간다.
+#
+# 서버가 이렇게 판정하기를 기대한다 (M2 범위):
+#   +1.0s   `no_helmet` 후보 수신 → 이벤트 1건 생성 (status=candidate)
+#   +6.5s   `zone_intrusion` 이 더해짐 → **위반 유형이 다르므로 이벤트 1건 추가**
+#   이후    같은 트랙·같은 유형의 후보는 **병합**되고 새 이벤트를 만들지 않는다
+#           (FN-EVT-01). 총 이벤트는 정확히 2건이어야 한다.
+#
+#   확정(3초)·경고·해소는 M3 이다. 여기서는 status 가 candidate 에 머문다.
+#
+# 좌표계: 금지구역 `forklift_lane` 은 지면 x 2~7m · y 6~11m 다. 작업자는 x_m 8.28
+# (구역 밖)에서 출발해 6초 지점에 x_m 6.49 로 들어간다 — 그래서 `in_zone` 이 그때
+# `null` 에서 `forklift_lane` 로 바뀐다.
+#
+# 지게차 11 은 통행로 안쪽에 서 있다. 12초 이후 5m 스크리닝 반경에 들어오므로
+# `nearby[]` 에 실리지만, 3m 위험 반경 밖이라 `within_danger_radius: false` 다.
+# 근접 위반은 나지 않는다 — 이 케이스의 위반은 안전모와 구역 침입 둘뿐이다.
+
+name: no_helmet
+description: 안전모 미착용 작업자가 지게차 통행로에 진입한다 (no_helmet + zone_intrusion)
+cam_id: 1
+frame_fps: 8
+
+timeline:
+  - at: 0.0
+    type: heartbeat
+    cameras:
+      - {cam_id: 1, sub_state: ok, fps: 8.2}
+      - {cam_id: 2, sub_state: ok, fps: 8.0}
+    gpu_util: 0.41
+    mem_used_mb: 3820
+    cls_calls_per_min: 96
+    cls_cache_hit_rate: 0.87
+    depth_calls_per_min: 14
+
+  # ── 키프레임 ①  구역 밖, 안전모 미착용 ──────────────────
+  - at: 0.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.91
+        bbox: [0.675, 0.342, 0.765, 0.720]
+        helmet: "off"
+        helmet_conf: 0.88
+        foot_point: [0.720, 0.720]
+        foot_point_m: [8.28, 9.00]
+        foot_conf: 0.88
+        posture: standing
+        height_ratio: 0.98
+        axis_angle_deg: 7.4
+        stillness_s: 0.0
+        in_zone: null
+      - class: vehicle
+        track_id: 11
+        conf: 0.86
+        bbox: [0.092, 0.361, 0.308, 0.620]
+        anchor_m: [2.01, 11.58]
+        moving: false
+        danger_radius_m: 3.0
+
+  - at: 1.0
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violations: [no_helmet]
+    zone_id: null
+    bbox: [0.646, 0.342, 0.737, 0.723]
+    conf: 0.91
+    foot_point_m: [7.98, 8.93]
+    foot_conf: 0.88
+    helmet: "off"
+    helmet_conf: 0.88
+    posture: standing
+    observed_ms: 1000
+    nearby: []
+
+  - at: 2.5
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violations: [no_helmet]
+    zone_id: null
+    bbox: [0.603, 0.341, 0.695, 0.726]
+    conf: 0.92
+    foot_point_m: [7.53, 8.83]
+    foot_conf: 0.89
+    helmet: "off"
+    helmet_conf: 0.90
+    posture: standing
+    observed_ms: 2500
+    nearby: []
+
+  - at: 4.0
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violations: [no_helmet]
+    zone_id: null
+    bbox: [0.560, 0.340, 0.653, 0.730]
+    conf: 0.92
+    foot_point_m: [7.09, 8.73]
+    foot_conf: 0.89
+    helmet: "off"
+    helmet_conf: 0.90
+    posture: standing
+    observed_ms: 4000
+    nearby: []
+
+  - at: 5.0
+    type: heartbeat
+    cameras:
+      - {cam_id: 1, sub_state: ok, fps: 8.1}
+      - {cam_id: 2, sub_state: ok, fps: 8.0}
+    gpu_util: 0.43
+    mem_used_mb: 3844
+    cls_calls_per_min: 99
+    cls_cache_hit_rate: 0.86
+    depth_calls_per_min: 15
+
+  # ── 키프레임 ②  구역 진입 (x_m 6.49 < 7.0) ───────────────
+  - at: 6.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.93
+        bbox: [0.503, 0.339, 0.597, 0.735]
+        helmet: "off"
+        helmet_conf: 0.91
+        foot_point: [0.550, 0.735]
+        foot_point_m: [6.49, 8.59]
+        foot_conf: 0.90
+        posture: standing
+        height_ratio: 0.98
+        axis_angle_deg: 6.9
+        stillness_s: 0.0
+        in_zone: forklift_lane
+      - class: vehicle
+        track_id: 11
+        conf: 0.87
+        bbox: [0.092, 0.361, 0.308, 0.620]
+        anchor_m: [2.01, 11.58]
+        moving: false
+        danger_radius_m: 3.0
+
+  - at: 6.5
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violations: [no_helmet, zone_intrusion]
+    zone_id: forklift_lane
+    bbox: [0.489, 0.339, 0.583, 0.736]
+    conf: 0.93
+    foot_point_m: [6.36, 8.55]
+    foot_conf: 0.90
+    helmet: "off"
+    helmet_conf: 0.91
+    posture: standing
+    observed_ms: 6500
+    nearby: []
+
+  - at: 8.0
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violations: [no_helmet, zone_intrusion]
+    zone_id: forklift_lane
+    bbox: [0.446, 0.338, 0.541, 0.741]
+    conf: 0.93
+    foot_point_m: [5.95, 8.44]
+    foot_conf: 0.90
+    helmet: "off"
+    helmet_conf: 0.92
+    posture: standing
+    observed_ms: 8000
+    nearby: []
+
+  - at: 10.0
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violations: [no_helmet, zone_intrusion]
+    zone_id: forklift_lane
+    bbox: [0.388, 0.336, 0.485, 0.746]
+    conf: 0.94
+    foot_point_m: [5.42, 8.30]
+    foot_conf: 0.91
+    helmet: "off"
+    helmet_conf: 0.92
+    posture: standing
+    observed_ms: 10000
+    nearby: []
+
+  - at: 10.0
+    type: heartbeat
+    cameras:
+      - {cam_id: 1, sub_state: ok, fps: 8.0}
+      - {cam_id: 2, sub_state: ok, fps: 7.9}
+    gpu_util: 0.44
+    mem_used_mb: 3861
+    cls_calls_per_min: 101
+    cls_cache_hit_rate: 0.85
+    depth_calls_per_min: 17
+
+  # ── 키프레임 ③  통행로 안쪽, 지게차가 스크리닝 반경에 들어온다 ──
+  - at: 12.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.94
+        bbox: [0.331, 0.335, 0.429, 0.752]
+        helmet: "off"
+        helmet_conf: 0.92
+        foot_point: [0.380, 0.752]
+        foot_point_m: [4.88, 8.15]
+        foot_conf: 0.91
+        posture: standing
+        height_ratio: 0.99
+        axis_angle_deg: 6.1
+        stillness_s: 0.0
+        in_zone: forklift_lane
+      - class: vehicle
+        track_id: 11
+        conf: 0.88
+        bbox: [0.092, 0.361, 0.308, 0.620]
+        anchor_m: [2.01, 11.58]
+        moving: false
+        danger_radius_m: 3.0
+
+  - at: 13.0
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violations: [no_helmet, zone_intrusion]
+    zone_id: forklift_lane
+    bbox: [0.317, 0.334, 0.416, 0.754]
+    conf: 0.94
+    foot_point_m: [4.76, 8.11]
+    foot_conf: 0.91
+    helmet: "off"
+    helmet_conf: 0.92
+    posture: standing
+    observed_ms: 13000
+    nearby:
+      - {class: vehicle, track_id: 11, dist_m: 4.43, method: mask_nearest,
+         depth_verified: false, moving: false, within_danger_radius: false}
+
+  - at: 15.0
+    type: heartbeat
+    cameras:
+      - {cam_id: 1, sub_state: ok, fps: 8.1}
+      - {cam_id: 2, sub_state: ok, fps: 8.0}
+    gpu_util: 0.42
+    mem_used_mb: 3855
+    cls_calls_per_min: 98
+    cls_cache_hit_rate: 0.86
+    depth_calls_per_min: 16
+
+  - at: 16.0
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violations: [no_helmet, zone_intrusion]
+    zone_id: forklift_lane
+    bbox: [0.275, 0.333, 0.375, 0.759]
+    conf: 0.93
+    foot_point_m: [4.41, 7.98]
+    foot_conf: 0.90
+    helmet: "off"
+    helmet_conf: 0.91
+    posture: standing
+    observed_ms: 16000
+    nearby:
+      - {class: vehicle, track_id: 11, dist_m: 4.33, method: mask_nearest,
+         depth_verified: false, moving: false, within_danger_radius: false}
+
+  - at: 19.0
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violations: [no_helmet, zone_intrusion]
+    zone_id: forklift_lane
+    bbox: [0.233, 0.331, 0.335, 0.763]
+    conf: 0.92
+    foot_point_m: [4.05, 7.85]
+    foot_conf: 0.90
+    helmet: "off"
+    helmet_conf: 0.91
+    posture: standing
+    observed_ms: 19000
+    nearby:
+      - {class: vehicle, track_id: 11, dist_m: 4.25, method: mask_nearest,
+         depth_verified: false, moving: false, within_danger_radius: false}
+
+  # ── 키프레임 ④ ─────────────────────────────────────────
+  - at: 20.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.92
+        bbox: [0.219, 0.330, 0.321, 0.765]
+        helmet: "off"
+        helmet_conf: 0.91
+        foot_point: [0.270, 0.765]
+        foot_point_m: [3.93, 7.81]
+        foot_conf: 0.90
+        posture: standing
+        height_ratio: 0.98
+        axis_angle_deg: 5.7
+        stillness_s: 0.0
+        in_zone: forklift_lane
+      - class: vehicle
+        track_id: 11
+        conf: 0.88
+        bbox: [0.092, 0.361, 0.308, 0.620]
+        anchor_m: [2.01, 11.58]
+        moving: false
+        danger_radius_m: 3.0
+
+  - at: 20.0
+    type: heartbeat
+    cameras:
+      - {cam_id: 1, sub_state: ok, fps: 8.2}
+      - {cam_id: 2, sub_state: ok, fps: 8.0}
+    gpu_util: 0.41
+    mem_used_mb: 3840
+    cls_calls_per_min: 95
+    cls_cache_hit_rate: 0.87
+    depth_calls_per_min: 14
+
+  - at: 22.0
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violations: [no_helmet, zone_intrusion]
+    zone_id: forklift_lane
+    bbox: [0.197, 0.328, 0.300, 0.768]
+    conf: 0.91
+    foot_point_m: [3.77, 7.72]
+    foot_conf: 0.89
+    helmet: "off"
+    helmet_conf: 0.90
+    posture: standing
+    observed_ms: 22000
+    nearby:
+      - {class: vehicle, track_id: 11, dist_m: 4.24, method: mask_nearest,
+         depth_verified: false, moving: false, within_danger_radius: false}
+
+  # ── 키프레임 ⑤  화면 왼쪽 끝 ────────────────────────────
+  - at: 26.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.90
+        bbox: [0.152, 0.325, 0.258, 0.775]
+        helmet: "off"
+        helmet_conf: 0.90
+        foot_point: [0.205, 0.775]
+        foot_point_m: [3.44, 7.55]
+        foot_conf: 0.89
+        posture: standing
+        height_ratio: 0.97
+        axis_angle_deg: 5.4
+        stillness_s: 0.0
+        in_zone: forklift_lane
+      - class: vehicle
+        track_id: 11
+        conf: 0.87
+        bbox: [0.092, 0.361, 0.308, 0.620]
+        anchor_m: [2.01, 11.58]
+        moving: false
+        danger_radius_m: 3.0
+
+  - at: 25.0
+    type: heartbeat
+    cameras:
+      - {cam_id: 1, sub_state: ok, fps: 8.3}
+      - {cam_id: 2, sub_state: ok, fps: 8.1}
+    gpu_util: 0.40
+    mem_used_mb: 3832
+    cls_calls_per_min: 93
+    cls_cache_hit_rate: 0.88
+    depth_calls_per_min: 12

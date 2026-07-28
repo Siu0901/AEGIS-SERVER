@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import io
 import sys
 
 import websockets
@@ -25,13 +26,20 @@ from .scripted import ScheduledMessage, load_case
 
 __all__ = ["main", "run"]
 
+# `tasks.py sim` 이 이 모듈을 자식으로 돌리면 출력이 파이프가 되고, 그때 파이썬은
+# 콘솔 코드페이지가 아니라 로케일 인코딩(한글 Windows 는 cp949)을 쓴다. 그러면 '—'
+# 하나에 UnicodeEncodeError 로 죽어서 **시나리오가 시작도 못 한 채 실패**한다.
+# tasks.py · scripts/seed_policies.py 와 같은 처리다.
+if isinstance(sys.stdout, io.TextIOWrapper):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 DEFAULT_URL = "ws://localhost:8000/ws/edge"
 
 
-def _build_timeline(mode: str, case: str, clock: Clock) -> list[ScheduledMessage]:
+def _build_timeline(mode: str, case: str, speed: float, clock: Clock) -> list[ScheduledMessage]:
     start = clock.now()
     if mode == "scripted":
-        return load_case(case, start)
+        return load_case(case, start, speed)
     return load_log(case, start)
 
 
@@ -43,13 +51,15 @@ async def run(
     speed: float,
     clock: Clock,
 ) -> None:
-    timeline = _build_timeline(mode, case, clock)
+    timeline = _build_timeline(mode, case, speed, clock)
     print(f"[edge_sim] {mode}:{case} — 메시지 {len(timeline)}건, 배속 {speed}x → {url}")
 
     async with websockets.connect(url) as socket:
         origin = clock.monotonic()
+        frames = 0
         for item in timeline:
-            due = origin + item.at_s / speed
+            # `at_s` 는 이미 배속이 반영된 값이다 — `ts` 와 같은 축이어야 한다.
+            due = origin + item.at_s
             delay = due - clock.monotonic()
             if delay > 0:
                 await asyncio.sleep(delay)
@@ -58,9 +68,16 @@ async def run(
             # `helmet` 필드 자체를 생략"하는 규약(§6.3)이 이 방식으로 표현된다.
             payload = item.message.model_dump_json(by_alias=True, exclude_unset=True)
             await socket.send(payload)
+
+            # `frame` 은 8fps 로 흐르므로 전부 찍으면 후보·소실이 묻힌다. 흐름이 보일
+            # 만큼만 남기고, 사람이 실제로 봐야 하는 메시지는 매번 찍는다.
+            if item.message.type == "frame":
+                frames += 1
+                if frames % 8:
+                    continue
             print(f"[edge_sim] +{item.at_s:>6.2f}s  {item.message.type}")
 
-    print("[edge_sim] 시나리오 종료")
+    print(f"[edge_sim] 시나리오 종료 — frame {frames}건 포함 총 {len(timeline)}건")
 
 
 def main(argv: list[str] | None = None) -> int:

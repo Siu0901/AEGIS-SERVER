@@ -1,0 +1,367 @@
+# 작업자 두 명과 지게차 한 대. **한 명만 안전모를 쓰지 않았다.**
+#
+# 서버가 이렇게 판정하기를 기대한다 (M2 범위):
+#   작업자 7 — 안전모 착용, 위반 없음. 이벤트가 생기면 안 된다.
+#   작업자 8 — `no_helmet` 이벤트 1건. 지게차가 2m 안으로 들어온 뒤 `proximity` 1건 추가.
+#   총 이벤트 2건이며 둘 다 track_id 8 에 붙는다.
+#
+# 이 케이스의 목적은 **박스 색이 트랙마다 따로 결정되는지** 보는 것이다. 오버레이가
+# 프레임 단위가 아니라 트랙 단위로 위반을 싣는지(§5.1 `objects[].violations`)가 여기서
+# 드러난다 — 한 명은 청록, 한 명은 적색이어야 한다.
+#
+# 지게차 12 는 이동 중이며(`moving: true`) 작업자 8 쪽으로 접근한다.
+#   +0s  3.11m (위험 반경 3.0m 밖)
+#   +6s  2.33m (위험 반경 안 · 근접 임계 2.0m 밖)
+#   +9s  1.96m (근접 임계 통과 → `proximity` 후보 시작)
+#   +18s 1.18m
+#
+# cam 2 에는 금지구역을 두지 않았다. `in_zone` 은 계속 `null` 이다.
+
+name: two_persons
+description: 작업자 2명 + 지게차 1대 · 한 명만 안전모 미착용 (no_helmet + proximity)
+cam_id: 2
+frame_fps: 8
+
+timeline:
+  - at: 0.0
+    type: heartbeat
+    cameras:
+      - {cam_id: 1, sub_state: ok, fps: 8.1}
+      - {cam_id: 2, sub_state: ok, fps: 8.3}
+    gpu_util: 0.52
+    mem_used_mb: 4120
+    cls_calls_per_min: 148
+    cls_cache_hit_rate: 0.83
+    depth_calls_per_min: 22
+
+  # ── 키프레임 ① ─────────────────────────────────────────
+  - at: 0.0
+    type: frame
+    cam_id: 2
+    objects:
+      - class: person
+        track_id: 7
+        conf: 0.92
+        bbox: [0.213, 0.338, 0.307, 0.740]
+        helmet: "on"
+        helmet_conf: 0.94
+        foot_point: [0.260, 0.740]
+        foot_point_m: [3.67, 8.46]
+        foot_conf: 0.90
+        posture: standing
+        height_ratio: 0.99
+        axis_angle_deg: 5.2
+        stillness_s: 0.0
+        in_zone: null
+      - class: person
+        track_id: 8
+        conf: 0.90
+        bbox: [0.579, 0.342, 0.661, 0.690]
+        helmet: "off"
+        helmet_conf: 0.86
+        foot_point: [0.620, 0.690]
+        foot_point_m: [7.35, 9.76]
+        foot_conf: 0.87
+        posture: standing
+        height_ratio: 0.97
+        axis_angle_deg: 8.1
+        stillness_s: 0.0
+        in_zone: null
+      - class: vehicle
+        track_id: 12
+        conf: 0.89
+        bbox: [0.742, 0.375, 0.978, 0.660]
+        anchor_m: [10.36, 10.54]
+        moving: true
+        danger_radius_m: 3.0
+
+  - at: 1.2
+    type: candidate
+    cam_id: 2
+    track_id: 8
+    violations: [no_helmet]
+    zone_id: null
+    bbox: [0.574, 0.342, 0.657, 0.693]
+    conf: 0.90
+    foot_point_m: [7.29, 9.68]
+    foot_conf: 0.87
+    helmet: "off"
+    helmet_conf: 0.86
+    posture: standing
+    observed_ms: 1200
+    nearby: []
+
+  - at: 3.0
+    type: candidate
+    cam_id: 2
+    track_id: 8
+    violations: [no_helmet]
+    zone_id: null
+    bbox: [0.566, 0.342, 0.650, 0.698]
+    conf: 0.91
+    foot_point_m: [7.20, 9.56]
+    foot_conf: 0.88
+    helmet: "off"
+    helmet_conf: 0.87
+    posture: standing
+    observed_ms: 3000
+    nearby: []
+
+  - at: 5.0
+    type: heartbeat
+    cameras:
+      - {cam_id: 1, sub_state: ok, fps: 8.0}
+      - {cam_id: 2, sub_state: ok, fps: 8.2}
+    gpu_util: 0.54
+    mem_used_mb: 4140
+    cls_calls_per_min: 152
+    cls_cache_hit_rate: 0.82
+    depth_calls_per_min: 26
+
+  # 지게차가 위험 반경(3.0m) 안으로 들어왔지만 근접 임계(2.0m)는 아직 넘지 않았다.
+  # 그래서 `nearby` 에는 실리되 위반은 `no_helmet` 하나뿐이다.
+  - at: 6.0
+    type: candidate
+    cam_id: 2
+    track_id: 8
+    violations: [no_helmet]
+    zone_id: null
+    bbox: [0.553, 0.342, 0.639, 0.705]
+    conf: 0.91
+    foot_point_m: [7.04, 9.37]
+    foot_conf: 0.88
+    helmet: "off"
+    helmet_conf: 0.87
+    posture: standing
+    observed_ms: 6000
+    nearby:
+      - {class: vehicle, track_id: 12, dist_m: 2.33, method: mask_nearest,
+         depth_verified: true, moving: true, within_danger_radius: true}
+
+  - at: 9.0
+    type: candidate
+    cam_id: 2
+    track_id: 8
+    violations: [no_helmet, proximity]
+    zone_id: null
+    bbox: [0.540, 0.342, 0.628, 0.713]
+    conf: 0.92
+    foot_point_m: [6.89, 9.18]
+    foot_conf: 0.89
+    helmet: "off"
+    helmet_conf: 0.88
+    posture: standing
+    observed_ms: 9000
+    nearby:
+      - {class: vehicle, track_id: 12, dist_m: 1.96, method: mask_nearest,
+         depth_verified: true, moving: true, within_danger_radius: true}
+
+  # ── 키프레임 ② ─────────────────────────────────────────
+  - at: 10.0
+    type: frame
+    cam_id: 2
+    objects:
+      - class: person
+        track_id: 7
+        conf: 0.93
+        bbox: [0.280, 0.334, 0.380, 0.755]
+        helmet: "on"
+        helmet_conf: 0.95
+        foot_point: [0.330, 0.755]
+        foot_point_m: [4.42, 8.07]
+        foot_conf: 0.91
+        posture: standing
+        height_ratio: 0.98
+        axis_angle_deg: 4.8
+        stillness_s: 0.0
+        in_zone: null
+      - class: person
+        track_id: 8
+        conf: 0.92
+        bbox: [0.536, 0.342, 0.624, 0.715]
+        helmet: "off"
+        helmet_conf: 0.88
+        foot_point: [0.580, 0.715]
+        foot_point_m: [6.84, 9.11]
+        foot_conf: 0.89
+        posture: standing
+        height_ratio: 0.98
+        axis_angle_deg: 7.6
+        stillness_s: 0.0
+        in_zone: null
+      - class: vehicle
+        track_id: 12
+        conf: 0.90
+        bbox: [0.594, 0.382, 0.846, 0.685]
+        anchor_m: [8.50, 9.89]
+        moving: true
+        danger_radius_m: 3.0
+
+  - at: 10.0
+    type: heartbeat
+    cameras:
+      - {cam_id: 1, sub_state: ok, fps: 8.1}
+      - {cam_id: 2, sub_state: ok, fps: 8.0}
+    gpu_util: 0.56
+    mem_used_mb: 4166
+    cls_calls_per_min: 155
+    cls_cache_hit_rate: 0.81
+    depth_calls_per_min: 29
+
+  - at: 12.0
+    type: candidate
+    cam_id: 2
+    track_id: 8
+    violations: [no_helmet, proximity]
+    zone_id: null
+    bbox: [0.529, 0.341, 0.619, 0.719]
+    conf: 0.92
+    foot_point_m: [6.77, 9.01]
+    foot_conf: 0.89
+    helmet: "off"
+    helmet_conf: 0.88
+    posture: standing
+    observed_ms: 12000
+    nearby:
+      - {class: vehicle, track_id: 12, dist_m: 1.67, method: mask_nearest,
+         depth_verified: true, moving: true, within_danger_radius: true}
+
+  - at: 15.0
+    type: candidate
+    cam_id: 2
+    track_id: 8
+    violations: [no_helmet, proximity]
+    zone_id: null
+    bbox: [0.520, 0.341, 0.611, 0.725]
+    conf: 0.93
+    foot_point_m: [6.67, 8.85]
+    foot_conf: 0.90
+    helmet: "off"
+    helmet_conf: 0.89
+    posture: standing
+    observed_ms: 15000
+    nearby:
+      - {class: vehicle, track_id: 12, dist_m: 1.42, method: mask_nearest,
+         depth_verified: true, moving: true, within_danger_radius: true}
+
+  - at: 15.0
+    type: heartbeat
+    cameras:
+      - {cam_id: 1, sub_state: ok, fps: 8.2}
+      - {cam_id: 2, sub_state: ok, fps: 8.1}
+    gpu_util: 0.55
+    mem_used_mb: 4158
+    cls_calls_per_min: 151
+    cls_cache_hit_rate: 0.82
+    depth_calls_per_min: 27
+
+  - at: 18.0
+    type: candidate
+    cam_id: 2
+    track_id: 8
+    violations: [no_helmet, proximity]
+    zone_id: null
+    bbox: [0.510, 0.340, 0.602, 0.731]
+    conf: 0.93
+    foot_point_m: [6.56, 8.69]
+    foot_conf: 0.90
+    helmet: "off"
+    helmet_conf: 0.89
+    posture: standing
+    observed_ms: 18000
+    nearby:
+      - {class: vehicle, track_id: 12, dist_m: 1.18, method: mask_nearest,
+         depth_verified: true, moving: true, within_danger_radius: true}
+
+  # ── 키프레임 ③ ─────────────────────────────────────────
+  - at: 20.0
+    type: frame
+    cam_id: 2
+    objects:
+      - class: person
+        track_id: 7
+        conf: 0.94
+        bbox: [0.348, 0.327, 0.452, 0.770]
+        helmet: "on"
+        helmet_conf: 0.96
+        foot_point: [0.400, 0.770]
+        foot_point_m: [5.12, 7.68]
+        foot_conf: 0.92
+        posture: standing
+        height_ratio: 0.99
+        axis_angle_deg: 4.1
+        stillness_s: 0.0
+        in_zone: null
+      - class: person
+        track_id: 8
+        conf: 0.93
+        bbox: [0.503, 0.339, 0.597, 0.735]
+        helmet: "off"
+        helmet_conf: 0.89
+        foot_point: [0.550, 0.735]
+        foot_point_m: [6.49, 8.59]
+        foot_conf: 0.90
+        posture: standing
+        height_ratio: 0.98
+        axis_angle_deg: 7.2
+        stillness_s: 0.0
+        in_zone: null
+      - class: vehicle
+        track_id: 12
+        conf: 0.91
+        bbox: [0.485, 0.385, 0.755, 0.710]
+        anchor_m: [7.28, 9.24]
+        moving: true
+        danger_radius_m: 3.0
+
+  - at: 20.0
+    type: heartbeat
+    cameras:
+      - {cam_id: 1, sub_state: ok, fps: 8.0}
+      - {cam_id: 2, sub_state: ok, fps: 8.2}
+    gpu_util: 0.53
+    mem_used_mb: 4133
+    cls_calls_per_min: 147
+    cls_cache_hit_rate: 0.84
+    depth_calls_per_min: 24
+
+  # ── 키프레임 ④ ─────────────────────────────────────────
+  - at: 24.0
+    type: frame
+    cam_id: 2
+    objects:
+      - class: person
+        track_id: 7
+        conf: 0.93
+        bbox: [0.386, 0.320, 0.494, 0.782]
+        helmet: "on"
+        helmet_conf: 0.95
+        foot_point: [0.440, 0.782]
+        foot_point_m: [5.49, 7.37]
+        foot_conf: 0.91
+        posture: standing
+        height_ratio: 0.99
+        axis_angle_deg: 4.4
+        stillness_s: 0.0
+        in_zone: null
+      - class: person
+        track_id: 8
+        conf: 0.92
+        bbox: [0.487, 0.337, 0.583, 0.745]
+        helmet: "off"
+        helmet_conf: 0.88
+        foot_point: [0.535, 0.745]
+        foot_point_m: [6.34, 8.33]
+        foot_conf: 0.90
+        posture: standing
+        height_ratio: 0.98
+        axis_angle_deg: 6.8
+        stillness_s: 0.0
+        in_zone: null
+      - class: vehicle
+        track_id: 12
+        conf: 0.90
+        bbox: [0.435, 0.386, 0.715, 0.722]
+        anchor_m: [6.77, 8.93]
+        moving: true
+        danger_radius_m: 3.0

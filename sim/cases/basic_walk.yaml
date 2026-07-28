@@ -1,0 +1,169 @@
+# 작업자 한 명이 안전모를 쓰고 통로 오른쪽을 걷는다. **위반 없음.**
+#
+# 서버가 이렇게 판정하기를 기대한다:
+#   이벤트가 하나도 생기지 않는다. `GET /events` 가 비어 있어야 한다.
+#
+# 오버레이 확인용 기준선이기도 하다 — 박스가 하나만 뜨고 청록(정상)이어야 하며,
+# 영상 속 사람과 어긋나면 그건 시간 정합 문제다(위반 색이 섞이면 헷갈린다).
+#
+# 좌표계: 접지점이 화면 아래로 갈수록 카메라에 가깝고(y_m 작아짐) 사람이 커진다.
+# 금지구역 `forklift_lane` 은 지면 x 2~7m · y 6~11m 이므로 이 경로는 x_m 7.5 이상을
+# 유지해 구역 밖에 있다(`in_zone: null`).
+
+name: basic_walk
+description: 안전모를 착용한 작업자 1명이 금지구역 밖을 통행한다 (위반 없음)
+cam_id: 1
+frame_fps: 8
+
+timeline:
+  - at: 0.0
+    type: heartbeat
+    cameras:
+      - {cam_id: 1, sub_state: ok, fps: 8.4}
+      - {cam_id: 2, sub_state: ok, fps: 8.2}
+    gpu_util: 0.33
+    mem_used_mb: 3540
+    cls_calls_per_min: 62
+    cls_cache_hit_rate: 0.91
+    depth_calls_per_min: 3
+
+  - at: 0.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 7
+        conf: 0.93
+        bbox: [0.758, 0.342, 0.842, 0.700]
+        helmet: "on"
+        helmet_conf: 0.95
+        foot_point: [0.800, 0.700]
+        foot_point_m: [9.28, 9.50]
+        foot_conf: 0.90
+        posture: standing
+        height_ratio: 0.99
+        axis_angle_deg: 5.8
+        stillness_s: 0.0
+        in_zone: null
+
+  - at: 5.0
+    type: heartbeat
+    cameras:
+      - {cam_id: 1, sub_state: ok, fps: 8.3}
+      - {cam_id: 2, sub_state: ok, fps: 8.1}
+    gpu_util: 0.34
+    mem_used_mb: 3552
+    cls_calls_per_min: 64
+    cls_cache_hit_rate: 0.90
+    depth_calls_per_min: 2
+
+  - at: 8.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 7
+        conf: 0.94
+        bbox: [0.672, 0.337, 0.768, 0.745]
+        helmet: "on"
+        helmet_conf: 0.96
+        foot_point: [0.720, 0.745]
+        foot_point_m: [8.11, 8.33]
+        foot_conf: 0.91
+        posture: standing
+        height_ratio: 0.98
+        axis_angle_deg: 6.5
+        stillness_s: 0.0
+        in_zone: null
+
+  - at: 10.0
+    type: heartbeat
+    cameras:
+      - {cam_id: 1, sub_state: ok, fps: 8.2}
+      - {cam_id: 2, sub_state: ok, fps: 8.1}
+    gpu_util: 0.35
+    mem_used_mb: 3560
+    cls_calls_per_min: 66
+    cls_cache_hit_rate: 0.90
+    depth_calls_per_min: 2
+
+  - at: 15.0
+    type: heartbeat
+    cameras:
+      - {cam_id: 1, sub_state: ok, fps: 8.3}
+      - {cam_id: 2, sub_state: ok, fps: 8.0}
+    gpu_util: 0.34
+    mem_used_mb: 3558
+    cls_calls_per_min: 65
+    cls_cache_hit_rate: 0.91
+    depth_calls_per_min: 2
+
+  - at: 16.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 7
+        conf: 0.92
+        bbox: [0.626, 0.322, 0.734, 0.780]
+        helmet: "on"
+        helmet_conf: 0.94
+        foot_point: [0.680, 0.780]
+        foot_point_m: [7.54, 7.42]
+        foot_conf: 0.90
+        posture: standing
+        height_ratio: 0.99
+        axis_angle_deg: 4.9
+        stillness_s: 0.0
+        in_zone: null
+
+  - at: 20.0
+    type: heartbeat
+    cameras:
+      - {cam_id: 1, sub_state: ok, fps: 8.4}
+      - {cam_id: 2, sub_state: ok, fps: 8.1}
+    gpu_util: 0.33
+    mem_used_mb: 3547
+    cls_calls_per_min: 63
+    cls_cache_hit_rate: 0.92
+    depth_calls_per_min: 3
+
+  - at: 24.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 7
+        conf: 0.91
+        bbox: [0.642, 0.307, 0.758, 0.800]
+        helmet: "on"
+        helmet_conf: 0.93
+        foot_point: [0.700, 0.800]
+        foot_point_m: [7.59, 6.90]
+        foot_conf: 0.89
+        posture: standing
+        height_ratio: 0.98
+        axis_angle_deg: 5.2
+        stillness_s: 0.0
+        in_zone: null
+
+  # 화면 밖으로 나간다. 위반이 없었으므로 서버가 살릴 이벤트도 없다.
+  - at: 25.0
+    type: track_lost
+    cam_id: 1
+    track_id: 7
+    class: person
+    last_foot_point_m: [7.59, 6.90]
+    last_helmet: "on"
+    reason: out_of_view
+
+  - at: 25.0
+    type: heartbeat
+    cameras:
+      - {cam_id: 1, sub_state: ok, fps: 8.3}
+      - {cam_id: 2, sub_state: ok, fps: 8.1}
+    gpu_util: 0.31
+    mem_used_mb: 3521
+    cls_calls_per_min: 40
+    cls_cache_hit_rate: 0.93
+    depth_calls_per_min: 1
