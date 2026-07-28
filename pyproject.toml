@@ -12,7 +12,7 @@ dependencies = []
 # 실제 배포 패키지다. `server` · `sim` · `edge` 는 레포 루트에서 실행되는 앱이므로
 # 휠로 빌드하지 않고(`package = false`) 의존성만 워크스페이스 해석에 참여시킨다.
 [tool.uv.workspace]
-members = ["packages/contracts", "packages/vision", "server", "sim", "edge"]
+members = ["packages/contracts", "packages/vision", "server", "sim", "edge", "recorder"]
 
 [tool.uv.sources]
 aegis-contracts = { workspace = true }
@@ -81,7 +81,7 @@ ban-relative-imports = "parents"
 python_version = "3.13"
 strict = true
 mypy_path = "packages/contracts/src:packages/vision/src:."
-files = ["packages", "server", "sim", "scripts", "deploy", "tasks.py"]
+files = ["packages", "server", "recorder", "sim", "scripts", "deploy", "tasks.py"]
 exclude = "(^front/|^media/|^models/|/migrations/versions/)"
 plugins = ["pydantic.mypy"]
 warn_unreachable = true
@@ -108,6 +108,7 @@ testpaths = [
     "packages/contracts/tests",
     "packages/vision/tests",
     "server/tests",
+    "recorder/tests",
     "sim/tests",
     "scripts/tests",
 ]
