@@ -2,14 +2,17 @@
 
     uv run uvicorn server.app.main:app --reload
 
-M1 에서 붙는 것:
+붙어 있는 것:
 
 * `GET /api/v1/system/status` (§4.6 · FN-SYS-01)
-* `/ws/dashboard` (§5) — 지금 흐르는 메시지는 `system` 하나다
+* `GET /api/v1/events` · `/events/{id}` (§4.1 · FN-REC-04)
+* `GET /api/v1/zones` · `/policies` (§4.5) — 오버레이가 읽는 폴리곤과 지연 버퍼
+* `/ws/edge` (§2) — 엣지 메시지 수신 · 검증 · 이벤트 생성 (FN-EVT-01 · FN-SYS-06)
+* `/ws/dashboard` (§5) — `system` 과 `overlay`
 * mediamtx 폴링으로 메인 스트림 상태 관측 (`server/infra/stream`)
 * 기동 시 NTP 오프셋 확인 (FN-SYS-02)
 
-`/ws/edge`(§2)와 이벤트 상태머신은 M2 다.
+이벤트 상태머신(확정·경고·해소·쿨다운·재결합)은 M3 다.
 
 **여기에 로직을 두지 않는다.** 이 파일은 설정을 읽어 부품을 연결하고 수명주기를
 관리하는 곳이고, 시스템 시계를 읽는 `RealClock` 을 만드는 곳이기도 하다
@@ -25,15 +28,28 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Protocol
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from aegis_contracts import ComponentSystemMsg
 from aegis_contracts.enums import ComponentState, StreamState
 from aegis_vision.clock import Clock, RealClock
 from server.app.config import ServerSettings, get_server_settings
+from server.app.routes import events as event_routes
+from server.app.routes import policies as policy_routes
 from server.app.routes import system as system_routes
+from server.app.routes import zones as zone_routes
 from server.app.ws_dashboard import DashboardHub
+from server.app.ws_edge import EdgeGateway, EventStore
+from server.domain.edge_state import EdgeRuntime
+from server.domain.overlay import LiveTracks
+from server.infra.db.repository import (
+    DbEventRepository,
+    DbPolicyRepository,
+    DbZoneRepository,
+)
+from server.infra.db.session import create_db_engine
 from server.infra.rec_client import RecClient, RecUnavailableError, StorageReader
 from server.infra.stream import MediaMtxClient, StreamWatcher
 from server.infra.timesync import check_time_sync
@@ -63,17 +79,27 @@ def create_app(
     *,
     rec_client: StorageReader | None = None,
     stream_watcher: StreamObserver | None = None,
+    events: EventStore | None = None,
+    zones: object | None = None,
+    policies: object | None = None,
 ) -> FastAPI:
     """부품을 조립한다. 인자를 주지 않으면 설정에 맞는 실물을 만든다.
 
     `rec_client` · `stream_watcher` 를 주입받는 이유는 테스트 때문만이 아니다.
     이 둘은 **바깥 프로세스에 붙는 유일한 통로**라, 여기서 갈아끼울 수 있어야
     M9 에서 REC 을 젯슨으로 옮길 때 서버 코드를 건드리지 않는다.
+
+    저장소 셋(`events` · `zones` · `policies`)도 같은 이유로 주입 가능하다. 기본값은
+    `.env` 의 `DATABASE_URL` 로 만든 DB 구현이며, **엔진 생성은 접속하지 않으므로**
+    DB 가 꺼져 있어도 기동은 된다 — 그 사실은 각 라우터가 503 으로 드러낸다.
     """
     resolved = settings or get_server_settings()
     ticker: Clock = clock or RealClock()
 
+    engine = create_db_engine() if events is None or zones is None or policies is None else None
     hub = DashboardHub()
+    edge = EdgeRuntime()
+    tracks = LiveTracks()
     storage: StorageReader = rec_client or RecClient(resolved.recorder_base)
     watcher: StreamObserver = stream_watcher or StreamWatcher(
         client=MediaMtxClient(resolved.mediamtx_api),
@@ -131,13 +157,47 @@ def create_app(
     application.state.hub = hub
     application.state.rec_client = storage
     application.state.stream_watcher = watcher
+    application.state.edge = edge
+    application.state.tracks = tracks
+    application.state.events = events or (DbEventRepository(engine) if engine else None)
+    application.state.zones = zones or (DbZoneRepository(engine) if engine else None)
+    application.state.policies = policies or (DbPolicyRepository(engine) if engine else None)
 
     application.include_router(system_routes.router, prefix=API_PREFIX)
+    application.include_router(event_routes.router, prefix=API_PREFIX)
+    application.include_router(zone_routes.router, prefix=API_PREFIX)
+    application.include_router(policy_routes.router, prefix=API_PREFIX)
+
+    @application.exception_handler(HTTPException)
+    async def spec_error(request: Request, exc: HTTPException) -> JSONResponse:
+        """오류 본문을 §1.4 봉투 그대로 내보낸다.
+
+        FastAPI 기본 처리기는 `detail` 을 한 겹 더 감싸 `{"detail": {"error": ...}}`
+        가 되는데, 그러면 클라이언트가 계약과 다른 모양을 보게 된다.
+        """
+        del request
+        # `HTTPException.detail` 은 선언상 `str` 이지만 실제로는 무엇이든 담긴다.
+        body: object = exc.detail
+        if isinstance(body, dict) and "error" in body:
+            return JSONResponse(status_code=exc.status_code, content=body)
+        return JSONResponse(status_code=exc.status_code, content={"detail": body})
 
     @application.get("/health")
     def health() -> dict[str, str]:
         """부팅 스모크용. 구성요소 상태는 `GET /api/v1/system/status`(FN-SYS-01) 소관이다."""
         return {"status": "ok"}
+
+    @application.websocket("/ws/edge")
+    async def edge_socket(websocket: WebSocket) -> None:
+        """API명세서 §2. 검증에 실패한 메시지는 집계하고 버린다(FN-SYS-06)."""
+        gateway = EdgeGateway(
+            edge=edge,
+            tracks=tracks,
+            publish=hub.broadcast,
+            clock=ticker,
+            events=application.state.events,
+        )
+        await gateway.serve(websocket)
 
     @application.websocket("/ws/dashboard")
     async def dashboard(websocket: WebSocket) -> None:

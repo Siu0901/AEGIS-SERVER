@@ -7,13 +7,34 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
-from aegis_contracts import RecCameraStatus, RecStatusResponse, RecStorageStatus
+from aegis_contracts import (
+    EventDetail,
+    EventListQuery,
+    EventStatus,
+    EventSummary,
+    Policies,
+    RecCameraStatus,
+    RecStatusResponse,
+    RecStorageStatus,
+    ViolationType,
+    Zone,
+)
 from aegis_contracts.enums import StreamState
 from server.app.config import ServerSettings
 from server.infra.rec_client import RecUnavailableError
 
-__all__ = ["REC_STATUS", "FakeRecClient", "FakeWatcher", "make_settings", "rec_status_with"]
+__all__ = [
+    "REC_STATUS",
+    "FakeEventStore",
+    "FakePolicyStore",
+    "FakeRecClient",
+    "FakeWatcher",
+    "FakeZoneStore",
+    "make_settings",
+    "rec_status_with",
+]
 
 #: API명세서 §4.7 `GET /status` 예시 그대로.
 REC_STATUS = RecStatusResponse(
@@ -120,3 +141,90 @@ class FakeRecClient:
 
     async def aclose(self) -> None:
         return None
+
+
+class FakeEventStore:
+    """`EventStore` · `EventReader` 대역. 메모리 안의 이벤트 목록 하나다.
+
+    DB 를 띄우지 않는 이유는 속도 때문만이 아니다 — FN-EVT-01 이 검증하는 것은
+    "같은 트랙·같은 유형이면 새로 만들지 않는다"는 **판단**이고, 그 판단은 저장
+    매체와 무관해야 한다.
+    """
+
+    def __init__(self, items: list[EventDetail] | None = None) -> None:
+        self.items: list[EventDetail] = list(items or [])
+        self.created: list[EventDetail] = []
+        self.updates: list[tuple[str, dict[str, Any]]] = []
+        self.fail_with: Exception | None = None
+
+    async def find_open_events(
+        self, cam_id: int, track_id: int
+    ) -> dict[ViolationType, EventSummary]:
+        open_statuses = {
+            EventStatus.CANDIDATE,
+            EventStatus.ACTIVE,
+            EventStatus.ALERTED,
+            EventStatus.RE_ALERTED,
+            EventStatus.LOST,
+        }
+        return {
+            item.violation_type: EventSummary.model_validate(
+                item.model_dump(include=set(EventSummary.model_fields))
+            )
+            for item in self.items
+            if item.cam_id == cam_id and item.track_id == track_id and item.status in open_statuses
+        }
+
+    async def next_event_id(self, at: datetime) -> str:
+        from server.domain.event_machine import format_event_id
+
+        return format_event_id(at, len(self.items) + 1)
+
+    async def create(self, event: EventDetail) -> None:
+        self.items.append(event)
+        self.created.append(event)
+
+    async def update(self, event_id: str, changes: dict[str, Any]) -> None:
+        self.updates.append((event_id, changes))
+        for index, item in enumerate(self.items):
+            if item.event_id == event_id:
+                self.items[index] = item.model_copy(update=changes)
+
+    async def list_events(self, query: EventListQuery) -> tuple[list[EventSummary], str | None]:
+        if self.fail_with is not None:
+            raise self.fail_with
+        return [
+            EventSummary.model_validate(item.model_dump(include=set(EventSummary.model_fields)))
+            for item in self.items
+        ], None
+
+    async def get(self, event_id: str) -> EventDetail | None:
+        if self.fail_with is not None:
+            raise self.fail_with
+        return next((item for item in self.items if item.event_id == event_id), None)
+
+
+class FakeZoneStore:
+    """`ZoneReader` 대역."""
+
+    def __init__(self, zones: list[Zone] | None = None) -> None:
+        self.zones = list(zones or [])
+        self.fail_with: Exception | None = None
+
+    async def list_zones(self, cam_id: int | None = None) -> list[Zone]:
+        if self.fail_with is not None:
+            raise self.fail_with
+        return [zone for zone in self.zones if cam_id is None or zone.cam_id == cam_id]
+
+
+class FakePolicyStore:
+    """`PolicyReader` 대역."""
+
+    def __init__(self, policies: Policies | None = None) -> None:
+        self.policies = policies or Policies()
+        self.fail_with: Exception | None = None
+
+    async def load(self) -> Policies:
+        if self.fail_with is not None:
+            raise self.fail_with
+        return self.policies

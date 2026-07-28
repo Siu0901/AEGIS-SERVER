@@ -1,15 +1,18 @@
 """`GET /system/status` (API명세서 §4.6 · FN-SYS-01).
 
-M1 에서 실제로 관측되는 값은 둘뿐이다.
+M2 까지 실제로 관측되는 값:
 
 * `cameras[].main_state` — mediamtx 폴링으로 서버가 직접 본다(`server/infra/stream`)
 * `cameras[].recording` 과 `storage` — **REC 의 `GET /status`(§4.7)를 그대로 전달한다**
+* `edge` 절과 `cameras[].sub_state` · `fps` — 엣지 `heartbeat`(§2.4)에서 온다
+  (`server/domain/edge_state.py`)
+* `edge.msg_rejected_total` — 서버가 직접 센다(FN-SYS-06)
 
-나머지(엣지·MCU·클라우드)는 해당 마일스톤에서 붙는다. 그때까지 **관측한 적 없는 값을
-그럴듯한 숫자로 채우지 않는다**(§4.6 null 규약). `fps: 0.0` 은 "엣지가 도는데 처리량이 0",
-`edge_offset_ms: 0` 은 "완벽히 동기화됨"이라는 **다른 주장**이라 실제 장애와 구분되지 않는다.
-전부 `null` 로 둔다. 예외는 서버가 직접 세는 `edge.msg_rejected_total`(0 시작)과,
-"모름"이라는 값이 없는 `sub_state`(`"down"`)뿐이다.
+나머지(MCU·클라우드·엣지 시각 오프셋)는 해당 마일스톤에서 붙는다. 그때까지
+**관측한 적 없는 값을 그럴듯한 숫자로 채우지 않는다**(§4.6 null 규약).
+`fps: 0.0` 은 "엣지가 도는데 처리량이 0", `edge_offset_ms: 0` 은 "완벽히 동기화됨"이라는
+**다른 주장**이라 실제 장애와 구분되지 않는다. 전부 `null` 로 둔다. 예외는 서버가 직접
+세는 `edge.msg_rejected_total`(0 시작)과, "모름"이라는 값이 없는 `sub_state`(`"down"`)뿐이다.
 """
 
 from __future__ import annotations
@@ -19,15 +22,15 @@ import logging
 from fastapi import APIRouter, Request
 
 from aegis_contracts import (
-    CameraStatus,
     CloudStatus,
-    EdgeStatus,
     McuStatus,
     RecStatusResponse,
     StorageStatus,
     SystemStatus,
     TimeSyncStatus,
 )
+from aegis_vision.clock import Clock
+from server.domain.edge_state import EdgeRuntime
 from server.infra.rec_client import RecUnavailableError, StorageReader
 
 __all__ = ["router"]
@@ -53,28 +56,22 @@ async def system_status(request: Request) -> SystemStatus:
     main_states = state.stream_watcher.states()
     rec = await _rec_status(state)
 
+    edge: EdgeRuntime = state.edge
+    clock: Clock = state.clock
+    now = clock.now()
+
     # REC 이 죽었으면 "녹화하지 않는다"가 아니라 "알 수 없다"다. 카메라별로 REC 이
     # 보고한 값만 싣고, 목록에 없는 카메라도 `null` 로 둔다.
     recording = {camera.cam_id: camera.recording for camera in rec.cameras} if rec else {}
 
     return SystemStatus(
-        edge=EdgeStatus(
-            # 엣지는 M2(시뮬레이터) · M9(실물)에서 붙는다. 게이지는 관측 주체가 없으므로 null.
-            online=False,
-            gpu_util=None,
-            cls_cache_hit_rate=None,
-            depth_calls_per_min=None,
-            # FN-SYS-06 — 거부된 엣지 메시지 누적. 서버가 직접 세므로 여기만 0 으로 시작한다.
-            msg_rejected_total=0,
-        ),
+        # FN-SYS-06 — `msg_rejected_total` 은 서버가 직접 세므로 여기만 0 으로 시작한다.
+        edge=edge.status(now),
         cameras=[
-            CameraStatus(
-                cam_id=cam_id,
+            edge.camera(
+                cam_id,
+                now,
                 main_state=main_states.get(cam_id, "down"),
-                # 서브는 엣지가 관측해 `heartbeat` 로 전한다(§2.4). 엣지가 없으니 down.
-                sub_state="down",
-                # 엣지의 실제 처리 fps. 관측 주체가 없으므로 null.
-                fps=None,
                 # REC 의 §4.7 값을 그대로 전달한다. 메인 스트림 상태로 추론하지 않는다 —
                 # 라이브가 보이는 것과 녹화되는 것은 다른 프로세스의 일이다.
                 recording=recording.get(cam_id),
@@ -84,6 +81,8 @@ async def system_status(request: Request) -> SystemStatus:
         mcu=McuStatus(online=False, last_seen=None),
         cloud=CloudStatus(available=False, quota_used=None),
         storage=_storage(rec),
+        # 엣지 시각 오프셋(FN-SYS-02)은 `heartbeat` 에 실리지 않는다(§2.4). 관측 수단이
+        # 생기기 전까지 `null` 이다 — 0 은 "완벽히 동기화됨"이라는 다른 주장이다.
         time_sync=TimeSyncStatus(edge_offset_ms=None),
     )
 
