@@ -97,11 +97,20 @@
 
 | FN-ID | 기능명 | 우선 | 계층 | 명세 위치 | 마일스톤 | 코드 위치(예정) | 상태 |
 |---|---|---|---|---|---|---|---|
-| FN-REC-01 | 라이브 재스트리밍 (1080p 메인) | P0 | SRV | 기능 §4.4 | M1 | `server/infra/stream/` · `deploy/mediamtx.yml` | ⬜ |
-| FN-REC-02 | 7일 링버퍼 녹화 | P0 | SRV | 기능 §4.4 | M1 | `server/infra/stream/` · `media/` | ⬜ |
-| FN-REC-03 | 이벤트 클립 · 키프레임 추출 | P0 | SRV | 기능 §4.4 | M3 | `server/infra/clip/` | ⬜ |
+| FN-REC-01 | 라이브 재스트리밍 (1080p 메인) | P0 | SRV | 기능 §4.4 | M1 | `server/infra/stream/` · `deploy/mediamtx.yml` · `front/src/live/` | ✅ |
+| FN-REC-02 | 7일 링버퍼 녹화 | P0 | REC | 기능 §4.4 · API §4.7 | M1 | `recorder/capture.py` · `recorder/retention.py` | ✅ |
+| FN-REC-03 | 이벤트 클립 · 키프레임 추출 | P0 | REC/SRV | 기능 §4.4 · API §4.7 | M1 (REC API) / M3 (예약 실행) | `recorder/clips.py` · `server/infra/clip/` | 🟡 |
 | FN-REC-04 | 이벤트 DB 저장 | P0 | SRV | 기능 §4.4 · §6 | M1 | `server/infra/db/repository.py` | ⬜ |
-| FN-REC-05 | 저장 용량 관리 | P1 | SRV | 기능 §4.4 | M3 | `server/infra/stream/retention.py` | ⬜ |
+| FN-REC-05 | 저장 용량 관리 | P1 | REC | 기능 §4.4 | M1 | `recorder/retention.py` | ✅ |
+
+> **녹화는 서버가 아니라 REC 컴포넌트(`recorder/`)가 한다** (기능명세서 §4.4 「녹화 컴포넌트(REC) 분리」).
+> 운용 시 7일 원본은 엣지 NVMe SSD 에 있고, 서버는 파일 경로가 아니라 **HTTP API(§4.7)로만**
+> 접근한다. 개발 중 같은 기계에서 돌더라도 이 규칙을 지킨다 — M9 에 옮길 때 고치는 값이
+> `RECORDER_BASE` 하나여야 하기 때문이다.
+>
+> **FN-REC-03 이 🟡 인 이유**: `POST /clips` · `GET /keyframe`(추출 API)는 M1 에서 동작하지만,
+> `confirmed_at + clip_post_roll_s + margin` 예약 실행과 `clip_status` 관리는 이벤트
+> 상태머신이 있어야 하므로 M3 이다.
 
 > **클립은 확정 즉시 추출하지 않는다.** 확정 순간에는 사후 구간이 아직 녹화되지 않았다.
 > `confirmed_at + clip_post_roll_s + margin(2초)` 시점에 예약 실행하고, 그동안
@@ -135,7 +144,7 @@
 | FN-ID | 화면 | 우선 | 계층 | 명세 위치 | 마일스톤 | 코드 위치(예정) | 상태 |
 |---|---|---|---|---|---|---|---|
 | FN-UI-01 | 개요 — 핵심 지표 · 추세 · 분포 · 최근 이벤트 · 시스템 상태 | P0 | WEB | 기능 §4.6 | M5 | `front/src/pages/OverviewPage.tsx` | ⬜ |
-| FN-UI-02 | 실시간 관제 — 2채널 라이브 + 오버레이 · 수동 방송 | P0 | WEB | 기능 §4.6 · API §5 | M5 | `front/src/pages/LivePage.tsx` | ⬜ |
+| FN-UI-02 | 실시간 관제 — 2채널 라이브 + 오버레이 · 수동 방송 | P0 | WEB | 기능 §4.6 · API §5 | M1 (라이브·상태) / M2 (오버레이) / M3 (수동 방송) | `front/src/pages/LivePage.tsx` · `front/src/live/` | 🟡 |
 | FN-UI-03 | 이벤트 — 목록·필터 + 상세(클립·LLM·규정·타임라인) | P0 | WEB | 기능 §4.6 · API §4.1 | M5 | `front/src/pages/EventsPage.tsx` | ⬜ |
 | FN-UI-04 | 영상 검색 — 자연어 질의 · 유사도순 결과 | P1 | WEB | 기능 §4.6 · API §4.3 | M7 | `front/src/pages/SearchPage.tsx` | ⬜ |
 | FN-UI-05 | 분석 · 보고서 — 시정률 추이 · 반복 순위 · 히트맵 · 이상 탐지 | P1 | WEB | 기능 §4.6 · API §4.2 | M8 | `front/src/pages/AnalysisPage.tsx` | ⬜ |
@@ -169,8 +178,8 @@
 
 | FN-ID | 기능명 | 우선 | 계층 | 명세 위치 | 마일스톤 | 코드 위치(예정) | 상태 |
 |---|---|---|---|---|---|---|---|
-| FN-SYS-01 | 구성요소 상태 감시 (엣지·카메라·MCU·클라우드·저장소) | P0 | SRV | 기능 §4.8 · API §4.6 | M1 | `server/app/routes/system.py` | ⬜ |
-| FN-SYS-02 | 시각 동기화 (NTP · 클립 정합의 전제) | P0 | SRV/EDGE | 기능 §4.8 | M1 | `server/app/routes/system.py` · `edge/` | ⬜ |
+| FN-SYS-01 | 구성요소 상태 감시 (엣지·카메라·MCU·클라우드·저장소) | P0 | SRV | 기능 §4.8 · API §4.6 | M1 (카메라·저장소) / M2~ (엣지·MCU·클라우드) | `server/app/routes/system.py` · `server/infra/stream/watcher.py` | 🟡 |
+| FN-SYS-02 | 시각 동기화 (NTP · 클립 정합의 전제) | P0 | SRV/EDGE | 기능 §4.8 | M1 (서버) / M2 (엣지 오프셋) | `server/infra/timesync.py` · `edge/` | 🟡 |
 | FN-SYS-03 | 클라우드 장애 격리 | P1 | SRV | 기능 §4.8 | M7 | `server/ai/adapter.py` | ⬜ |
 | FN-SYS-04 | 지표 집계 (시정률 · 평균 시정 시간 · 판정 불가율 · 분포) | P0 | SRV | 기능 §4.8 · API §4.2·§6.7 | M4 | `server/domain/metrics.py` | ⬜ |
 | FN-SYS-05 | 판정 불가 집계 (`expired` 별도 집계) | P0 | SRV | 기능 §4.8 · API §6.7 | M4 | `server/domain/metrics.py` | ⬜ |
@@ -210,6 +219,38 @@ FN-ID가 붙지 않는 기반 작업이다. 전부 완료되었고 `uv run tasks
 
 ---
 
+## M1 산출물 (인프라와 통로)
+
+| 항목 | 위치 | 근거 | 상태 |
+|---|---|---|---|
+| 환경변수 단일 원본 (compose·서버·REC·프론트가 같은 `.env`) | `.env.example` · `docker-compose.yml` · `front/vite.config.ts` | 절대규칙 6 | ✅ |
+| mediamtx — RTSP 수신 · WHEP · LL-HLS (**내장 녹화 미사용**) | `deploy/mediamtx.yml` | 기능 §4.4 | ✅ |
+| 가짜 카메라 4경로 + **밀리초 벽시계 타임코드 소성** | `deploy/fake_cams.py` | API §1.2 · FN-UI-02 | ✅ |
+| REC 컴포넌트 — 세그먼트 녹화 · 보존 · §4.7 API 3종 | `recorder/` | API §4.7 | ✅ |
+| §4.7 계약 스키마 (`ClipRequest` · `ClipResponse` · `RecStatusResponse`) | `packages/contracts/.../rest.py` | API §4.7 | ✅ |
+| 메인 스트림 상태 감시 · `system` 발행 | `server/infra/stream/` | API §5.3 · FN-SYS-01 | ✅ |
+| `GET /system/status` (storage 는 REC 프록시) | `server/app/routes/system.py` | API §4.6 | ✅ |
+| `/ws/dashboard` 허브 (M1 은 `system` 만 흐른다) | `server/app/ws_dashboard.py` | API §5 | ✅ |
+| NTP 오프셋 확인 (FN-SYS-02) | `server/infra/timesync.py` | 기능 §4.8 | ✅ |
+| 실시간 관제 화면 — WHEP 우선 · HLS 폴백 · 표시 시각 | `front/src/live/` · `front/src/pages/LivePage.tsx` | FN-UI-02 | ✅ |
+
+**실측치** (2026-07-28, testsrc2 소스 기준)
+
+| 항목 | 값 |
+|---|---|
+| 영상 지연 · WebRTC(WHEP) | **0.27 ~ 0.34초** (정상 재생 진입 후) |
+| 영상 지연 · LL-HLS | **약 2.5초** |
+| 카메라 → mediamtx → 소비자 (지연의 대부분) | **약 0.27초** |
+| 녹화 용량 (2채널) | **1.95 GB/시간** (§4.4 산정 2.25 GB/시간 대비 −13%) |
+| 카메라 끊김 감지 | **2.9초** 만에 `reconnecting`, 7.6초에 `down` |
+
+> **오버레이 정합(±100ms) 관점**: WebRTC 경로는 0.3초 안쪽이라 `overlay_buffer_ms`
+> 기본값 300ms 와 같은 자리수다. **HLS 폴백은 2.5초**라 같은 버퍼값으로는 맞출 수
+> 없다. M2 에서 재생 경로에 따라 버퍼를 달리 잡아야 한다 — 화면에 어느 경로로
+> 재생 중인지 표시해 둔 이유가 이것이다.
+
+---
+
 ## 명세서 확인 필요
 
 명세서를 SSOT로 두고 **코드에서 임의로 채우지 않은** 항목이다. 사람이 판단해
@@ -239,6 +280,10 @@ FN-ID가 붙지 않는 기반 작업이다. 전부 완료되었고 `uv run tasks
 
 | 내용 | 상세 |
 |---|---|
+| **§4.6 관측 전 값의 표기** | `cameras[].fps` · `time_sync.edge_offset_ms` · `storage` 는 예시가 전부 "값이 있는 상태"뿐이라, 아직 관측 주체가 없을 때(M1) 무엇을 실을지 정하지 않았다. `0` 은 "엣지가 도는데 처리량 0" · "완벽히 동기화됨" 이라는 **다른 주장**이 되어 실제 장애와 구분되지 않으므로 **`null` 로 두고 계약을 nullable 로 넓혔다.** 명세서가 다른 표기를 원하면 되돌려야 한다 |
+| **§4.6 `storage` 와 §4.7 `storage` 의 관계** | §4.7 은 "이 응답을 §4.6 의 `storage` 에 **그대로 전달**한다"고 하는데, §4.7 은 5필드(`total_gb`·`used_gb`·`free_gb`·`retention_days`·`oldest_segment_at`)이고 §4.6 예시는 2필드(`retention_days`·`free_gb`)다. **§4.6 스키마를 유지하고 값의 출처만 REC 으로** 했다(서버 디스크를 조회하지 않는다는 것이 §4.7 의 핵심 요구이므로). §4.6 을 5필드로 넓히려는 의도였다면 알려달라 |
+| **§4.6 에 카메라별 녹화 여부가 없다** | §4.7 `GET /status` 에는 `cameras[].recording` 이 있지만 §4.6 에는 없다. 화면의 REC 표시는 REC 도달 여부(`storage` 가 채워졌는가) + `main_state` 로 **추론**하고 있다. 카메라별 녹화 상태를 화면에 정확히 띄우려면 §4.6 에 필드가 필요하다 |
+| **§4.7 비-`ready` 응답의 필드** | `POST /clips` 예시가 `ready` 인 경우만 있다. `not_found` 면 파일이 없으므로 `size_bytes`·`download_url`·`actual_from`·`actual_to` 를 **전부 `null`** 로 두었다 |
 | §5.4 `zone` 의 "동일한 형태" | "`GET /zones` 응답 원소와 동일한 형태"라고 하지만 예시와 필수 필드 표에는 `cam_id` 가 없다(메시지 최상위에 있음). 표를 따라 `cam_id` 없이 두었다 |
 | §4.2 `points[].t` 의 타입 | `bucket` 에 따라 표기가 달라진다(`day` → `2026-08-12`, `hour` → ?). 예시가 날짜뿐이라 `str` 로 두었다 |
 | §4.2 `distribution` 의 `key` | `by=hour_of_day` 는 "0~23을 `key` 로 사용"한다는데 int 인지 문자열인지 불명확하다. 다른 축이 전부 문자열이라 `str` 로 통일했다 |
