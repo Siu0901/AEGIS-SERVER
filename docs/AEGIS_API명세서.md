@@ -452,7 +452,7 @@ v2.0 · 2026-07-18
 
 | 필드 | 설명 |
 |---|---|
-| `points[].t` | 버킷 시작 시각 |
+| `points[].t` | 버킷 시작 시각. `bucket` 에 따라 형식이 다르다 — `day`·`week` 는 `YYYY-MM-DD`(주는 월요일), `hour` 는 `YYYY-MM-DDTHH:00:00Z` |
 | `points[].value` | 지표값. 비율 지표는 0~1, 건수 지표는 정수 |
 | `points[].n` | 해당 버킷의 모집단 크기. 표본이 작을 때 비율을 신뢰하지 않기 위해 함께 제공한다 |
 
@@ -466,7 +466,7 @@ v2.0 · 2026-07-18
               {"key":"zone_intrusion","label":"금지구역 침입","count":7,"ratio":0.30} ] }
 ```
 
-`by=hour_of_day` 는 0~23 을 `key` 로 사용하며 시간대 히트맵의 데이터원이 된다.
+`by=hour_of_day` 는 `"00"`~`"23"` 을 `key` 로 사용하며 시간대 히트맵의 데이터원이 된다. **`key` 는 모든 축에서 문자열이고, 시간대는 사전순 정렬이 시각순과 일치하도록 0을 채운다.**
 
 #### `GET /metrics/repeat?days=7&limit=10`
 
@@ -645,7 +645,8 @@ v2.0 · 2026-07-18
   "cls_min_conf": 0.60,
   "clip_pre_roll_s": 10,
   "clip_post_roll_s": 10,
-  "overlay_buffer_ms": 300,
+  "overlay_buffer_webrtc_ms": 400,
+  "overlay_buffer_hls_ms": 2800,
   "overlay_stale_ms": 1000,
   "fall_height_ratio_max": 0.5,
   "fall_axis_angle_min_deg": 55.0,
@@ -673,7 +674,8 @@ v2.0 · 2026-07-18
 | `cls_min_crop_px` | **최소 크롭 높이.** 미달 시 분류 결과를 채택하지 않는다 |
 | `cls_min_conf` | **최소 분류 신뢰도.** 미달 시 결과를 채택하지 않는다 |
 | `clip_pre_roll_s` / `clip_post_roll_s` | 이벤트 클립의 사전·사후 구간(초) |
-| `overlay_buffer_ms` | 대시보드 오버레이 지연 버퍼. 영상–좌표 시간 정합용 |
+| `overlay_buffer_webrtc_ms` | WebRTC 재생 시 오버레이 지연 버퍼 |
+| `overlay_buffer_hls_ms` | HLS 폴백 재생 시 오버레이 지연 버퍼 |
 | `overlay_stale_ms` | 이 시간 이상 좌표 갱신이 없으면 박스를 흐리게 표시 |
 | `fall_height_ratio_max` | 높이 비율이 이 값 이하이면 쓰러짐 조건 ① 충족 |
 | `fall_axis_angle_min_deg` | 주축 각도가 이 값 이상이면 조건 ② 충족 |
@@ -698,11 +700,13 @@ v2.0 · 2026-07-18
   "edge": { "online": true, "gpu_util":0.41,
             "cls_cache_hit_rate":0.87, "depth_calls_per_min":14,
             "msg_rejected_total":0 },
-  "cameras": [{"cam_id":1,"main_state":"ok","sub_state":"ok","fps":8.2},
-              {"cam_id":2,"main_state":"ok","sub_state":"ok","fps":8.0}],
+  "cameras": [{"cam_id":1,"main_state":"ok","sub_state":"ok","fps":8.2,"recording":true},
+              {"cam_id":2,"main_state":"ok","sub_state":"ok","fps":8.0,"recording":true}],
   "mcu": { "online": true, "last_seen":"2026-08-14T05:39:58Z" },
   "cloud": { "available": true, "quota_used": 0.62 },
-  "storage": { "retention_days":7, "free_gb":512 },
+  "storage": { "total_gb":500, "used_gb":378, "free_gb":122,
+               "retention_days":7,
+               "oldest_segment_at":"2026-08-07T05:37:00Z" },
   "time_sync": { "edge_offset_ms": 12 }
 }
 ```
@@ -712,6 +716,23 @@ v2.0 · 2026-07-18
 | `cameras[].main_state` | **서버가 보는 메인 스트림**(1080p, 라이브·녹화용) 상태 |
 | `cameras[].sub_state` | **엣지가 보는 서브 스트림**(640×360, 추론용) 상태. `heartbeat` 값을 그대로 전달 |
 | `cameras[].fps` | 엣지의 실제 처리 fps |
+| `cameras[].recording` | REC이 이 카메라를 녹화 중인지. **`GET /status`(§4.7)의 값을 그대로 전달**한다. 화면의 REC 표시는 이 값으로 그린다 |
+
+**관측 주체가 없을 때는 `null` 을 쓴다 (중요)**
+
+값을 아직 관측할 수 없는 상태에서 `0` 이나 `false` 를 넣지 않는다. `0` 은 "관측했더니 0이었다"는 **주장**이므로 실제 장애와 구분되지 않는다.
+
+| 필드 | 관측 주체 없을 때 |
+|---|---|
+| `cameras[].fps` | `null` (엣지 미연결. `0` 은 "엣지가 도는데 처리량 0"이라는 다른 의미) |
+| `cameras[].sub_state` | `"down"` (StreamState 에 "모름"이 없고, 연결 안 됨은 사실이다) |
+| `cameras[].recording` | `null` (REC 미도달) |
+| `time_sync.edge_offset_ms` | `null` (`0` 은 "완벽히 동기화됨"이라는 다른 의미) |
+| `storage.*` | `null` (REC 미도달) |
+| `edge.gpu_util` 등 | `null` |
+| `edge.msg_rejected_total` | `0` — 서버가 직접 세는 값이므로 관측 주체가 항상 존재한다 |
+
+대시보드는 `null` 을 "측정 불가"로 표시하고, `0` 과 다르게 그린다.
 
 **상태 값이 두 종류인 이유**
 
@@ -726,6 +747,8 @@ v2.0 · 2026-07-18
 | `edge.msg_rejected_total` | 스키마 검증에 실패해 거부된 엣지 메시지 누적 건수 (FN-SYS-06). 0이 아니면 대시보드에 경고를 띄운다 |
 | `cloud.quota_used` | 무료 한도 사용률. 초과 시 분석 기능만 중단되고 안전 기능은 무관 |
 | `time_sync.edge_offset_ms` | 엣지-서버 시각 차이. 크면 클립 추출 구간이 어긋남 |
+| `storage.*` | **REC의 `GET /status`(§4.7) 응답을 그대로 전달**한다. 5개 필드 전부. 서버가 자체 디스크를 조회하지 않는다 |
+| `storage.oldest_segment_at` | 보존된 가장 오래된 세그먼트 시각. 영상 검색 가능 범위의 하한이다 |
 
 ---
 
@@ -759,6 +782,20 @@ REC은 메인 스트림 녹화와 구간 추출만 담당하는 독립 컴포넌
 | `download_url` | `RECORDER_BASE` 기준 상대 경로 |
 
 서버는 `download_url` 로 파일을 받아 자신의 저장소에 영구 보관하고 `events.clip_path` 와 `clip_status` 를 갱신한다. 요청 구간에 걸치는 세그먼트가 여러 개면 이어붙여 잘라낸다.
+
+**비-`ready` 응답**
+
+```json
+{ "status":"not_found","size_bytes":null,"download_url":null,
+  "actual_from":null,"actual_to":null,
+  "reason":"보존 기간 경과 (oldest_segment_at 2026-08-07T05:37:00Z)" }
+```
+
+`not_found` 는 파일이 존재하지 않으므로 나머지 필드가 전부 `null` 이다. `partial` 은 존재하는 구간만 잘라내 반환하며 `actual_from`/`actual_to` 가 요청과 다르다. 두 경우 모두 `reason` 에 사유를 담고, 서버는 `clip_status` 를 `failed` 로 기록한다.
+
+**세그먼트 경계로 인한 구간 확장**
+
+요청 시각이 세그먼트 중간에 걸치면 해당 세그먼트의 시작부터 포함되므로 **클립이 요청보다 최대 세그먼트 길이(10초)만큼 길어질 수 있다.** 이는 정상 동작이며, 이벤트 클립에서는 앞뒤 맥락이 늘어나는 것이므로 문제가 되지 않는다. `actual_from`/`actual_to` 로 실제 구간을 정확히 보고하는 것이 요구사항이다.
 
 #### `GET /keyframe?cam_id=..&at=..` — 단일 프레임 추출
 
@@ -996,7 +1033,7 @@ FN-UI-02 표시 규칙(위반자 적색·근접 거리선·거리 라벨)을 채
 | 필드 | 설명 |
 |---|---|
 | `action` | `upsert` / `delete` |
-| `zone` | 구역 리소스. `GET /zones` 응답 원소와 동일한 형태 |
+| `zone` | 구역 리소스. `GET /zones` 응답 원소에서 **`cam_id` 를 제외한** 형태. `cam_id` 는 메시지 최상위에만 둔다(중복 방지) |
 
 **`action` 별 필수 필드**
 
