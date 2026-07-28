@@ -28,13 +28,13 @@ from typing import Protocol
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from aegis_contracts import ComponentSystemMsg, RecStatusResponse
+from aegis_contracts import ComponentSystemMsg
 from aegis_contracts.enums import ComponentState, StreamState
 from aegis_vision.clock import Clock, RealClock
 from server.app.config import ServerSettings, get_server_settings
 from server.app.routes import system as system_routes
 from server.app.ws_dashboard import DashboardHub
-from server.infra.rec_client import RecClient, RecUnavailableError
+from server.infra.rec_client import RecClient, RecUnavailableError, StorageReader
 from server.infra.stream import MediaMtxClient, StreamWatcher
 from server.infra.timesync import check_time_sync
 
@@ -55,13 +55,6 @@ class StreamObserver(Protocol):
     def states(self) -> dict[int, StreamState]: ...
     async def start(self) -> None: ...
     async def stop(self) -> None: ...
-
-
-class StorageReader(Protocol):
-    """`create_app` 이 요구하는 REC 클라이언트."""
-
-    async def status(self) -> RecStatusResponse: ...
-    async def aclose(self) -> None: ...
 
 
 def create_app(

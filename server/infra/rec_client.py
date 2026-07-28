@@ -12,20 +12,32 @@ from __future__ import annotations
 
 import logging
 from types import TracebackType
-from typing import Self
+from typing import Protocol, Self
 
 import httpx2
 from pydantic import ValidationError
 
 from aegis_contracts import RecStatusResponse
 
-__all__ = ["RecClient", "RecUnavailableError"]
+__all__ = ["RecClient", "RecUnavailableError", "StorageReader"]
 
 log = logging.getLogger("server.rec")
 
 
 class RecUnavailableError(RuntimeError):
     """REC 에 닿지 못했거나 응답이 계약(§4.7)과 다르다."""
+
+
+class StorageReader(Protocol):
+    """앱이 요구하는 REC 클라이언트. 테스트가 가짜를 끼워 넣을 자리다.
+
+    `main` 이 아니라 여기 두는 이유는 **라우트도 이 타입이 필요하기 때문**이다
+    (`app.state.rec_client` 를 꺼내 쓴다). `main` 에 두면 라우트 → main → 라우트로
+    순환 import 가 된다.
+    """
+
+    async def status(self) -> RecStatusResponse: ...
+    async def aclose(self) -> None: ...
 
 
 class RecClient:

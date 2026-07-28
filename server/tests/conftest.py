@@ -13,7 +13,7 @@ from aegis_contracts.enums import StreamState
 from server.app.config import ServerSettings
 from server.infra.rec_client import RecUnavailableError
 
-__all__ = ["REC_STATUS", "FakeRecClient", "FakeWatcher", "make_settings"]
+__all__ = ["REC_STATUS", "FakeRecClient", "FakeWatcher", "make_settings", "rec_status_with"]
 
 #: API명세서 §4.7 `GET /status` 예시 그대로.
 REC_STATUS = RecStatusResponse(
@@ -37,6 +37,24 @@ REC_STATUS = RecStatusResponse(
         oldest_segment_at=datetime(2026, 8, 7, 5, 37, 0, tzinfo=UTC),
     ),
 )
+
+
+def rec_status_with(*, recording: dict[int, bool]) -> RecStatusResponse:
+    """카메라별 녹화 여부만 바꾼 §4.7 응답.
+
+    REC 이 녹화하지 않는 카메라는 **목록에 아예 없다.** 그래서 `cam_id` 를 키로 받는다.
+    """
+    return RecStatusResponse(
+        cameras=[
+            RecCameraStatus(
+                cam_id=cam_id,
+                recording=is_recording,
+                last_segment_at=datetime(2026, 8, 14, 5, 37, 10, tzinfo=UTC),
+            )
+            for cam_id, is_recording in sorted(recording.items())
+        ],
+        storage=REC_STATUS.storage,
+    )
 
 
 def make_settings(**overrides: object) -> ServerSettings:
@@ -73,11 +91,22 @@ class FakeWatcher:
 
 
 class FakeRecClient:
-    """`StorageReader` 대역. `available=False` 면 REC 이 죽은 상황을 흉내 낸다."""
+    """`StorageReader` 대역. `available=False` 면 REC 이 죽은 상황을 흉내 낸다.
 
-    def __init__(self, *, available: bool = True, payload: RecStatusResponse | None = None) -> None:
+    `sequence` 를 주면 부를 때마다 **다른 응답**을 돌려준다(마지막 값이 이후 반복).
+    한 요청 안에서 REC 을 두 번 부르면 값이 어긋난다는 것을 드러내기 위한 장치다.
+    """
+
+    def __init__(
+        self,
+        *,
+        available: bool = True,
+        payload: RecStatusResponse | None = None,
+        sequence: list[RecStatusResponse] | None = None,
+    ) -> None:
         self.available = available
         self.payload = payload or REC_STATUS
+        self.sequence = list(sequence or [])
         self.calls = 0
 
     async def status(self) -> RecStatusResponse:
@@ -85,6 +114,8 @@ class FakeRecClient:
         if not self.available:
             msg = "REC 에 닿지 못했다 (테스트)"
             raise RecUnavailableError(msg)
+        if self.sequence:
+            return self.sequence.pop(0) if len(self.sequence) > 1 else self.sequence[0]
         return self.payload
 
     async def aclose(self) -> None:
