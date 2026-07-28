@@ -179,6 +179,17 @@
   object-fit: contain;
 }
 
+/* 오버레이 캔버스. 영상 위에 정확히 겹쳐야 하므로 같은 상자를 쓴다.
+   `object-fit: contain` 으로 생기는 레터박스는 캔버스 안에서 계산해 비켜 그린다
+   (OverlayCanvas.tsx 의 viewport). 클릭은 아래 클릭 판이 받아야 하므로 통과시킨다. */
+.tile__overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
 /* 타일 클릭 판(확대·복귀). `video` 자체에 걸면 브라우저 기본 컨트롤과 겹친다.
    오프라인 안내와 표시 시각보다 아래에 둬서 그 위의 글자를 가리지 않는다. */
 .tile__hit {
@@ -261,6 +272,12 @@
 .tile__meta {
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
+}
+
+/* 정책값을 못 읽어 오버레이를 그리지 못하는 상태. 조용히 비어 있으면
+   "위반이 없다"로 읽힌다 — 그 오해가 이 화면에서 가장 위험하다. */
+.tile__meta--warn {
+  color: var(--warn);
 }
 
 .tile__spacer {

@@ -9,7 +9,8 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
-import type { CameraStatus, StreamState } from '../types/system'
+import type { CameraStatus, OverlayPolicies, StreamState, Zone } from '../types/system'
+import OverlayCanvas from './OverlayCanvas'
 import {
   OVERLAY_BUFFER_POLICY_KEY,
   preferenceFromLocation,
@@ -46,9 +47,20 @@ type Props = {
   solo: boolean
   /** 타일 클릭 — 확대 진입·복귀. */
   onToggleSolo: () => void
+  /** 오버레이 지연 버퍼 정책값(§4.5). `null` 이면 오버레이를 그리지 않는다. */
+  policies: OverlayPolicies | null
+  /** 캐시된 금지구역(§4.5 · §5.4). 라벨의 구역 표시 이름에 쓴다. */
+  zones: Zone[]
 }
 
-export default function CameraTile({ camera, name, solo, onToggleSolo }: Props) {
+export default function CameraTile({
+  camera,
+  name,
+  solo,
+  onToggleSolo,
+  policies,
+  zones,
+}: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [kind, setKind] = useState<PlaybackKind>('none')
   const [error, setError] = useState<string | null>(null)
@@ -130,6 +142,17 @@ export default function CameraTile({ camera, name, solo, onToggleSolo }: Props) 
       <div className="tile__frame">
         <video ref={videoRef} muted playsInline autoPlay className="tile__video" />
 
+        {/* 오버레이는 정규화 좌표라 확대 여부와 무관하게 같은 자리에 붙는다(FN-UI-02). */}
+        {live && (
+          <OverlayCanvas
+            camId={camera.cam_id}
+            videoRef={videoRef}
+            kind={kind}
+            policies={policies}
+            zones={zones}
+          />
+        )}
+
         {/* 영상 위를 덮는 클릭 판. `video` 에 직접 걸면 브라우저 기본 컨트롤과 겹친다. */}
         <button
           type="button"
@@ -167,12 +190,25 @@ export default function CameraTile({ camera, name, solo, onToggleSolo }: Props) 
           className="tile__meta"
           title={
             bufferKey
-              ? `오버레이 지연 버퍼는 ${bufferKey} 를 쓴다 (값은 GET /policies)`
+              ? `오버레이 지연 버퍼는 ${bufferKey}${
+                  policies ? ` = ${policies[bufferKey]}ms` : ' (정책값 미수신)'
+                }`
               : undefined
           }
         >
           {live ? KIND_LABEL[kind] : STATE_LABEL[camera.main_state]}
+          {live && bufferKey && policies && ` +${Math.round(policies[bufferKey])}ms`}
         </span>
+        {/* 정책값을 못 읽으면 오버레이를 안 그린다. 조용히 비어 있으면 "위반이 없다"로
+            읽히는데, 그 오해가 이 화면에서 가장 위험하다. */}
+        {live && !policies && (
+          <span
+            className="tile__meta tile__meta--warn"
+            title="GET /policies 를 읽지 못해 지연 버퍼를 모른다. 어긋난 박스는 없는 박스보다 나쁘므로 그리지 않는다."
+          >
+            오버레이 대기
+          </span>
+        )}
         <span className="tile__spacer" />
         {/* REC 표시는 REC 컴포넌트(§4.7)의 `cameras[].recording` 을 그대로 쓴다.
             라이브가 보인다고 녹화 중인 것이 아니다 — 둘은 다른 프로세스다.

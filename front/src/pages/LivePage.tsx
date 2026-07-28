@@ -1,9 +1,16 @@
 /**
  * 실시간 관제 (FN-UI-02).
  *
- * M1 범위는 **2채널 라이브와 그 상태**, 그리고 **단독 확대 보기**까지다. 오버레이·진행 중
- * 이벤트·수동 방송은 각각 M2·M3·M5 에서 이 화면에 붙는다. 지금 없는 기능을 자리표시자로
- * 그려두지 않는다 — 빈 패널은 "아직 없음"과 "고장남"을 구분하지 못하게 만든다.
+ * M2 범위는 **2채널 라이브 + 오버레이**와 **단독 확대 보기**까지다. 진행 중 이벤트
+ * 패널과 수동 방송은 각각 M3·M5 에서 붙는다. 지금 없는 기능을 자리표시자로 그려두지
+ * 않는다 — 빈 패널은 "아직 없음"과 "고장남"을 구분하지 못하게 만든다.
+ *
+ * 오버레이가 필요로 하는 두 가지를 이 화면이 한 번만 읽어 타일에 나눠준다.
+ *
+ * * `GET /policies` — 재생 경로별 지연 버퍼(§4.5). 타일마다 따로 읽으면 두 타일이
+ *   다른 값으로 그릴 수 있고, 그러면 어긋났을 때 무엇이 맞는지 알 수 없다
+ * * `GET /zones` — 금지구역 폴리곤(§5.1). 매 프레임 변하지 않으므로 캐시하고
+ *   `zone_updated`(§5.4)로 갱신한다
  *
  * 레이아웃은 `docs/AEGIS_front_design.pdf` 2페이지를 따르되, 용어는 기능명세서
  * 부록 B 대조표대로 제조현장 기준으로 쓴다.
@@ -11,10 +18,17 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import { subscribePolicies } from '../api/policies'
 import { subscribeDashboard } from '../api/system'
 import { useSystemStatus } from '../api/useSystemStatus'
+import { applyZoneUpdate, fetchZones } from '../api/zones'
 import CameraTile from '../live/CameraTile'
-import { isEventCreatedMsg, type EventCreatedMsg } from '../types/system'
+import {
+  isEventCreatedMsg,
+  type EventCreatedMsg,
+  type OverlayPolicies,
+  type Zone,
+} from '../types/system'
 import '../live/live.css'
 
 /** 카메라 표시 이름. 실제 설치 위치명은 M6 설정 화면에서 관리한다(FN-CFG). */
@@ -42,6 +56,8 @@ export default function LivePage() {
   const { status, connected, error } = useSystemStatus()
   const [searchParams, setSearchParams] = useSearchParams()
   const [alerts, setAlerts] = useState<EdgeAlert[]>([])
+  const [policies, setPolicies] = useState<OverlayPolicies | null>(null)
+  const [zones, setZones] = useState<Zone[]>([])
 
   const cameras = status?.cameras ?? []
 
@@ -79,9 +95,26 @@ export default function LivePage() {
   // 보이지 않는 것과 감시가 멈추는 것은 다르다. 소켓 자체도 `subscribeDashboard` 가
   // 화면 밖에서 하나로 유지하므로 타일을 내려도 끊기지 않는다.
   // (`event_created` 는 M2 부터 실제로 흐른다. 그때까지 이 구독은 조용하다.)
+  // 오버레이 지연 버퍼(§4.5). 값을 프론트에 적지 않는다(절대규칙 6).
+  useEffect(() => subscribePolicies(setPolicies), [])
+
+  // 금지구역은 한 번 조회해 캐시하고 `zone_updated` 로 갱신한다(§5.1 · §5.4).
+  useEffect(() => {
+    const controller = new AbortController()
+    fetchZones(controller.signal)
+      .then(setZones)
+      .catch((reason: unknown) => {
+        if (controller.signal.aborted) return
+        // 빈 배열로 두되 조용히 넘기지 않는다 — 구역 이름이 안 보이는 이유가 여기다.
+        console.warn('[zones] 금지구역을 읽지 못했다:', reason)
+      })
+    return () => controller.abort()
+  }, [])
+
   useEffect(() => {
     return subscribeDashboard({
       onMessage: (message) => {
+        setZones((current) => applyZoneUpdate(current, message))
         if (!isEventCreatedMsg(message)) return
         const event = message as EventCreatedMsg
         setAlerts((current) => {
@@ -152,6 +185,8 @@ export default function LivePage() {
               name={CAMERA_NAMES[camera.cam_id] ?? `카메라 ${camera.cam_id}`}
               solo={solo === camera.cam_id}
               onToggleSolo={() => show(solo === camera.cam_id ? null : camera.cam_id)}
+              policies={policies}
+              zones={zones.filter((zone) => zone.cam_id === camera.cam_id)}
             />
           ))}
         </div>

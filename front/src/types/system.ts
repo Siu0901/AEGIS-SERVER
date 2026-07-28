@@ -1,5 +1,6 @@
 /**
- * API명세서 §4.6 (`GET /system/status`) · §5.3 (`system`) 대응 타입.
+ * API명세서 §4.6 (`GET /system/status`) · §5.1 (`overlay`) · §5.3 (`system`) ·
+ * §5.4 (`zone_updated`) · §4.5 (`zones` · `policies`) 대응 타입.
  *
  * **손으로 옮긴 임시 정의다.** 스키마의 원본은 `packages/contracts` 하나이며
  * (CLAUDE.md 절대규칙 5), M5 의 `uv run tasks.py types` 가 여기를 생성물로 대체한다.
@@ -127,10 +128,15 @@ export interface EventCreatedMsg {
 /**
  * `/ws/dashboard` 로 내려오는 메시지 (§5).
  *
- * M1 에서 실제로 흐르는 것은 `system` 하나다. `overlay` · `event_*` · `metric` 은
- * M2 이후에 붙으므로 지금은 판별만 하고 흘려보낸다.
+ * M2 에서 흐르는 것은 `system` 과 `overlay` 다. `event_*` 는 확정 판정이 생기는
+ * M3 부터, `metric` 은 지표 집계가 생기는 M4 부터 붙는다.
  */
-export type DashboardMessage = SystemMsg | EventCreatedMsg | { type: string }
+export type DashboardMessage =
+  | SystemMsg
+  | EventCreatedMsg
+  | OverlayMsg
+  | ZoneUpdatedMsg
+  | { type: string }
 
 export function isSystemMsg(message: DashboardMessage): message is SystemMsg {
   return message.type === 'system'
@@ -142,4 +148,114 @@ export function isCameraSystemMsg(message: SystemMsg): message is CameraSystemMs
 
 export function isEventCreatedMsg(message: DashboardMessage): message is EventCreatedMsg {
   return message.type === 'event_created'
+}
+
+// ---------------------------------------------------------------------------
+// §5.1 overlay · §5.4 zone_updated · §4.5 zones · policies
+// ---------------------------------------------------------------------------
+
+/** 위반 유형. `person`/`vehicle` 2클래스와 달리 이쪽은 4종이다 (§2.2 · §4.1). */
+export type ViolationType = 'no_helmet' | 'zone_intrusion' | 'proximity' | 'fall'
+
+/** 오버레이 박스의 경고 단계 (§5.1). **`candidate` 는 없다** — 상태머신은 M3 다. */
+export type AlertState = 'active' | 'alerted' | 're_alerted' | 'lost'
+
+/** 2단계 분류 결과. `unknown` 은 존재하지 않는다 (§6.3). */
+export type HelmetState = 'on' | 'off'
+
+export type Posture = 'standing' | 'fallen' | 'unknown'
+
+/** 거리선의 반대편 끝점과 라벨 (§5.1 `objects[].nearby[]`). */
+export interface OverlayNearby {
+  class: 'vehicle'
+  track_id: number
+  /** 사람↔차량 지면 거리. **거리 라벨의 원천이다.** */
+  dist_m: number
+  /** 상대 차량의 **정규화** 접지 좌표. */
+  anchor: [number, number]
+  in_danger_zone: boolean
+}
+
+interface OverlayCommon {
+  track_id: number
+  /** **`[x1, y1, x2, y2]`** 좌상단·우하단 정규화 좌표 (§1.2). `[x, y, w, h]` 가 아니다. */
+  bbox: [number, number, number, number]
+  /**
+   * 현재 이 트랙에 걸려 있는 위반. **박스 색을 결정한다.**
+   * `helmet` 값으로 유추하지 마라 — `proximity` · `fall` 을 놓친다.
+   */
+  violations: ViolationType[]
+  event_ids: string[]
+  alert_state: AlertState | null
+  nearby: OverlayNearby[]
+}
+
+export interface OverlayPerson extends OverlayCommon {
+  class: 'person'
+  /** 엣지가 마스크에서 계산한 접지점 (§6.1). */
+  foot_point: [number, number]
+  posture: Posture
+  /** 구역 밖이면 `null`. 필드 자체는 항상 실린다. */
+  in_zone: string | null
+  /** 게이트 미통과 · 캐시 없음이면 **필드가 아예 없다** (§2.1 · §6.3). */
+  helmet?: HelmetState
+}
+
+export interface OverlayVehicle extends OverlayCommon {
+  class: 'vehicle'
+  /** **정규화** 접지 좌표. `frame` 의 `anchor_m`(미터)과 다르다. */
+  anchor: [number, number]
+  moving: boolean
+  danger_radius_m: number
+}
+
+export type OverlayObject = OverlayPerson | OverlayVehicle
+
+export interface OverlayMsg {
+  type: 'overlay'
+  cam_id: number
+  /** **원본 프레임 시각.** 시간 정합의 기준이다 — 도착 시각으로 대신하면 안 된다. */
+  ts: string
+  objects: OverlayObject[]
+}
+
+/** `GET /zones` 응답 원소 (§4.5). */
+export interface Zone {
+  zone_id: string
+  cam_id: number
+  name: string
+  /** **지면 실좌표(m)** 꼭짓점. 화면 픽셀이 아니다. */
+  polygon_m: [number, number][]
+  buffer_m: number
+  active: boolean
+}
+
+/** `zone_updated.zone` — `GET /zones` 원소에서 `cam_id` 를 뺀 형태 (§5.4). */
+export type ZonePayload = Omit<Zone, 'cam_id'>
+
+export interface ZoneUpdatedMsg {
+  type: 'zone_updated'
+  cam_id: number
+  action: 'upsert' | 'delete'
+  zone: Partial<ZonePayload> & { zone_id: string }
+}
+
+/**
+ * `GET /policies` 중 오버레이가 쓰는 것만 (§4.5).
+ *
+ * **값을 여기 적지 않는다** — 정책값의 원본은 DB `policies` 테이블이고
+ * 서버가 그대로 내려준다 (CLAUDE.md 절대규칙 6).
+ */
+export interface OverlayPolicies {
+  overlay_buffer_webrtc_ms: number
+  overlay_buffer_hls_ms: number
+  overlay_stale_ms: number
+}
+
+export function isOverlayMsg(message: DashboardMessage): message is OverlayMsg {
+  return message.type === 'overlay'
+}
+
+export function isZoneUpdatedMsg(message: DashboardMessage): message is ZoneUpdatedMsg {
+  return message.type === 'zone_updated'
 }
