@@ -10,7 +10,12 @@
 
 import { useEffect, useRef, useState } from 'react'
 import type { CameraStatus, StreamState } from '../types/system'
-import { preferenceFromLocation, startPlayback, type PlaybackKind } from './player'
+import {
+  OVERLAY_BUFFER_POLICY_KEY,
+  preferenceFromLocation,
+  startPlayback,
+  type PlaybackKind,
+} from './player'
 
 const WHEP_BASE = __MEDIAMTX_WHEP__
 const HLS_BASE = __MEDIAMTX_HLS__
@@ -37,10 +42,13 @@ type Props = {
   camera: CameraStatus
   /** 화면에 띄우는 이름. 시안의 건설현장 용어 대신 제조현장 기준으로 붙인다(부록 B). */
   name: string
-  recording: boolean
+  /** 이 채널만 확대해 보고 있는가 (FN-UI-02 단독 확대 보기). */
+  solo: boolean
+  /** 타일 클릭 — 확대 진입·복귀. */
+  onToggleSolo: () => void
 }
 
-export default function CameraTile({ camera, name, recording }: Props) {
+export default function CameraTile({ camera, name, solo, onToggleSolo }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [kind, setKind] = useState<PlaybackKind>('none')
   const [error, setError] = useState<string | null>(null)
@@ -115,10 +123,21 @@ export default function CameraTile({ camera, name, recording }: Props) {
     }
   }, [kind])
 
+  const bufferKey = OVERLAY_BUFFER_POLICY_KEY[kind]
+
   return (
-    <figure className={`tile tile--${STATE_TONE[camera.main_state]}`}>
+    <figure className={`tile tile--${STATE_TONE[camera.main_state]} ${solo ? 'tile--solo' : ''}`}>
       <div className="tile__frame">
         <video ref={videoRef} muted playsInline autoPlay className="tile__video" />
+
+        {/* 영상 위를 덮는 클릭 판. `video` 에 직접 걸면 브라우저 기본 컨트롤과 겹친다. */}
+        <button
+          type="button"
+          className="tile__hit"
+          onClick={onToggleSolo}
+          aria-label={solo ? `${name} 분할 보기로` : `${name} 단독 확대`}
+          title={solo ? '분할 보기로 (Esc)' : '이 채널만 확대'}
+        />
 
         {!live && (
           <div className="tile__offline">
@@ -142,11 +161,36 @@ export default function CameraTile({ camera, name, recording }: Props) {
         <span className={`dot dot--${STATE_TONE[camera.main_state]}`} />
         <span className="tile__name">{name}</span>
         <span className="tile__meta">{live ? size : '—'}</span>
-        <span className="tile__meta">{live ? KIND_LABEL[kind] : STATE_LABEL[camera.main_state]}</span>
+        {/* 재생 경로를 계속 표시한다 — 경로마다 오버레이 지연 버퍼가 다르므로(§4.5),
+            오버레이가 어긋날 때 원인을 가르는 첫 단서다(FN-UI-02). */}
+        <span
+          className="tile__meta"
+          title={
+            bufferKey
+              ? `오버레이 지연 버퍼는 ${bufferKey} 를 쓴다 (값은 GET /policies)`
+              : undefined
+          }
+        >
+          {live ? KIND_LABEL[kind] : STATE_LABEL[camera.main_state]}
+        </span>
         <span className="tile__spacer" />
-        {/* REC 표시는 REC 컴포넌트(§4.7)의 `cameras[].recording` 이다.
-            라이브가 보인다고 녹화 중인 것이 아니다 — 둘은 다른 프로세스다. */}
-        <span className={recording ? 'tile__rec tile__rec--on' : 'tile__rec'}>REC</span>
+        {/* REC 표시는 REC 컴포넌트(§4.7)의 `cameras[].recording` 을 그대로 쓴다.
+            라이브가 보인다고 녹화 중인 것이 아니다 — 둘은 다른 프로세스다.
+            `null` 은 REC 미도달("알 수 없다")이라 켜지도 꺼지지도 않는다. */}
+        <span
+          className={`tile__rec ${camera.recording ? 'tile__rec--on' : ''} ${
+            camera.recording === null ? 'tile__rec--unknown' : ''
+          }`}
+          title={
+            camera.recording === null
+              ? 'REC 에 닿지 못해 녹화 여부를 알 수 없다 (측정 불가)'
+              : camera.recording
+                ? 'REC 이 이 카메라를 녹화 중이다'
+                : 'REC 은 살아 있으나 이 카메라를 녹화하고 있지 않다'
+          }
+        >
+          REC{camera.recording === null ? ' ?' : ''}
+        </span>
       </figcaption>
 
       {error && <p className="tile__error">{error}</p>}

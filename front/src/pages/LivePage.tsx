@@ -1,16 +1,20 @@
 /**
  * 실시간 관제 (FN-UI-02).
  *
- * M1 범위는 **2채널 라이브와 그 상태**까지다. 오버레이·진행 중 이벤트·수동 방송은
- * 각각 M2·M3·M5 에서 이 화면에 붙는다. 지금 없는 기능을 자리표시자로 그려두지 않는다 —
- * 빈 패널은 "아직 없음"과 "고장남"을 구분하지 못하게 만든다.
+ * M1 범위는 **2채널 라이브와 그 상태**, 그리고 **단독 확대 보기**까지다. 오버레이·진행 중
+ * 이벤트·수동 방송은 각각 M2·M3·M5 에서 이 화면에 붙는다. 지금 없는 기능을 자리표시자로
+ * 그려두지 않는다 — 빈 패널은 "아직 없음"과 "고장남"을 구분하지 못하게 만든다.
  *
  * 레이아웃은 `docs/AEGIS_front_design.pdf` 2페이지를 따르되, 용어는 기능명세서
  * 부록 B 대조표대로 제조현장 기준으로 쓴다.
  */
 
+import { useCallback, useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { subscribeDashboard } from '../api/system'
 import { useSystemStatus } from '../api/useSystemStatus'
 import CameraTile from '../live/CameraTile'
+import { isEventCreatedMsg, type EventCreatedMsg } from '../types/system'
 import '../live/live.css'
 
 /** 카메라 표시 이름. 실제 설치 위치명은 M6 설정 화면에서 관리한다(FN-CFG). */
@@ -19,8 +23,76 @@ const CAMERA_NAMES: Record<number, string> = {
   2: '카메라 2 · 지게차 통행로',
 }
 
+/** 위반 유형 라벨. 시안의 건설현장 용어가 아니라 명세서 용어다(부록 B). */
+const VIOLATION_LABEL: Record<string, string> = {
+  no_helmet: '안전모 미착용',
+  zone_intrusion: '금지구역 침입',
+  proximity: '지게차 근접',
+  fall: '쓰러짐',
+}
+
+/** 가장자리 알림 한 건. 확대 중이 아닌 채널에서 확정된 이벤트다. */
+type EdgeAlert = {
+  event_id: string
+  cam_id: number
+  label: string
+}
+
 export default function LivePage() {
   const { status, connected, error } = useSystemStatus()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [alerts, setAlerts] = useState<EdgeAlert[]>([])
+
+  const cameras = status?.cameras ?? []
+
+  // 확대 상태는 URL 이 원본이다(`/live?cam=1`). 컴포넌트 state 에 두면 새로고침에
+  // 날아간다 — 시연 중 실수로 새로고침해도 화면이 돌아가면 안 된다.
+  const requested = Number(searchParams.get('cam'))
+  const solo =
+    Number.isInteger(requested) && cameras.some((camera) => camera.cam_id === requested)
+      ? requested
+      : null
+
+  const show = useCallback(
+    (camId: number | null) => {
+      const next = new URLSearchParams(searchParams)
+      if (camId === null) next.delete('cam')
+      else next.set('cam', String(camId))
+      // 확대·복귀는 히스토리에 쌓지 않는다. 뒤로 가기가 시연 도중 페이지를 떠나게 된다.
+      setSearchParams(next, { replace: true })
+      if (camId !== null) setAlerts((current) => current.filter((item) => item.cam_id !== camId))
+    },
+    [searchParams, setSearchParams],
+  )
+
+  // Esc 로 분할 보기 복귀. 확대 중일 때만 듣는다.
+  useEffect(() => {
+    if (solo === null) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') show(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [solo, show])
+
+  // **구독은 확대 여부와 무관하다.** 화면에서 내린 채널의 이벤트도 계속 받는다 —
+  // 보이지 않는 것과 감시가 멈추는 것은 다르다. 소켓 자체도 `subscribeDashboard` 가
+  // 화면 밖에서 하나로 유지하므로 타일을 내려도 끊기지 않는다.
+  // (`event_created` 는 M2 부터 실제로 흐른다. 그때까지 이 구독은 조용하다.)
+  useEffect(() => {
+    return subscribeDashboard({
+      onMessage: (message) => {
+        if (!isEventCreatedMsg(message)) return
+        const event = message as EventCreatedMsg
+        setAlerts((current) => {
+          if (current.some((item) => item.event_id === event.event_id)) return current
+          const label = VIOLATION_LABEL[event.violation_type] ?? event.violation_type
+          // 최신 3건까지만 띄운다. 그 이상은 가장자리를 덮어 영상을 가린다.
+          return [...current, { event_id: event.event_id, cam_id: event.cam_id, label }].slice(-3)
+        })
+      },
+    })
+  }, [])
 
   if (error && !status) {
     return (
@@ -44,21 +116,64 @@ export default function LivePage() {
     )
   }
 
-  // §4.6 에는 카메라별 녹화 여부가 없다. REC(§4.7)에 닿았는지(`storage` 가 채워졌는지)와
-  // 메인 스트림 상태로 판단한다. REC 이 죽으면 storage 가 null 로 오므로 REC 표시가 꺼진다.
-  const recorderUp = status.storage.retention_days !== null
+  const shown = solo === null ? cameras : cameras.filter((camera) => camera.cam_id === solo)
+  // 확대 중이 아닌 채널의 알림만 띄운다. 보고 있는 채널은 영상에 그대로 나온다.
+  const pending = solo === null ? [] : alerts.filter((alert) => alert.cam_id !== solo)
 
   return (
-    <div className="live">
-      <div className="live__grid">
-        {status.cameras.map((camera) => (
-          <CameraTile
-            key={camera.cam_id}
-            camera={camera}
-            name={CAMERA_NAMES[camera.cam_id] ?? `카메라 ${camera.cam_id}`}
-            recording={recorderUp && camera.main_state === 'ok'}
-          />
-        ))}
+    <div className={solo === null ? 'live' : 'live live--solo'}>
+      <div className="live__main">
+        <div className="live__toolbar" role="group" aria-label="보기 전환">
+          <button
+            type="button"
+            className={`live__view ${solo === null ? 'live__view--on' : ''}`}
+            onClick={() => show(null)}
+          >
+            분할 보기
+          </button>
+          {cameras.map((camera) => (
+            <button
+              key={camera.cam_id}
+              type="button"
+              className={`live__view ${solo === camera.cam_id ? 'live__view--on' : ''}`}
+              onClick={() => show(camera.cam_id)}
+            >
+              {CAMERA_NAMES[camera.cam_id] ?? `카메라 ${camera.cam_id}`}
+            </button>
+          ))}
+          {solo !== null && <span className="live__hint">Esc 로 분할 보기</span>}
+        </div>
+
+        <div className={solo === null ? 'live__grid' : 'live__grid live__grid--solo'}>
+          {shown.map((camera) => (
+            <CameraTile
+              key={camera.cam_id}
+              camera={camera}
+              name={CAMERA_NAMES[camera.cam_id] ?? `카메라 ${camera.cam_id}`}
+              solo={solo === camera.cam_id}
+              onToggleSolo={() => show(solo === camera.cam_id ? null : camera.cam_id)}
+            />
+          ))}
+        </div>
+
+        {pending.length > 0 && (
+          <div className="live__edge" aria-live="polite">
+            {pending.map((alert) => (
+              <button
+                key={alert.event_id}
+                type="button"
+                className="live__edge-item"
+                onClick={() => show(alert.cam_id)}
+              >
+                <span className="live__edge-cam">
+                  {CAMERA_NAMES[alert.cam_id] ?? `카메라 ${alert.cam_id}`}
+                </span>
+                <span className="live__edge-label">{alert.label}</span>
+                <span className="live__edge-go">전환</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <aside className="live__side">
@@ -84,7 +199,7 @@ export default function LivePage() {
                     {camera.sub_state}
                   </td>
                   {/* 엣지가 붙기 전에는 null 이다. 0 으로 그리면 장애처럼 보인다. */}
-                  <td>{camera.fps === null ? '—' : camera.fps.toFixed(1)}</td>
+                  <td>{camera.fps === null ? unmeasured : camera.fps.toFixed(1)}</td>
                 </tr>
               ))}
             </tbody>
@@ -98,18 +213,21 @@ export default function LivePage() {
         <section className="card">
           <h2 className="card__title">녹화 · 저장소</h2>
           <dl className="live__facts">
-            <dt>REC</dt>
-            <dd className={recorderUp ? 'ok' : 'danger'}>{recorderUp ? '녹화 중' : '응답 없음'}</dd>
-            <dt>보존</dt>
-            <dd>
-              {status.storage.retention_days === null ? '—' : `${status.storage.retention_days}일`}
-            </dd>
+            <dt>용량</dt>
+            <dd>{gb(status.storage.used_gb)} / {gb(status.storage.total_gb)}</dd>
             <dt>여유</dt>
-            <dd>{status.storage.free_gb === null ? '—' : `${status.storage.free_gb} GB`}</dd>
+            <dd>{gb(status.storage.free_gb)}</dd>
+            <dt>보존</dt>
+            <dd>{days(status.storage.retention_days)}</dd>
+            <dt>최고(最古)</dt>
+            <dd>{stamp(status.storage.oldest_segment_at)}</dd>
           </dl>
           <p className="card__note">
-            녹화 원본은 엣지 SSD 에 있다. 여기 숫자는 REC 이 보고한 값이며 서버 노트북의
-            디스크가 아니다.
+            REC(§4.7)이 보고한 값을 그대로 표시한다 — 서버 노트북의 디스크가 아니다.
+            <br />
+            <span className="live__unmeasured">{unmeasured}</span> 는 <b>측정 불가</b>다.
+            REC 에 닿지 못했다는 뜻이며 0 과 다르다. 최고 세그먼트 시각은 영상 검색이
+            가능한 범위의 하한이다.
           </p>
         </section>
 
@@ -125,4 +243,24 @@ export default function LivePage() {
       </aside>
     </div>
   )
+}
+
+/** 관측 주체가 없어 값이 `null` 인 자리. **0 과 다르게 그린다**(§4.6). */
+const unmeasured = '측정 불가'
+
+function gb(value: number | null): string {
+  return value === null ? unmeasured : `${value} GB`
+}
+
+function days(value: number | null): string {
+  if (value === null) return unmeasured
+  // 개발 환경은 보존을 1시간으로 낮춰 쓴다. 0일로 반올림되므로 그대로 적으면
+  // "보존하지 않음"으로 읽힌다.
+  return value === 0 ? '1일 미만' : `${value}일`
+}
+
+function stamp(value: string | null): string {
+  if (value === null) return unmeasured
+  const at = new Date(value)
+  return Number.isNaN(at.getTime()) ? value : at.toLocaleString()
 }
