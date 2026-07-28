@@ -1,28 +1,198 @@
-"""FastAPI 진입점.
-
-M0 에서는 앱 객체와 `/health` 만 있다. REST(`/api/v1/...`)와 WebSocket
-(`/ws/edge` · `/ws/dashboard`)은 M1 부터 붙인다.
+"""FastAPI 진입점 — 조립만 한다.
 
     uv run uvicorn server.app.main:app --reload
+
+M1 에서 붙는 것:
+
+* `GET /api/v1/system/status` (§4.6 · FN-SYS-01)
+* `/ws/dashboard` (§5) — 지금 흐르는 메시지는 `system` 하나다
+* mediamtx 폴링으로 메인 스트림 상태 관측 (`server/infra/stream`)
+* 기동 시 NTP 오프셋 확인 (FN-SYS-02)
+
+`/ws/edge`(§2)와 이벤트 상태머신은 M2 다.
+
+**여기에 로직을 두지 않는다.** 이 파일은 설정을 읽어 부품을 연결하고 수명주기를
+관리하는 곳이고, 시스템 시계를 읽는 `RealClock` 을 만드는 곳이기도 하다
+(CLAUDE.md 절대규칙 1 — 조립 지점에서만 만든다).
 """
 
 from __future__ import annotations
 
-from fastapi import FastAPI
+import asyncio
+import contextlib
+import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Protocol
 
-__all__ = ["API_PREFIX", "app"]
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+
+from aegis_contracts import ComponentSystemMsg, RecStatusResponse
+from aegis_contracts.enums import ComponentState, StreamState
+from aegis_vision.clock import Clock, RealClock
+from server.app.config import ServerSettings, get_server_settings
+from server.app.routes import system as system_routes
+from server.app.ws_dashboard import DashboardHub
+from server.infra.rec_client import RecClient, RecUnavailableError
+from server.infra.stream import MediaMtxClient, StreamWatcher
+from server.infra.timesync import check_time_sync
+
+__all__ = ["API_PREFIX", "app", "create_app"]
+
+log = logging.getLogger("server")
 
 #: API명세서 §1.1 — Base URL `http://<server-host>:8000/api/v1`
 API_PREFIX = "/api/v1"
 
-app = FastAPI(
-    title="AEGIS",
-    version="0.1.0",
-    summary="자율 현장 대응형 AI 안전관제 시스템",
-)
+#: REC 생존 확인 주기(초). 용량은 급변하지 않으므로 카메라만큼 자주 볼 필요가 없다.
+_STORAGE_POLL_SECONDS = 10.0
 
 
-@app.get("/health")
-def health() -> dict[str, str]:
-    """부팅 스모크용. 구성요소 상태는 `GET /api/v1/system/status`(FN-SYS-01) 소관이다."""
-    return {"status": "ok"}
+class StreamObserver(Protocol):
+    """`create_app` 이 요구하는 스트림 감시자. 테스트가 가짜를 끼워 넣을 자리다."""
+
+    def states(self) -> dict[int, StreamState]: ...
+    async def start(self) -> None: ...
+    async def stop(self) -> None: ...
+
+
+class StorageReader(Protocol):
+    """`create_app` 이 요구하는 REC 클라이언트."""
+
+    async def status(self) -> RecStatusResponse: ...
+    async def aclose(self) -> None: ...
+
+
+def create_app(
+    settings: ServerSettings | None = None,
+    clock: Clock | None = None,
+    *,
+    rec_client: StorageReader | None = None,
+    stream_watcher: StreamObserver | None = None,
+) -> FastAPI:
+    """부품을 조립한다. 인자를 주지 않으면 설정에 맞는 실물을 만든다.
+
+    `rec_client` · `stream_watcher` 를 주입받는 이유는 테스트 때문만이 아니다.
+    이 둘은 **바깥 프로세스에 붙는 유일한 통로**라, 여기서 갈아끼울 수 있어야
+    M9 에서 REC 을 젯슨으로 옮길 때 서버 코드를 건드리지 않는다.
+    """
+    resolved = settings or get_server_settings()
+    ticker: Clock = clock or RealClock()
+
+    hub = DashboardHub()
+    storage: StorageReader = rec_client or RecClient(resolved.recorder_base)
+    watcher: StreamObserver = stream_watcher or StreamWatcher(
+        client=MediaMtxClient(resolved.mediamtx_api),
+        cam_ids=resolved.cam_ids,
+        clock=ticker,
+        publish=hub.broadcast,
+        poll_seconds=resolved.stream_poll_seconds,
+        down_after_seconds=resolved.stream_down_after_seconds,
+    )
+
+    @asynccontextmanager
+    async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+        # FN-SYS-02 — 클립 구간 정합의 전제. 실패해도 기동을 막지 않되 반드시 남긴다.
+        await check_time_sync(
+            resolved.ntp_server,
+            ticker,
+            warn_offset_ms=resolved.ntp_warn_offset_ms,
+        )
+        await watcher.start()
+        storage_task = asyncio.create_task(
+            _watch_storage(storage, hub, ticker), name="storage-watch"
+        )
+        log.info(
+            "서버 기동 — cams=%s mediamtx=%s rec=%s",
+            resolved.cam_ids,
+            resolved.mediamtx_api,
+            resolved.recorder_base,
+        )
+        try:
+            yield
+        finally:
+            storage_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await storage_task
+            await watcher.stop()
+            await storage.aclose()
+
+    application = FastAPI(
+        title="AEGIS",
+        version="0.1.0",
+        summary="자율 현장 대응형 AI 안전관제 시스템",
+        lifespan=lifespan,
+    )
+    # 프론트는 개발 중 vite dev 서버(:5173)에서 뜨므로 오리진이 다르다.
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    application.state.settings = resolved
+    application.state.clock = ticker
+    application.state.hub = hub
+    application.state.rec_client = storage
+    application.state.stream_watcher = watcher
+
+    application.include_router(system_routes.router, prefix=API_PREFIX)
+
+    @application.get("/health")
+    def health() -> dict[str, str]:
+        """부팅 스모크용. 구성요소 상태는 `GET /api/v1/system/status`(FN-SYS-01) 소관이다."""
+        return {"status": "ok"}
+
+    @application.websocket("/ws/dashboard")
+    async def dashboard(websocket: WebSocket) -> None:
+        """API명세서 §5. 서버가 일방적으로 밀어 넣는다 — 클라이언트 메시지는 받지 않는다.
+
+        전체 스냅샷이 필요하면 `GET /api/v1/system/status` 를 쓴다(§5.3).
+        """
+        await hub.connect(websocket)
+        try:
+            while True:
+                # 수신은 연결 유지 확인용이다. 내용은 계약에 없으므로 버린다.
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            pass
+        finally:
+            await hub.disconnect(websocket)
+
+    return application
+
+
+async def _watch_storage(client: StorageReader, hub: DashboardHub, clock: Clock) -> None:
+    """REC 생존 확인. 상태가 **변할 때만** `system` 을 발행한다(§5.3).
+
+    REC 이 죽으면 7일 녹화가 멈춘다 — 이벤트가 나도 클립을 뽑을 원본이 없다.
+    `GET /system/status` 의 `storage` 가 `null` 이 되는 것과 짝을 이루는 통지다.
+    """
+    state: ComponentState | None = None
+    while True:
+        try:
+            await client.status()
+            observed: ComponentState = "ok"
+            detail = "REC 정상"
+        except RecUnavailableError as exc:
+            observed = "down"
+            detail = f"REC 응답 없음: {exc}"
+
+        if observed != state:
+            log.info("storage %s -> %s", state, observed)
+            await hub.broadcast(
+                ComponentSystemMsg(
+                    component="storage",
+                    state=observed,
+                    detail=detail,
+                    at=clock.now(),
+                )
+            )
+            state = observed
+        await asyncio.sleep(_STORAGE_POLL_SECONDS)
+
+
+app = create_app()
