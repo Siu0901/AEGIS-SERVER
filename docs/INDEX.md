@@ -18,8 +18,8 @@
 |---|---|---|
 | **M0** | 뼈대와 계약 | contracts · Clock · DB 스키마 · 리포지토리 프로토콜 · 시뮬레이터 뼈대 · deploy · 툴체인 |
 | **M1** | 인프라와 통로 | 스트리밍·녹화 · DB 리포지토리 구현 · `/ws/edge`·`/ws/dashboard` · 시스템 상태 |
-| **M2** | 이벤트 상태머신 | 후보 병합 · 확정 · 해소 · 쿨다운 · 소실 유예 · sim 시나리오 |
-| **M3** | 경고와 기록 | 음성 방송 · 경광등(MQTT) · 클립/키프레임 예약 추출 · 저장 관리 |
+| **M2** | 엣지 인터페이스와 이벤트 생성 | `/ws/edge` · 후보 병합(FN-EVT-01) · `overlay` · 오버레이 정합 · sim 시나리오 |
+| **M3** | 상태머신과 경고 | 확정 · 해소 · 쿨다운 · 소실 유예 · 음성 방송 · 경광등 · 클립 예약 추출 |
 | **M4** | 재결합과 지표 | 재결합 · 반복 위반 · 시정률/판정 불가율 · 수동 정정 |
 | **M5** | 관제 화면 P0 | 개요 · 실시간 관제(오버레이 정합) · 이벤트 · `uv run tasks.py types` |
 | **M6** | 설정과 비전 로직 | 캘리브레이션 · 구역 편집 · 음원 매핑 · 정책 · `packages/vision` 순수 계산 |
@@ -49,7 +49,7 @@
 | FN-DET-09 | 마스크 기반 최근접 거리 | P1 | EDGE | 기능 §4.1 · API §6.5 | M6 / M9 | `packages/vision/distance.py` | ⬜ |
 | FN-DET-10 | 쓰러짐 판정 (3조건 동시 충족) | P1 | EDGE | 기능 §4.1 · API §6.4 | M6 / M9 | `packages/vision/posture.py` | ⬜ |
 | FN-DET-11 | 뎁스 온디맨드 검증 | P1 | EDGE | 기능 §4.1 · API §6.6 | M9 | `edge/depth.py` | ⬜ |
-| FN-DET-12 | 이벤트 후보 생성 및 전송 | P0 | EDGE | 기능 §4.1 · API §2.2 | M2 (sim) / M9 | `sim/edge_sim/` · `edge/rules.py` | ⬜ |
+| FN-DET-12 | 이벤트 후보 생성 및 전송 | P0 | EDGE | 기능 §4.1 · API §2.2 | M2 (sim) / M9 | `sim/edge_sim/` · `sim/cases/` · `edge/rules.py` | ✅ (sim) |
 
 > **주의** — 안전모에는 별도 bbox가 없다. 1단계는 `person`/`vehicle` 2클래스뿐이고
 > 안전모는 사람 크롭을 2단계 분류가 판정한다. `helmet` 값은 `on`/`off` 둘뿐이며
@@ -61,13 +61,13 @@
 
 | FN-ID | 기능명 | 우선 | 계층 | 명세 위치 | 마일스톤 | 코드 위치(예정) | 상태 |
 |---|---|---|---|---|---|---|---|
-| FN-EVT-01 | 후보 수신 및 중복 병합 | P0 | SRV | 기능 §4.2 | M2 | `server/app/ws_edge.py` · `server/domain/event_machine.py` | ⬜ |
-| FN-EVT-02 | 이벤트 확정 판정 (`confirm_duration_s`) | P0 | SRV | 기능 §4.2 | M2 | `server/domain/event_machine.py` | ⬜ |
-| FN-EVT-03 | 해소(시정) 판정 (`resolve_duration_s`) | P0 | SRV | 기능 §4.2 | M2 | `server/domain/event_machine.py` | ⬜ |
-| FN-EVT-04 | 쿨다운 및 재경고 (`cooldown_s`) | P0 | SRV | 기능 §4.2 | M2 | `server/domain/event_machine.py` | ⬜ |
+| FN-EVT-01 | 후보 수신 및 중복 병합 | P0 | SRV | 기능 §4.2 | M2 | `server/app/ws_edge.py` · `server/domain/event_machine.py` | ✅ |
+| FN-EVT-02 | 이벤트 확정 판정 (`confirm_duration_s`) | P0 | SRV | 기능 §4.2 | M3 | `server/domain/event_machine.py` | ⬜ |
+| FN-EVT-03 | 해소(시정) 판정 (`resolve_duration_s`) | P0 | SRV | 기능 §4.2 | M3 | `server/domain/event_machine.py` | ⬜ |
+| FN-EVT-04 | 쿨다운 및 재경고 (`cooldown_s`) | P0 | SRV | 기능 §4.2 | M3 | `server/domain/event_machine.py` | ⬜ |
 | FN-EVT-05 | 이벤트 수동 정정 (오탐·강제 종결) | P1 | SRV/WEB | 기능 §4.2 · API §4.1 | M4 | `server/app/routes/events.py` · `front/src/pages/EventsPage.tsx` | ⬜ |
 | FN-EVT-06 | 반복 위반 집계 (최근 7일) | P1 | SRV | 기능 §4.2 | M4 | `server/domain/metrics.py` | ⬜ |
-| FN-EVT-07 | 트랙 소실 유예 및 재결합 | P0(유예) / P1(재결합) | SRV | 기능 §4.2 · API §2.3 | M2 (유예) / M4 (재결합) | `server/domain/reassociation.py` | ⬜ |
+| FN-EVT-07 | 트랙 소실 유예 및 재결합 | P0(유예) / P1(재결합) | SRV | 기능 §4.2 · API §2.3 | M3 (유예) / M4 (재결합) | `server/domain/reassociation.py` | ⬜ |
 
 > **FN-EVT-07 ④ 보조 시그니처(색상 히스토그램)는 P2 — 보류.**
 > 단, 안전모 착용 여부는 게이트 조건으로 쓰지 않는다(판정 대상이므로 순환 논리).
@@ -100,7 +100,7 @@
 | FN-REC-01 | 라이브 재스트리밍 (1080p 메인) | P0 | SRV | 기능 §4.4 | M1 | `server/infra/stream/` · `deploy/mediamtx.yml` · `front/src/live/` | ✅ |
 | FN-REC-02 | 7일 링버퍼 녹화 | P0 | REC | 기능 §4.4 · API §4.7 | M1 | `recorder/capture.py` · `recorder/retention.py` | ✅ |
 | FN-REC-03 | 이벤트 클립 · 키프레임 추출 | P0 | REC/SRV | 기능 §4.4 · API §4.7 | M1 (REC API) / M3 (예약 실행) | `recorder/clips.py` · `server/infra/clip/` | 🟡 |
-| FN-REC-04 | 이벤트 DB 저장 | P0 | SRV | 기능 §4.4 · §6 | M1 | `server/infra/db/repository.py` | ⬜ |
+| FN-REC-04 | 이벤트 DB 저장 | P0 | SRV | 기능 §4.4 · §6 | M2 | `server/infra/db/repository.py` · `server/app/routes/events.py` | ✅ |
 | FN-REC-05 | 저장 용량 관리 | P1 | REC | 기능 §4.4 | M1 | `recorder/retention.py` | ✅ |
 
 > **녹화는 서버가 아니라 REC 컴포넌트(`recorder/`)가 한다** (기능명세서 §4.4 「녹화 컴포넌트(REC) 분리」).
@@ -149,7 +149,7 @@
 | FN-ID | 화면 | 우선 | 계층 | 명세 위치 | 마일스톤 | 코드 위치(예정) | 상태 |
 |---|---|---|---|---|---|---|---|
 | FN-UI-01 | 개요 — 핵심 지표 · 추세 · 분포 · 최근 이벤트 · 시스템 상태 | P0 | WEB | 기능 §4.6 | M5 | `front/src/pages/OverviewPage.tsx` | ⬜ |
-| FN-UI-02 | 실시간 관제 — 2채널 라이브 + 오버레이 · **단독 확대 보기** · 수동 방송 | P0 | WEB | 기능 §4.6 · API §5 | M1 (라이브·상태·확대) / M2 (오버레이) / M3 (수동 방송) | `front/src/pages/LivePage.tsx` · `front/src/live/` | 🟡 |
+| FN-UI-02 | 실시간 관제 — 2채널 라이브 + 오버레이 · **단독 확대 보기** · 수동 방송 | P0 | WEB | 기능 §4.6 · API §5 | M1 (라이브·상태·확대) / M2 (오버레이) / M3 (수동 방송) | `front/src/pages/LivePage.tsx` · `front/src/live/` | 🟡 (수동 방송만 남음) |
 | FN-UI-03 | 이벤트 — 목록·필터 + 상세(클립·LLM·규정·타임라인) | P0 | WEB | 기능 §4.6 · API §4.1 | M5 | `front/src/pages/EventsPage.tsx` | ⬜ |
 | FN-UI-04 | 영상 검색 — 자연어 질의 · 유사도순 결과 | P1 | WEB | 기능 §4.6 · API §4.3 | M7 | `front/src/pages/SearchPage.tsx` | ⬜ |
 | FN-UI-05 | 분석 · 보고서 — 시정률 추이 · 반복 순위 · 히트맵 · 이상 탐지 | P1 | WEB | 기능 §4.6 · API §4.2 | M8 | `front/src/pages/AnalysisPage.tsx` | ⬜ |
@@ -189,12 +189,12 @@
 
 | FN-ID | 기능명 | 우선 | 계층 | 명세 위치 | 마일스톤 | 코드 위치(예정) | 상태 |
 |---|---|---|---|---|---|---|---|
-| FN-SYS-01 | 구성요소 상태 감시 (엣지·카메라·MCU·클라우드·저장소) | P0 | SRV | 기능 §4.8 · API §4.6 | M1 (카메라·저장소) / M2~ (엣지·MCU·클라우드) | `server/app/routes/system.py` · `server/infra/stream/watcher.py` | 🟡 |
+| FN-SYS-01 | 구성요소 상태 감시 (엣지·카메라·MCU·클라우드·저장소) | P0 | SRV | 기능 §4.8 · API §4.6 | M1 (카메라·저장소) / M2 (엣지) / M3 (MCU) / M7 (클라우드) | `server/app/routes/system.py` · `server/domain/edge_state.py` · `server/infra/stream/watcher.py` | 🟡 (MCU·클라우드만 남음) |
 | FN-SYS-02 | 시각 동기화 (NTP · 클립 정합의 전제) | P0 | SRV/EDGE | 기능 §4.8 | M1 (서버) / M2 (엣지 오프셋) | `server/infra/timesync.py` · `edge/` | 🟡 |
 | FN-SYS-03 | 클라우드 장애 격리 | P1 | SRV | 기능 §4.8 | M7 | `server/ai/adapter.py` | ⬜ |
 | FN-SYS-04 | 지표 집계 (시정률 · 평균 시정 시간 · 판정 불가율 · 분포) | P0 | SRV | 기능 §4.8 · API §4.2·§6.7 | M4 | `server/domain/metrics.py` | ⬜ |
 | FN-SYS-05 | 판정 불가 집계 (`expired` 별도 집계) | P0 | SRV | 기능 §4.8 · API §6.7 | M4 | `server/domain/metrics.py` | ⬜ |
-| FN-SYS-06 | 엣지 메시지 거부 집계 (로깅 · 카운터 · 노출) | P0 | SRV | 기능 §4.8 · API §2.2 | M1 | `server/app/ws_edge.py` · `server/app/routes/system.py` | ⬜ |
+| FN-SYS-06 | 엣지 메시지 거부 집계 (로깅 · 카운터 · 노출) | P0 | SRV | 기능 §4.8 · API §2.2 | M2 | `server/app/ws_edge.py` · `server/domain/edge_state.py` · `server/app/routes/system.py` | ✅ |
 
 > **FN-SYS-06 — 후보를 조용히 버리지 않는다.** 스키마 검증에 실패한 엣지 메시지를
 > 로그 없이 폐기하면 안 된다. 감지된 위반이 검증 단계에서 소리 없이 사라지는 것은
@@ -276,6 +276,66 @@ FN-ID가 붙지 않는 기반 작업이다. 전부 완료되었고 `uv run tasks
 
 ---
 
+## M2 산출물 (엣지 인터페이스와 이벤트 생성)
+
+**이번 단계에는 상태머신이 없다.** 확정(3초)·경고·해소·쿨다운·재결합·소실 유예는
+전부 M3 이다. 여기서 만든 이벤트는 `status = "candidate"` 에 머문다.
+
+| 항목 | 위치 | 근거 | 상태 |
+|---|---|---|---|
+| `/ws/edge` — 4종 수신 · 검증 · 디스패치 | `server/app/ws_edge.py` | API §2 | ✅ |
+| **거부 집계** — 로깅 · `{type, reason}` 카운터 · `system` 발행 | `server/app/ws_edge.py` · `server/domain/edge_state.py` | §2.2 · FN-SYS-06 | ✅ |
+| 엣지 상태 (하트비트 → `sub_state` · `fps` · 게이지) | `server/domain/edge_state.py` | §2.4 · §4.6 | ✅ |
+| 후보 병합 판단 (순수) | `server/domain/event_machine.py` | FN-EVT-01 | ✅ |
+| `frame` + 이벤트 상태 → `overlay` 합성 (순수) | `server/domain/overlay.py` | §5.1 | ✅ |
+| 이벤트 저장소 · 구역 · 정책 (DB 구현) | `server/infra/db/repository.py` | §6 · FN-REC-04 | ✅ |
+| `GET /events` · `/events/{id}` (커서 페이징 · §1.4 오류 봉투) | `server/app/routes/events.py` | §4.1 | ✅ |
+| `GET /zones` · `GET /policies` (읽기 전용) | `server/app/routes/zones.py` · `policies.py` | §4.5 | ✅ |
+| 시나리오 3종 + **키프레임 보간(`frame_fps`)** | `sim/cases/` · `sim/edge_sim/scripted.py` | FN-DET-01 · FN-DET-12 | ✅ |
+| 오버레이 지연 버퍼 · 트랙별 선형 보간 | `front/src/live/overlayBuffer.ts` | §5 「오버레이 시간 정합」 | ✅ |
+| 오버레이 렌더링 (표시 규칙 · 거리선 · 구역 라벨) | `front/src/live/OverlayCanvas.tsx` | 기능 §4.6 표시 규칙 | ✅ |
+| 정책값·구역 캐시 (값을 프론트에 적지 않는다) | `front/src/api/policies.ts` · `zones.ts` | 절대규칙 6 · §5.4 | ✅ |
+| 개발용 구역 시드 · 계약에 없는 정책 키 정리 | `scripts/seed_zones.py` · `scripts/seed_policies.py` | — | ✅ |
+
+**설계 판단 (M2 에서 정한 것)**
+
+| 판단 | 이유 |
+|---|---|
+| `overlay.objects[].alert_state` 는 M2 에서 **항상 `null`** | §5.1 `AlertState` 는 `active`/`alerted`/`re_alerted`/`lost` 넷뿐이고 `candidate` 가 없다. M2 의 이벤트는 전부 `candidate` 이므로 대응하는 값이 없다. 열거형에 없는 값을 끼워 넣지 않는다(절대규칙 8) |
+| §5.2 `event_created` 를 **발행하지 않는다** | "신규 **확정** 이벤트"이고 `confirmed_at` 이 필수다. 확정 판정이 M3 이므로 지금 보낼 수 있는 것이 없다 |
+| 지게차 `overlay.anchor` 는 **박스 아래변 중앙**에서 뽑는다 | §2.1 `frame` 은 지게차에 `anchor_m`(미터)만 싣고 화면 좌표를 싣지 않는다. 미터에서 되돌리려면 역호모그래피가 필요하고 그건 M6 다. 지게차는 지면 주행 장비라 박스 아래변이 곧 접지선이다 |
+| `track_lost` 는 **오버레이만 내리고** 이벤트를 전이시키지 않는다 | 소실 유예(FN-EVT-07 ①)에는 만료 타이머가 딸려 있다. 전이만 흉내 내면 `expired` 로 끝나는 길이 없어 이벤트가 영원히 `lost` 로 남고 판정 불가율이 왜곡된다 |
+| 위반 표시는 후보가 오면 켜지고 **트랙이 사라질 때만** 꺼진다 | 해소 판정(FN-EVT-03)이 M3 이다. 지금 임의의 시간으로 끄면 그 값이 곧 가짜 시정률이 된다 |
+| 정책값을 못 읽으면 **오버레이를 그리지 않는다** | 지연 버퍼를 모르는 채 그린 박스는 틀린 위치에 있고, 틀린 박스는 없는 박스보다 나쁘다. 타일에 `오버레이 대기` 를 띄운다 |
+| `금지구역 폴리곤`은 캐시만 하고 **아직 그리지 않는다** | `polygon_m` 은 지면 실좌표다(§6). 화면에 그리려면 역호모그래피가 필요한데 캘리브레이션이 M6 다. 지금은 사람 라벨의 구역 표시 이름에만 쓴다 |
+
+**실측치** (2026-07-29, `no_helmet` · `two_persons` 시나리오)
+
+| 항목 | 값 |
+|---|---|
+| 시나리오 메시지 수 (`no_helmet`, 26초) | `frame` 209 + `candidate` 10 + `heartbeat` 6 = 225건 |
+| 엣지 → 서버 프레임률 (`frame_fps: 8`) | 카메라당 8fps (FN-DET-01 요구 하한과 동일) |
+| `no_helmet` 실행 후 생성된 이벤트 | **정확히 2건** (`no_helmet` · `zone_intrusion`), 후보 10건이 병합됨 |
+| `basic_walk` 실행 후 생성된 이벤트 | **0건** |
+| 오버레이 지연 버퍼 (WebRTC) | `overlay_buffer_webrtc_ms` = 400ms (`GET /policies`) |
+| M1 실측 영상 지연 (WebRTC) | 0.27 ~ 0.34초 |
+| **예상 정합 오차** | **+60 ~ +130ms** (오버레이가 영상보다 그만큼 뒤처지는 방향) |
+
+> **정합 오차의 방향**: 화면에 나가는 프레임은 `expectedDisplayTime` 기준 약 0.3초 전에
+> 촬영된 것인데 버퍼는 0.4초를 뺀다. 그래서 박스는 **앞서지 않고 살짝 뒤처진다.**
+> 앞서는 것보다 뒤처지는 쪽이 안전하다 — 앞서면 아직 오지 않은 위치에 박스가 뜬다.
+> 보행 속도 1.5m/s 기준 100ms 는 15cm 이고, 사람 박스 폭(약 45cm)의 1/3 이다.
+> 목표(±100ms)를 안정적으로 지키려면 `overlay_buffer_webrtc_ms` 를 **300** 으로 내리는
+> 것이 실측에 더 맞는다. 다만 이 값은 명세서 §4.5 가 400 으로 정한 값이라 코드에서
+> 바꾸지 않았다 — 아래 「명세서 확인 필요」에 올린다.
+
+**프론트 단위 테스트 러너가 없다.** `overlayBuffer.ts` 의 보간·부호·낡음 판정은
+스크래치에서 `tsc` 로 컴파일해 node 로 9가지 성질을 확인했지만(전부 통과),
+`uv run tasks.py verify` 는 프론트에서 `tsc --noEmit` 과 `vite build` 만 돈다.
+러너(vitest 등)를 넣을지는 M5(`tasks.py types`)에서 함께 정한다.
+
+---
+
 ## 명세서 확인 필요
 
 명세서를 SSOT로 두고 **코드에서 임의로 채우지 않은** 항목이다. 사람이 판단해
@@ -323,6 +383,11 @@ FN-ID가 붙지 않는 기반 작업이다. 전부 완료되었고 `uv run tasks
 |---|---|
 | **§5 오버레이 정합 절에 옛 키가 남아 있다** | §4.5 정책 표는 `overlay_buffer_webrtc_ms` / `overlay_buffer_hls_ms` 로 갈렸는데, §5 「오버레이 시간 정합」 4번 항목은 여전히 "`overlay_buffer_ms`(기본 300ms)만큼 영상 재생을 지연시켜"라고 적혀 있다. **이제 존재하지 않는 키다.** 코드는 §4.5 를 따라 둘로 나눴고 §5 문장은 손대지 않았다(절대규칙 8). 문장을 경로별로 고쳐 달라 |
 | §4.6 `cloud.quota_used` 의 관측 전 값 | null 규약 표에 `cloud` 는 없다. 하지만 `0.0` 은 "한도를 하나도 쓰지 않았다"는 관측 결과라 아직 아무도 재지 않은 상태와 구분되어야 하므로, `edge.gpu_util 등` 과 같은 취급으로 **nullable 로 넓혔다.** 클라우드는 `available: false` 만으로 충분하다는 판단이면 되돌린다 |
+| **§5.1 `alert_state` 에 후보 단계가 없다** | `AlertState` 는 `active`/`alerted`/`re_alerted`/`lost` 넷인데, §4.2 상태 전이표의 첫 상태는 `candidate` 다. 확정 전 이벤트가 붙은 박스는 지금 `alert_state: null` 로 나가는데, 이는 "이벤트가 아예 없는 트랙"과 값이 같다. 화면에서 **후보 단계를 다르게 그리려면** `candidate` 를 §5.1 값 목록에 넣어야 한다. 열거형을 코드에서 임의로 넓히지 않고 그대로 뒀다 |
+| **지게차의 정규화 접지 좌표를 `frame` 이 싣지 않는다** | §5.1 `overlay.objects[].anchor` 와 `nearby[].anchor` 는 정규화 좌표인데, §2.1 `frame` 의 지게차 필드는 `anchor_m`(미터)뿐이다. 서버가 미터에서 되돌리려면 역호모그래피가 필요하고 그건 캘리브레이션(M6) 이후다. 지금은 **박스 아래변 중앙**으로 뽑고 있다. §2.1 에 사람의 `foot_point` 처럼 지게차에도 `anchor`(정규화)를 추가하면 이 추정이 없어진다 |
+| **`candidate.observed_ms` 가 위반 유형별로 갈리지 않는다** | §2.2 는 `violations[]` 를 배열로 두면서 `observed_ms` 는 하나만 싣게 한다. `no_helmet` 은 0초부터, `zone_intrusion` 은 6초부터 관측된 상황에서 어느 쪽을 적어야 하는지가 정해져 있지 않다. 시나리오는 **가장 오래된 조건** 기준으로 적었다. 확정 판정(FN-EVT-02, M3)이 이 값을 참고값으로 쓰므로 그 전에 정해져야 한다 |
+| **`overlay_buffer_webrtc_ms` 기본값 400 이 실측보다 크다** | M1 실측 WebRTC 지연이 0.27~0.34초인데 버퍼가 0.40초라, 박스가 영상보다 **60~130ms 뒤처진다**(방향은 안전한 쪽). §4.6 정합 목표가 ±100ms 이므로 상단에서 아슬아슬하다. 실측대로면 **300** 이 맞는다. §4.5 가 정한 값이라 코드에서 바꾸지 않았다 |
+| **`events.zone_id` 를 나중에 채워도 되는지** | `no_helmet` 이벤트가 구역 밖에서 시작해 구역 안으로 들어가면 §6 `events.zone_id`("관련 구역")를 갱신할지 최초값으로 둘지가 명시되어 있지 않다. 지금은 **`null` → 값으로 채우는 것만 허용**하고 값 → `null` 로 지우지는 않는다. 반대라면 되돌린다 |
 
 ### B. 판단이 필요했던 타입
 
