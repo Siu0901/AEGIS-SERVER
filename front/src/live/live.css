@@ -1,0 +1,230 @@
+/* 실시간 관제 (FN-UI-02) — 2채널 라이브 + 우측 상태 패널.
+   시안 2페이지의 배치를 따르되 용어는 제조현장 기준이다(부록 B). */
+
+.live {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 16px;
+  align-items: start;
+}
+
+.live__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 16px;
+  min-width: 0;
+}
+
+.live__side {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+@media (max-width: 1100px) {
+  .live {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ── 카메라 타일 ─────────────────────────────────────── */
+.tile {
+  margin: 0;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.tile--warn {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+}
+
+.tile--danger {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
+}
+
+.tile__frame {
+  position: relative;
+  aspect-ratio: 16 / 9; /* 메인·서브 모두 16:9다 (API명세서 §1.2) */
+  background: #000;
+}
+
+.tile__video {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+}
+
+/* 재생 중인 프레임의 표시 시각. 영상에 소성된 카메라 타임코드와 나란히 두면
+   영상 경로 지연이 그대로 읽힌다 (M2 오버레이 정합의 기준선). */
+.tile__clock {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  padding: 3px 7px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.62);
+  color: #e6edf3;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}
+
+.tile__offline {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 16px;
+  text-align: center;
+  background: repeating-linear-gradient(
+    45deg,
+    rgba(239, 68, 68, 0.07) 0 12px,
+    transparent 12px 24px
+  );
+}
+
+.tile__offline-title {
+  color: var(--danger);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.tile__offline-note {
+  color: var(--text-muted);
+  font-size: 12px;
+  max-width: 30ch;
+}
+
+.tile__bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 12.5px;
+}
+
+.tile__name {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.tile__meta {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.tile__spacer {
+  margin-left: auto;
+}
+
+.tile__rec {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.tile__rec::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.tile__rec--on {
+  border-color: color-mix(in srgb, var(--danger) 60%, transparent);
+  color: var(--danger);
+}
+
+.tile__rec--on::before {
+  animation: rec-blink 1.6s steps(1, end) infinite;
+}
+
+@keyframes rec-blink {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.tile__error {
+  margin: 0;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  color: var(--warn);
+  font-size: 11.5px;
+}
+
+/* ── 우측 패널 ───────────────────────────────────────── */
+.live__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  margin-bottom: 10px;
+}
+
+.live__table th {
+  text-align: left;
+  padding: 4px 6px;
+  color: var(--text-dim);
+  font-weight: 500;
+  border-bottom: 1px solid var(--border);
+}
+
+.live__table td {
+  padding: 5px 6px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.live__state--ok {
+  color: var(--ok);
+}
+
+.live__state--reconnecting {
+  color: var(--warn);
+}
+
+.live__state--down {
+  color: var(--danger);
+}
+
+.live__facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 5px 14px;
+  margin: 0 0 10px;
+  font-size: 12.5px;
+}
+
+.live__facts dt {
+  color: var(--text-dim);
+}
+
+.live__facts dd {
+  margin: 0;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.live__facts dd.ok {
+  color: var(--ok);
+}
+
+.live__facts dd.danger {
+  color: var(--danger);
+}

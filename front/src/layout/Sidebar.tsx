@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
+import { useSystemStatus } from '../api/useSystemStatus'
+import type { SystemStatusView } from '../api/useSystemStatus'
 
 export type NavItem = {
   path: string
@@ -106,13 +108,44 @@ export const NAV_ITEMS: NavItem[] = [
 
 type StatusLine = { tone: 'ok' | 'warn' | 'danger'; text: string }
 
-const SYSTEM_STATUS: StatusLine[] = [
-  { tone: 'ok', text: 'Jetson 엣지 · 정상' },
-  { tone: 'ok', text: '카메라 2/2 · ESP32' },
-  { tone: 'ok', text: '클라우드 API · 정상' },
-]
+/**
+ * 실제 관측값으로 만든 상태 줄 (API명세서 §4.6).
+ *
+ * 원래 여기에는 '정상' 세 줄이 고정으로 박혀 있었다. 카메라가 실제로 끊겨도 사이드바는
+ * 계속 정상이라고 말하므로, 상태 표시가 없는 것보다 나쁘다. M1 에서 관측 가능한 값이
+ * 생겼으니 그것으로 대체한다. 아직 관측 주체가 없는 항목(엣지·MCU·클라우드)은
+ * '정상'이 아니라 **미연결**로 적는다.
+ */
+function statusLines(view: SystemStatusView): StatusLine[] {
+  const { status } = view
+  if (!status) {
+    return [{ tone: 'danger', text: view.error ? '서버 응답 없음' : '상태 확인 중…' }]
+  }
+
+  const live = status.cameras.filter((camera) => camera.main_state === 'ok').length
+  const total = status.cameras.length
+  const recorderUp = status.storage.retention_days !== null
+
+  return [
+    {
+      tone: live === total ? 'ok' : live === 0 ? 'danger' : 'warn',
+      text: `카메라 메인 ${live}/${total}`,
+    },
+    {
+      tone: recorderUp ? 'ok' : 'danger',
+      text: recorderUp ? `녹화 · 보존 ${status.storage.retention_days}일` : '녹화(REC) 응답 없음',
+    },
+    {
+      tone: status.edge.online ? 'ok' : 'warn',
+      text: status.edge.online ? 'Jetson 엣지 · 정상' : 'Jetson 엣지 · 미연결',
+    },
+  ]
+}
 
 export default function Sidebar() {
+  const view = useSystemStatus()
+  const lines = statusLines(view)
+
   return (
     <aside className="sidebar">
       <div className="sidebar__brand">
@@ -137,7 +170,7 @@ export default function Sidebar() {
       </nav>
 
       <div className="sidebar__status">
-        {SYSTEM_STATUS.map((line) => (
+        {lines.map((line) => (
           <div key={line.text} className="sidebar__status-row">
             <span className={`dot dot--${line.tone}`} />
             <span>{line.text}</span>
