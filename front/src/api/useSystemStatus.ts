@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from 'react'
 import type { SystemStatus } from '../types/system'
-import { applySystemMsg, connectDashboard, fetchSystemStatus } from './system'
+import { applySystemMsg, fetchSystemStatus, subscribeDashboard } from './system'
 
 export type SystemStatusView = {
   status: SystemStatus | null
@@ -38,7 +38,7 @@ export function useSystemStatus(): SystemStatusView {
 
     load()
 
-    const disconnect = connectDashboard({
+    const disconnect = subscribeDashboard({
       // 재접속했다면 그 사이의 변화를 놓쳤다. 스냅샷을 다시 받는다(§5.3).
       onOpen: () => {
         setConnected(true)

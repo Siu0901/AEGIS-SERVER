@@ -44,11 +44,56 @@ export type DashboardHandlers = {
   onClose?: () => void
 }
 
+const subscribers = new Set<DashboardHandlers>()
+let shared: (() => void) | null = null
+let sharedOpen = false
+
+/**
+ * `/ws/dashboard` **하나**를 여러 구독자가 함께 쓴다.
+ *
+ * 화면마다 소켓을 따로 열면 같은 순간에 서로 다른 상태를 보게 되고, 무엇보다
+ * **구독이 화면의 수명에 묶인다.** 단독 확대 보기(FN-UI-02)에서 다른 채널의 타일을
+ * 내릴 때 그 채널의 구독까지 끊기면 "영상만 안 보이는 것"이 아니라 **감시가 멈춘다.**
+ * 확대 중에도 다른 채널의 이벤트와 경고는 계속 동작해야 하므로 소켓은 화면 밖에서
+ * 산다. 마지막 구독자가 떠날 때만 닫는다.
+ */
+export function subscribeDashboard(handlers: DashboardHandlers): () => void {
+  subscribers.add(handlers)
+  if (sharedOpen) handlers.onOpen?.()
+
+  if (!shared) {
+    shared = connectDashboard({
+      onOpen: () => {
+        sharedOpen = true
+        subscribers.forEach((subscriber) => subscriber.onOpen?.())
+      },
+      onClose: () => {
+        sharedOpen = false
+        subscribers.forEach((subscriber) => subscriber.onClose?.())
+      },
+      onMessage: (message) => {
+        subscribers.forEach((subscriber) => subscriber.onMessage(message))
+      },
+    })
+  }
+
+  return () => {
+    subscribers.delete(handlers)
+    if (subscribers.size === 0) {
+      shared?.()
+      shared = null
+      sharedOpen = false
+    }
+  }
+}
+
 /**
  * `/ws/dashboard` 에 붙고, 끊기면 지수 백오프로 다시 붙는다.
  *
  * 재연결을 넣지 않으면 서버를 한 번 재시작한 뒤로 대시보드가 **조용히 멈춘 화면**을
  * 계속 보여준다. 그 상태는 "아무 일도 없음"과 구분되지 않아서 가장 위험하다.
+ *
+ * 화면에서 직접 부르지 말고 `subscribeDashboard` 를 쓴다 — 소켓은 하나여야 한다.
  */
 export function connectDashboard(handlers: DashboardHandlers): () => void {
   let socket: WebSocket | null = null

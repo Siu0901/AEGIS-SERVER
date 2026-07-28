@@ -12,6 +12,21 @@ import Hls from 'hls.js'
 
 export type PlaybackKind = 'webrtc' | 'hls' | 'none'
 
+/**
+ * 재생 경로별 오버레이 지연 버퍼 정책 키 (API명세서 §4.5 · FN-UI-02).
+ *
+ * 영상 지연이 경로에 따라 한 자릿수 배 차이가 나므로(M1 실측: WebRTC 0.27~0.34초 ·
+ * LL-HLS 약 2.5초) 버퍼 값도 경로마다 다르다. **값은 여기 적지 않는다** — 정책값은
+ * DB `policies` 테이블이 원본이고 `GET /policies` 로 읽는다(CLAUDE.md 절대규칙 6).
+ * 여기 있는 것은 "지금 이 경로에는 어느 키가 적용되는가"라는 대응표뿐이다.
+ * 오버레이 렌더링은 M2 에서 이 대응을 따라 버퍼를 고른다.
+ */
+export const OVERLAY_BUFFER_POLICY_KEY = {
+  webrtc: 'overlay_buffer_webrtc_ms',
+  hls: 'overlay_buffer_hls_ms',
+  none: null,
+} as const satisfies Record<PlaybackKind, string | null>
+
 export type PlayerState = {
   kind: PlaybackKind
   error: string | null
