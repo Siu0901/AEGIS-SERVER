@@ -108,6 +108,11 @@
 > 접근한다. 개발 중 같은 기계에서 돌더라도 이 규칙을 지킨다 — M9 에 옮길 때 고치는 값이
 > `RECORDER_BASE` 하나여야 하기 때문이다.
 >
+> **비-`ready` 응답은 사유를 담는다**(§4.7 `reason`). "보존 기간 경과" · "그 시각에
+> 녹화가 없다" · "앞/뒤 N초 없음" 을 구분한다 — `status` 만으로는 지워진 것과 찍은 적이
+> 없는 것이 같아 보이는데 대응이 다르다. **세그먼트 경계로 클립이 최대 10초 길어지는
+> 것은 정상 동작이며 `partial` 이 아니다.**
+>
 > **FN-REC-03 이 🟡 인 이유**: `POST /clips` · `GET /keyframe`(추출 API)는 M1 에서 동작하지만,
 > `confirmed_at + clip_post_roll_s + margin` 예약 실행과 `clip_status` 관리는 이벤트
 > 상태머신이 있어야 하므로 M3 이다.
@@ -144,16 +149,22 @@
 | FN-ID | 화면 | 우선 | 계층 | 명세 위치 | 마일스톤 | 코드 위치(예정) | 상태 |
 |---|---|---|---|---|---|---|---|
 | FN-UI-01 | 개요 — 핵심 지표 · 추세 · 분포 · 최근 이벤트 · 시스템 상태 | P0 | WEB | 기능 §4.6 | M5 | `front/src/pages/OverviewPage.tsx` | ⬜ |
-| FN-UI-02 | 실시간 관제 — 2채널 라이브 + 오버레이 · 수동 방송 | P0 | WEB | 기능 §4.6 · API §5 | M1 (라이브·상태) / M2 (오버레이) / M3 (수동 방송) | `front/src/pages/LivePage.tsx` · `front/src/live/` | 🟡 |
+| FN-UI-02 | 실시간 관제 — 2채널 라이브 + 오버레이 · **단독 확대 보기** · 수동 방송 | P0 | WEB | 기능 §4.6 · API §5 | M1 (라이브·상태·확대) / M2 (오버레이) / M3 (수동 방송) | `front/src/pages/LivePage.tsx` · `front/src/live/` | 🟡 |
 | FN-UI-03 | 이벤트 — 목록·필터 + 상세(클립·LLM·규정·타임라인) | P0 | WEB | 기능 §4.6 · API §4.1 | M5 | `front/src/pages/EventsPage.tsx` | ⬜ |
 | FN-UI-04 | 영상 검색 — 자연어 질의 · 유사도순 결과 | P1 | WEB | 기능 §4.6 · API §4.3 | M7 | `front/src/pages/SearchPage.tsx` | ⬜ |
 | FN-UI-05 | 분석 · 보고서 — 시정률 추이 · 반복 순위 · 히트맵 · 이상 탐지 | P1 | WEB | 기능 §4.6 · API §4.2 | M8 | `front/src/pages/AnalysisPage.tsx` | ⬜ |
 | FN-UI-06 | 챗봇 — 통계·검색·브리핑 질의 | P1 | WEB | 기능 §4.6 · API §4.4 | M7 | `front/src/pages/AssistantPage.tsx` | ⬜ |
 | FN-UI-07 | 설정 — 구역 그리기 · 캘리브레이션 · 음원 · 임계값 · 시스템 | P1 | WEB | 기능 §4.6 · API §4.5 | M6 | `front/src/pages/SettingsPage.tsx` | ⬜ |
 
-> **오버레이는 도착 즉시 그리지 않는다.** `ts` 기준 지연 버퍼(`overlay_buffer_ms`, 기본 300ms)에
-> 담았다가 재생 중인 프레임 시각에 맞춰 그린다. 정합 오차 목표 **±100ms**.
-> `overlay_stale_ms`(기본 1000ms) 초과 시 박스를 흐리게 표시한다.
+> **오버레이는 도착 즉시 그리지 않는다.** `ts` 기준 지연 버퍼에 담았다가 재생 중인
+> 프레임 시각에 맞춰 그린다. 정합 오차 목표 **±100ms**.
+> **버퍼는 재생 경로별로 다르다** — `overlay_buffer_webrtc_ms`(400) ·
+> `overlay_buffer_hls_ms`(2800). M1 실측 지연이 0.3초 대 2.5초라 단일 값으로는
+> 맞출 수 없다. `overlay_stale_ms`(기본 1000ms) 초과 시 박스를 흐리게 표시한다.
+>
+> **단독 확대 보기에서 다른 채널의 구독을 끊지 않는다.** 영상만 내리고 이벤트 수신과
+> 경고는 계속 돌린다 — 화면에 안 보이는 것과 감시가 멈추는 것은 다르다.
+> 확대 상태는 URL(`/live?cam=1`)에 있어 새로고침해도 유지된다.
 >
 > **설정 화면에 「위험요소 등록 · 자연어」 패널은 없다** (부록 A-1 미채택).
 > 시안의 건설현장 용어(굴착기·굴착 구역)는 전부 제조현장 용어로 바꾼다 (부록 B).
@@ -224,15 +235,17 @@ FN-ID가 붙지 않는 기반 작업이다. 전부 완료되었고 `uv run tasks
 | 항목 | 위치 | 근거 | 상태 |
 |---|---|---|---|
 | 환경변수 단일 원본 (compose·서버·REC·프론트가 같은 `.env`) | `.env.example` · `docker-compose.yml` · `front/vite.config.ts` | 절대규칙 6 | ✅ |
+| 보존 기간 **개발 1시간 / 운용 7일** (`REC_RETENTION_DAYS=0.0417`) | `.env.example` | 기능 §4.4 | ✅ |
 | mediamtx — RTSP 수신 · WHEP · LL-HLS (**내장 녹화 미사용**) | `deploy/mediamtx.yml` | 기능 §4.4 | ✅ |
 | 가짜 카메라 4경로 + **밀리초 벽시계 타임코드 소성** | `deploy/fake_cams.py` | API §1.2 · FN-UI-02 | ✅ |
 | REC 컴포넌트 — 세그먼트 녹화 · 보존 · §4.7 API 3종 | `recorder/` | API §4.7 | ✅ |
 | §4.7 계약 스키마 (`ClipRequest` · `ClipResponse` · `RecStatusResponse`) | `packages/contracts/.../rest.py` | API §4.7 | ✅ |
 | 메인 스트림 상태 감시 · `system` 발행 | `server/infra/stream/` | API §5.3 · FN-SYS-01 | ✅ |
-| `GET /system/status` (storage 는 REC 프록시) | `server/app/routes/system.py` | API §4.6 | ✅ |
-| `/ws/dashboard` 허브 (M1 은 `system` 만 흐른다) | `server/app/ws_dashboard.py` | API §5 | ✅ |
+| `GET /system/status` (storage·recording 은 REC 프록시 · null 규약) | `server/app/routes/system.py` | API §4.6 | ✅ |
+| `/ws/dashboard` 허브 (M1 은 `system` 만 흐른다) · 소켓 1개 공유 | `server/app/ws_dashboard.py` · `front/src/api/system.ts` | API §5 | ✅ |
 | NTP 오프셋 확인 (FN-SYS-02) | `server/infra/timesync.py` | 기능 §4.8 | ✅ |
 | 실시간 관제 화면 — WHEP 우선 · HLS 폴백 · 표시 시각 | `front/src/live/` · `front/src/pages/LivePage.tsx` | FN-UI-02 | ✅ |
+| **단독 확대 보기** — 타일 클릭·상단 버튼 · Esc · `/live?cam=N` · 가장자리 알림 | `front/src/pages/LivePage.tsx` · `front/src/live/live.css` | FN-UI-02 | ✅ |
 
 **실측치** (2026-07-28, testsrc2 소스 기준)
 
@@ -244,10 +257,22 @@ FN-ID가 붙지 않는 기반 작업이다. 전부 완료되었고 `uv run tasks
 | 녹화 용량 (2채널) | **1.95 GB/시간** (§4.4 산정 2.25 GB/시간 대비 −13%) |
 | 카메라 끊김 감지 | **2.9초** 만에 `reconnecting`, 7.6초에 `down` |
 
-> **오버레이 정합(±100ms) 관점**: WebRTC 경로는 0.3초 안쪽이라 `overlay_buffer_ms`
-> 기본값 300ms 와 같은 자리수다. **HLS 폴백은 2.5초**라 같은 버퍼값으로는 맞출 수
-> 없다. M2 에서 재생 경로에 따라 버퍼를 달리 잡아야 한다 — 화면에 어느 경로로
-> 재생 중인지 표시해 둔 이유가 이것이다.
+> **오버레이 정합(±100ms) 관점**: 이 실측을 근거로 명세서가 버퍼를 경로별로 나눴다 —
+> `overlay_buffer_webrtc_ms`(400) · `overlay_buffer_hls_ms`(2800). 화면에 어느 경로로
+> 재생 중인지 계속 표시하고(타일 하단), 그 라벨의 툴팁에 적용 정책 키를 적어 둔다.
+> **값은 프론트에 적지 않는다** — `GET /policies`(M6)로 읽는다. 경로 → 정책 키 대응만
+> `front/src/live/player.ts` 의 `OVERLAY_BUFFER_POLICY_KEY` 에 있고, M2 의 오버레이
+> 렌더링이 이 대응을 따라 버퍼를 고른다.
+
+**단독 확대 보기 실측** (2026-07-29, 1440×900 뷰포트)
+
+| 상태 | 영상 크기 |
+|---|---|
+| 분할 (2채널) | 412 × 232 |
+| 단독 확대 | **1158 × 652** (면적 약 7.9배) |
+
+확대 중 cam2 를 내렸을 때 사이드바 표시가 `카메라 메인 2/2 → 1/2` 로 바뀌었고
+**새로 열린 WebSocket 은 0개**였다 — 영상만 내려가고 구독은 유지된다는 뜻이다.
 
 ---
 
@@ -276,17 +301,28 @@ FN-ID가 붙지 않는 기반 작업이다. 전부 완료되었고 `uv run tasks
 `component == "camera"` 면 `cam_id`·`stream` 필수 + `StreamState`, 그 외에는 둘 다 금지
 + `ComponentState` 로 확정됐다. 직전에 보고한 값 집합 모순이 해소됐다.
 
+**v6 (직전에 보고한 A 7건 전량)** — 전부 코드에 반영했다.
+
+| 항목 | 확정된 내용 | 반영 |
+|---|---|---|
+| §4.6 관측 전 값 | **`null`** 로 확정. 필드별 규약 표 신설. 예외는 `edge.msg_rejected_total`(항상 `int`, 0 시작)과 `sub_state`(`"down"`) | 계약 nullable · 라우트 · 대시보드가 `null` 을 "측정 불가"로 0 과 다르게 표시 |
+| §4.6 `storage` | §4.7 과 **동일한 5필드**로 확장 (`total_gb`·`used_gb`·`free_gb`·`retention_days`·`oldest_segment_at`) | 서버가 고르지 않고 그대로 전달 |
+| §4.6 `cameras[].recording` | 신설. REC `GET /status` 값을 **그대로 전달** | 프론트 REC 표시가 추론이 아니라 이 값이다. REC 미도달이면 `null`(점선 · `REC ?`) |
+| §4.7 비-`ready` 응답 | `reason` 필드 신설. 세그먼트 경계로 클립이 최대 10초 **길어지는 것은 정상 동작**으로 명시 | REC 이 보존 경과 / 미녹화 / 앞뒤 부족을 구분해 문구로 담는다. 길어진 것은 `partial` 로 보고하지 않는다 |
+| §5.4 `zone` | `GET /zones` 원소에서 **`cam_id` 를 제외한** 형태로 확정 | 현재 구현이 맞았다 — 변경 없음 |
+| §4.2 `points[].t` | `day`·`week` → `YYYY-MM-DD`(주는 월요일), `hour` → `YYYY-MM-DDTHH:00:00Z` | `str` 유지 + 형식 회귀 테스트 |
+| §4.2 `distribution.key` | 모든 축에서 **문자열**, `hour_of_day` 는 `"00"`~`"23"` 제로패딩 | `str` 유지 + 정렬 회귀 테스트 |
+
+**v6 · 오버레이 버퍼 분리** — M1 실측(WebRTC 0.27~0.34초 / LL-HLS 약 2.5초)을 근거로
+`overlay_buffer_ms`(300) 가 `overlay_buffer_webrtc_ms`(400) · `overlay_buffer_hls_ms`(2800)
+로 나뉘었다. Policies·시드·프론트에 반영했다.
+
 ### A. 남아 있는 확인 필요
 
 | 내용 | 상세 |
 |---|---|
-| **§4.6 관측 전 값의 표기** | `cameras[].fps` · `time_sync.edge_offset_ms` · `storage` 는 예시가 전부 "값이 있는 상태"뿐이라, 아직 관측 주체가 없을 때(M1) 무엇을 실을지 정하지 않았다. `0` 은 "엣지가 도는데 처리량 0" · "완벽히 동기화됨" 이라는 **다른 주장**이 되어 실제 장애와 구분되지 않으므로 **`null` 로 두고 계약을 nullable 로 넓혔다.** 명세서가 다른 표기를 원하면 되돌려야 한다 |
-| **§4.6 `storage` 와 §4.7 `storage` 의 관계** | §4.7 은 "이 응답을 §4.6 의 `storage` 에 **그대로 전달**한다"고 하는데, §4.7 은 5필드(`total_gb`·`used_gb`·`free_gb`·`retention_days`·`oldest_segment_at`)이고 §4.6 예시는 2필드(`retention_days`·`free_gb`)다. **§4.6 스키마를 유지하고 값의 출처만 REC 으로** 했다(서버 디스크를 조회하지 않는다는 것이 §4.7 의 핵심 요구이므로). §4.6 을 5필드로 넓히려는 의도였다면 알려달라 |
-| **§4.6 에 카메라별 녹화 여부가 없다** | §4.7 `GET /status` 에는 `cameras[].recording` 이 있지만 §4.6 에는 없다. 화면의 REC 표시는 REC 도달 여부(`storage` 가 채워졌는가) + `main_state` 로 **추론**하고 있다. 카메라별 녹화 상태를 화면에 정확히 띄우려면 §4.6 에 필드가 필요하다 |
-| **§4.7 비-`ready` 응답의 필드** | `POST /clips` 예시가 `ready` 인 경우만 있다. `not_found` 면 파일이 없으므로 `size_bytes`·`download_url`·`actual_from`·`actual_to` 를 **전부 `null`** 로 두었다 |
-| §5.4 `zone` 의 "동일한 형태" | "`GET /zones` 응답 원소와 동일한 형태"라고 하지만 예시와 필수 필드 표에는 `cam_id` 가 없다(메시지 최상위에 있음). 표를 따라 `cam_id` 없이 두었다 |
-| §4.2 `points[].t` 의 타입 | `bucket` 에 따라 표기가 달라진다(`day` → `2026-08-12`, `hour` → ?). 예시가 날짜뿐이라 `str` 로 두었다 |
-| §4.2 `distribution` 의 `key` | `by=hour_of_day` 는 "0~23을 `key` 로 사용"한다는데 int 인지 문자열인지 불명확하다. 다른 축이 전부 문자열이라 `str` 로 통일했다 |
+| **§5 오버레이 정합 절에 옛 키가 남아 있다** | §4.5 정책 표는 `overlay_buffer_webrtc_ms` / `overlay_buffer_hls_ms` 로 갈렸는데, §5 「오버레이 시간 정합」 4번 항목은 여전히 "`overlay_buffer_ms`(기본 300ms)만큼 영상 재생을 지연시켜"라고 적혀 있다. **이제 존재하지 않는 키다.** 코드는 §4.5 를 따라 둘로 나눴고 §5 문장은 손대지 않았다(절대규칙 8). 문장을 경로별로 고쳐 달라 |
+| §4.6 `cloud.quota_used` 의 관측 전 값 | null 규약 표에 `cloud` 는 없다. 하지만 `0.0` 은 "한도를 하나도 쓰지 않았다"는 관측 결과라 아직 아무도 재지 않은 상태와 구분되어야 하므로, `edge.gpu_util 등` 과 같은 취급으로 **nullable 로 넓혔다.** 클라우드는 `available: false` 만으로 충분하다는 판단이면 되돌린다 |
 
 ### B. 판단이 필요했던 타입
 
