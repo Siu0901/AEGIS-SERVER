@@ -268,7 +268,17 @@ class TimeseriesPoint(SpecModel):
     """`GET /metrics/timeseries` 의 한 점. API명세서 §4.2"""
 
     t: str
-    """버킷 시작 시각. 표기는 `bucket` 에 따라 다르다(`day` → `2026-08-12`)."""
+    """버킷 시작 시각. **표기는 `bucket` 에 따라 다르다**(§4.2).
+
+    | `bucket` | 형식 | 예 |
+    |---|---|---|
+    | `day` | `YYYY-MM-DD` | `2026-08-12` |
+    | `week` | `YYYY-MM-DD` (그 주 **월요일**) | `2026-08-10` |
+    | `hour` | `YYYY-MM-DDTHH:00:00Z` | `2026-08-12T09:00:00Z` |
+
+    세 형식이 한 필드에 오므로 `AwareDatetime` 이 아니라 `str` 이다. 날짜 버킷을
+    자정 시각으로 바꿔 실으면 "그 날"과 "그 날 0시"가 구분되지 않는다.
+    """
     value: float
     """지표값. 비율 지표는 0~1, 건수 지표는 정수."""
     n: int
@@ -299,7 +309,11 @@ class DistributionBucket(SpecModel):
     """`GET /metrics/distribution` 의 한 구간. API명세서 §4.2"""
 
     key: str
-    """집계 키. `by=hour_of_day` 면 `0`~`23` 을 쓴다."""
+    """집계 키. **모든 축에서 문자열이다**(§4.2).
+
+    `by=hour_of_day` 는 `"00"`~`"23"` 으로 **0을 채운다** — 사전순 정렬이 시각순과
+    일치해야 히트맵(FN-UI-05)의 칸 순서가 뒤집히지 않기 때문이다(`"10" < "9"`).
+    """
     label: str
     count: int
     ratio: float
@@ -572,6 +586,15 @@ class MuteAlertRequest(SpecModel):
 # --------------------------------------------------------------------------
 # §4.6 시스템
 # --------------------------------------------------------------------------
+# **관측 주체가 없을 때는 `null` 을 쓴다** (§4.6 「관측 주체가 없을 때는 null 을 쓴다」).
+#
+# `0` 이나 `false` 는 "관측했더니 0이었다"는 **주장**이라 실제 장애와 구분되지 않는다.
+# 예외는 두 가지다.
+#
+# * `edge.msg_rejected_total` — 서버가 직접 세므로 관측 주체가 항상 존재한다(`0` 시작)
+# * `sub_state` — `StreamState` 에 "모름"이 없고, 연결되지 않은 것은 사실이므로 `"down"`
+#
+# 대시보드는 `null` 을 "측정 불가"로 표시하고 `0` 과 다르게 그린다.
 
 
 class EdgeStatus(SpecModel):
@@ -582,9 +605,16 @@ class EdgeStatus(SpecModel):
     """
 
     online: bool
-    gpu_util: float
-    cls_cache_hit_rate: float
-    depth_calls_per_min: int
+    """연결 여부는 서버가 직접 안다. 관측 주체가 있으므로 `false` 가 사실이다."""
+
+    gpu_util: float | None
+    """엣지 미연결 시 `null`. 게이지 값은 관측 없이 0으로 채우지 않는다(§4.6)."""
+
+    cls_cache_hit_rate: float | None
+    """엣지 미연결 시 `null`."""
+
+    depth_calls_per_min: int | None
+    """엣지 미연결 시 `null`."""
 
     msg_rejected_total: int
     """스키마 검증에 실패해 거부된 엣지 메시지 누적 건수. API명세서 §2.2 · FN-SYS-06
@@ -592,6 +622,8 @@ class EdgeStatus(SpecModel):
     감지된 위반이 검증 단계에서 소리 없이 사라지는 것은 오탐보다 위험하다.
     **0이 아니면 대시보드에 경고를 띄운다.** 엣지 구현이 바뀌어 필드가 누락되기
     시작하면 이 값이 오르는 것으로 즉시 드러나야 한다.
+
+    **여기만 `null` 이 아니다** — 서버가 직접 세는 값이라 관측 주체가 항상 있다(§4.6).
     """
 
 
@@ -611,10 +643,20 @@ class CameraStatus(SpecModel):
     fps: float | None
     """엣지의 실제 처리 fps.
 
-    **엣지가 붙기 전(M1)에는 `null` 이다.** §4.6 예시는 엣지가 살아 있는 상태만 보여주고
-    미연결 시의 표기를 말하지 않는다. 0.0 으로 채우면 "엣지가 돌고 있는데 처리량이 0"
-    이라는 뜻이 되어 실제 장애와 구분되지 않으므로, 관측값 없음을 `null` 로 표현한다.
-    (명세서 확인 필요 항목 — docs/INDEX.md 참고)
+    **엣지가 붙기 전에는 `null` 이다**(§4.6 null 규약). `0.0` 은 "엣지가 돌고 있는데
+    처리량이 0"이라는 다른 의미이므로 실제 장애와 구분되지 않는다.
+    """
+
+    recording: bool | None
+    """REC 이 이 카메라를 녹화 중인지. API명세서 §4.6
+
+    **REC 의 `GET /status`(§4.7) 값을 그대로 전달한다.** 서버가 메인 스트림 상태로
+    추론하지 않는다 — 라이브가 보이는 것과 녹화되는 것은 다른 프로세스의 일이라,
+    추론으로 그리면 녹화가 죽은 채 REC 표시만 켜져 있는 화면이 만들어진다.
+    화면의 REC 표시는 이 값으로 그린다.
+
+    **REC 에 닿지 못하면 `null`**(관측 주체 없음). `false` 는 "REC 이 살아 있는데
+    이 카메라만 녹화하지 않는다"는 다른 뜻이다.
     """
 
 
@@ -632,25 +674,35 @@ class CloudStatus(SpecModel):
     """
 
     available: bool
-    quota_used: float
+    quota_used: float | None
+    """무료 한도 사용률. **클라우드가 붙기 전에는 `null`.**
+
+    `0.0` 은 "한도를 하나도 쓰지 않았다"는 관측 결과이므로, 아직 아무도 재지 않은
+    상태와 구분되어야 한다(§4.6 null 규약).
+    """
 
 
 class StorageStatus(SpecModel):
     """저장소 상태. API명세서 §4.6
 
-    값은 **REC(§4.7)의 `GET /status` 에서 온다.** 서버가 자체 디스크를 조회해 채우지
-    않는다 — 운용 시 녹화 디스크는 서버 노트북이 아니라 엣지 NVMe SSD 다.
+    **REC(§4.7)의 `GET /status` 응답 `storage` 절을 5필드 그대로 전달한다.** 서버가
+    자체 디스크를 조회해 채우지 않는다 — 운용 시 녹화 디스크는 서버 노트북이 아니라
+    엣지 NVMe SSD 이고, 서버 디스크의 여유 공간은 녹화와 아무 상관이 없다.
+
+    **REC 에 닿지 못하면 다섯 필드가 전부 `null` 이다.** 서버의 로컬 디스크 값으로
+    대신 채우지 않는다 — "녹화 공간이 남아 있다"는 잘못된 확신을 주기 때문이다.
+    이때 `/ws/dashboard` 로 `system` `component="storage"` `state="down"` 이
+    함께 나간다(§5.3).
     """
 
-    retention_days: int | None
+    total_gb: int | None
+    used_gb: int | None
     free_gb: int | None
-    """REC 에 닿지 못하면 `null` 이다.
+    retention_days: int | None
+    oldest_segment_at: AwareDatetime | None
+    """보존된 가장 오래된 세그먼트 시각. **영상 검색 가능 범위의 하한이다.**
 
-    서버의 로컬 디스크 값으로 대신 채우지 않는다. 그건 다른 디스크의 숫자이고,
-    "녹화 공간이 남아 있다"는 잘못된 확신을 준다. 관측하지 못했으면 관측하지
-    못했다고 말한다. 이때 `/ws/dashboard` 로 `system` `component="storage"`
-    `state="down"` 이 함께 나간다(§5.3).
-    (명세서 확인 필요 항목 — docs/INDEX.md 참고)
+    세그먼트가 한 개도 없으면(기동 직후) `null` 이고, REC 미도달 때도 `null` 이다.
     """
 
 
@@ -658,12 +710,10 @@ class TimeSyncStatus(SpecModel):
     """엣지–서버 시각 차이. 크면 클립 추출 구간이 어긋난다. API명세서 §4.6"""
 
     edge_offset_ms: int | None
-    """`heartbeat` 로 관측한다. **엣지가 붙기 전(M1)에는 `null`.**
+    """`heartbeat` 로 관측한다. **엣지가 붙기 전에는 `null`**(§4.6 null 규약).
 
-    `fps` 와 같은 이유로 0 을 쓰지 않는다 — 0 은 "완벽히 동기화됨"이라는 강한 주장이고,
-    측정한 적이 없다는 사실과 정반대다. 클립 구간 정합이 이 값에 걸려 있으므로
-    측정 없음을 동기화됨으로 보이게 하면 안 된다.
-    (명세서 확인 필요 항목 — docs/INDEX.md 참고)
+    `0` 은 "완벽히 동기화됨"이라는 강한 주장이고, 측정한 적이 없다는 사실과 정반대다.
+    클립 구간 정합이 이 값에 걸려 있으므로 측정 없음을 동기화됨으로 보이게 하면 안 된다.
     """
 
 
@@ -675,8 +725,8 @@ class SystemStatus(SpecModel):
     mcu: McuStatus
     cloud: CloudStatus
     storage: StorageStatus
-    """**REC(§4.7)의 `GET /status` 값을 전달한다.** 서버가 자체 디스크를 조회해 채우지
-    않는다 — 운용 시 녹화 디스크는 서버가 아니라 엣지 SSD 에 있다."""
+    """**REC(§4.7)의 `GET /status` 값을 5필드 그대로 전달한다.** 서버가 자체 디스크를
+    조회해 채우지 않는다 — 운용 시 녹화 디스크는 서버가 아니라 엣지 SSD 에 있다."""
     time_sync: TimeSyncStatus
 
 
@@ -711,8 +761,19 @@ class ClipResponse(SpecModel):
     actual_to: AwareDatetime | None = None
     """세그먼트 경계 때문에 요청 구간과 다를 수 있다. **실제로 잘라낸 구간을 정확히 반환한다.**
 
+    요청 시각이 세그먼트 중간에 걸치면 그 세그먼트의 시작부터 포함되므로 **클립이
+    요청보다 최대 세그먼트 길이(10초)만큼 길어질 수 있다. 이는 정상 동작이다**(§4.7).
+    이벤트 클립에서는 앞뒤 맥락이 늘어나는 것이므로 문제가 되지 않는다.
+
     파일이 만들어지지 않은 `not_found` 에서는 네 필드가 모두 `null` 이다.
-    §4.7 예시가 `ready` 한 경우만 보여주므로 나머지는 이 규칙으로 채운다.
+    """
+
+    reason: str | None = None
+    """비-`ready` 사유. `partial` · `not_found` 에서 채운다. API명세서 §4.7
+
+    `status` 만으로는 "보존 기간이 지났다"와 "그 시각에 녹화가 없었다"가 구분되지
+    않는다. 서버는 이 값을 보고 `clip_status = failed` 의 원인을 기록한다.
+    `ready` 에서는 `null`.
     """
 
 
@@ -728,7 +789,9 @@ class RecCameraStatus(SpecModel):
 class RecStorageStatus(SpecModel):
     """`GET /status` 의 저장소 절. API명세서 §4.7
 
-    §4.6 `storage`(2필드)보다 넓다. 서버는 이 값에서 §4.6 이 요구하는 만큼을 골라 싣는다.
+    §4.6 `storage` 와 **같은 5필드**다. 서버는 고르거나 가공하지 않고 그대로 옮긴다.
+    다른 점은 nullable 여부뿐이다 — REC 은 자기 디스크를 직접 재므로 값이 항상 있고,
+    서버 쪽은 REC 에 닿지 못하면 `null` 이 된다.
     """
 
     total_gb: int

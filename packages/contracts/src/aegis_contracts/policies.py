@@ -87,8 +87,15 @@ class Policies(SpecModel):
     """이벤트 클립의 사후 구간(초)."""
 
     # --- 오버레이 시간 정합 (FN-UI-02) ---
-    overlay_buffer_ms: float = 300.0
-    """대시보드 오버레이 지연 버퍼. 영상–좌표 시간 정합용."""
+    # 버퍼는 **재생 경로별로 나뉜다.** 라이브 영상 지연이 경로에 따라 한 자릿수 배
+    # 차이가 나므로(M1 실측: WebRTC 0.27~0.34초 · LL-HLS 약 2.5초) 단일 값으로는
+    # ±100ms 정합 목표를 맞출 수 없다. 클라이언트는 현재 재생 경로를 알고 있으므로
+    # 그에 맞는 값을 골라 쓰고, 어느 경로로 재생 중인지 화면에 표시한다.
+    overlay_buffer_webrtc_ms: float = 400.0
+    """WebRTC(WHEP) 재생 시 오버레이 지연 버퍼. 실측 지연 0.27~0.34초 기준."""
+
+    overlay_buffer_hls_ms: float = 2800.0
+    """LL-HLS 폴백 재생 시 오버레이 지연 버퍼. 실측 지연 약 2.5초 기준."""
 
     overlay_stale_ms: float = 1000.0
     """이 시간 이상 좌표 갱신이 없으면 박스를 흐리게 표시."""
@@ -130,7 +137,8 @@ class PolicyPatch(SpecModel):
     cls_min_conf: float | None = None
     clip_pre_roll_s: float | None = None
     clip_post_roll_s: float | None = None
-    overlay_buffer_ms: float | None = None
+    overlay_buffer_webrtc_ms: float | None = None
+    overlay_buffer_hls_ms: float | None = None
     overlay_stale_ms: float | None = None
     fall_height_ratio_max: float | None = None
     fall_axis_angle_min_deg: float | None = None

@@ -19,6 +19,7 @@ from aegis_contracts import (
     CameraSystemMsg,
     CandidateMsg,
     ChatResponse,
+    ClipResponse,
     ComponentSystemMsg,
     DashboardMessage,
     DetectedPerson,
@@ -39,6 +40,8 @@ from aegis_contracts import (
     OverlayPerson,
     OverlayVehicle,
     Policies,
+    RecStatusResponse,
+    SystemStatus,
     TrackLostMsg,
     ViolationType,
     ZoneUpdatedMsg,
@@ -373,6 +376,31 @@ def test_metrics_timeseries_example_parses() -> None:
     assert [point.n for point in response.points] == [18, 23]
 
 
+def test_timeseries_t_carries_three_bucket_formats() -> None:
+    """§4.2 — `points[].t` 는 `bucket` 마다 형식이 다르다.
+
+    `day`·`week` 는 `YYYY-MM-DD`(주는 월요일), `hour` 는 `YYYY-MM-DDTHH:00:00Z` 다.
+    한 필드에 세 형식이 오므로 `str` 이며, 날짜를 자정 시각으로 바꿔 싣지 않는다.
+    """
+    hourly = MetricsTimeseriesResponse.model_validate(
+        {
+            "metric": "violations",
+            "bucket": "hour",
+            "points": [{"t": "2026-08-12T09:00:00Z", "value": 4, "n": 4}],
+        }
+    )
+    assert hourly.points[0].t == "2026-08-12T09:00:00Z"
+
+    weekly = MetricsTimeseriesResponse.model_validate(
+        {
+            "metric": "correction_rate",
+            "bucket": "week",
+            "points": [{"t": "2026-08-10", "value": 0.84, "n": 121}],
+        }
+    )
+    assert weekly.points[0].t == "2026-08-10"
+
+
 def test_metrics_distribution_example_parses() -> None:
     response = MetricsDistributionResponse.model_validate(
         {
@@ -384,6 +412,27 @@ def test_metrics_distribution_example_parses() -> None:
         }
     )
     assert response.buckets[0].count == 13
+
+
+def test_hour_of_day_keys_are_zero_padded_strings() -> None:
+    """§4.2 — `key` 는 모든 축에서 문자열이고 시간대는 `"00"`~`"23"` 이다.
+
+    제로패딩이 없으면 사전순 정렬이 시각순과 어긋나(`"10" < "9"`) 히트맵 칸 순서가
+    뒤집힌다. 숫자로 실으면 축마다 타입이 달라져 화면이 분기해야 한다.
+    """
+    response = MetricsDistributionResponse.model_validate(
+        {
+            "by": "hour_of_day",
+            "buckets": [
+                {"key": "09", "label": "09시", "count": 4, "ratio": 0.17},
+                {"key": "10", "label": "10시", "count": 6, "ratio": 0.26},
+            ],
+        }
+    )
+    keys = [bucket.key for bucket in response.buckets]
+    assert keys == ["09", "10"]
+    assert keys == sorted(keys)
+    assert all(len(key) == 2 for key in keys)
 
 
 def test_metrics_repeat_example_parses() -> None:
@@ -464,16 +513,163 @@ def test_chat_attachments_use_urls_not_paths() -> None:
         ChatResponse.model_validate({"route": "sql", "answer": "…", "attachments": [bad]})
 
 
+#: API명세서 §4.6 `GET /system/status` 응답 예시 전량.
+SYSTEM_STATUS_EXAMPLE: dict[str, Any] = {
+    "edge": {
+        "online": True,
+        "gpu_util": 0.41,
+        "cls_cache_hit_rate": 0.87,
+        "depth_calls_per_min": 14,
+        "msg_rejected_total": 0,
+    },
+    "cameras": [
+        {"cam_id": 1, "main_state": "ok", "sub_state": "ok", "fps": 8.2, "recording": True},
+        {"cam_id": 2, "main_state": "ok", "sub_state": "ok", "fps": 8.0, "recording": True},
+    ],
+    "mcu": {"online": True, "last_seen": "2026-08-14T05:39:58Z"},
+    "cloud": {"available": True, "quota_used": 0.62},
+    "storage": {
+        "total_gb": 500,
+        "used_gb": 378,
+        "free_gb": 122,
+        "retention_days": 7,
+        "oldest_segment_at": "2026-08-07T05:37:00Z",
+    },
+    "time_sync": {"edge_offset_ms": 12},
+}
+
+
+def test_system_status_example_parses() -> None:
+    """§4.6 — `storage` 는 §4.7 과 같은 5필드이고 카메라마다 `recording` 이 온다."""
+    status = SystemStatus.model_validate(SYSTEM_STATUS_EXAMPLE)
+    assert status.storage.total_gb == 500
+    assert status.storage.oldest_segment_at is not None
+    assert [camera.recording for camera in status.cameras] == [True, True]
+
+
 def test_system_status_camera_splits_main_and_sub() -> None:
     """§4.6 — 메인이 끊겨도 추론은 돌고, 서브가 끊겨도 녹화는 돈다. 합치면 구분 불가."""
     camera = CameraStatus.model_validate(
-        {"cam_id": 1, "main_state": "reconnecting", "sub_state": "ok", "fps": 8.2}
+        {
+            "cam_id": 1,
+            "main_state": "reconnecting",
+            "sub_state": "ok",
+            "fps": 8.2,
+            "recording": True,
+        }
     )
     assert camera.main_state == "reconnecting"
     assert camera.sub_state == "ok"
 
     with pytest.raises(ValueError, match="main_state"):
-        CameraStatus.model_validate({"cam_id": 1, "state": "ok", "fps": 8.2})
+        CameraStatus.model_validate({"cam_id": 1, "state": "ok", "fps": 8.2, "recording": True})
+
+
+def test_unobserved_values_are_null_except_the_two_exceptions() -> None:
+    """§4.6 「관측 주체가 없을 때는 null 을 쓴다」.
+
+    `0`·`false` 는 "관측했더니 0이었다"는 **주장**이라 실제 장애와 구분되지 않는다.
+    예외는 두 가지뿐이다 — 서버가 직접 세는 `msg_rejected_total`(0 시작)과,
+    "모름"이라는 값이 없고 연결 안 됨이 사실인 `sub_state`(`"down"`).
+    """
+    status = SystemStatus.model_validate(
+        {
+            "edge": {
+                "online": False,
+                "gpu_util": None,
+                "cls_cache_hit_rate": None,
+                "depth_calls_per_min": None,
+                "msg_rejected_total": 0,
+            },
+            "cameras": [
+                {
+                    "cam_id": 1,
+                    "main_state": "ok",
+                    "sub_state": "down",
+                    "fps": None,
+                    "recording": None,
+                }
+            ],
+            "mcu": {"online": False, "last_seen": None},
+            "cloud": {"available": False, "quota_used": None},
+            "storage": {
+                "total_gb": None,
+                "used_gb": None,
+                "free_gb": None,
+                "retention_days": None,
+                "oldest_segment_at": None,
+            },
+            "time_sync": {"edge_offset_ms": None},
+        }
+    )
+    assert status.edge.gpu_util is None
+    assert status.edge.msg_rejected_total == 0
+    assert status.cameras[0].fps is None
+    assert status.cameras[0].recording is None
+    assert status.cameras[0].sub_state == "down"
+    assert status.storage.free_gb is None
+    assert status.time_sync.edge_offset_ms is None
+
+
+# --- §4.7 서버 → REC ------------------------------------------------------
+
+
+def test_rec_status_example_parses() -> None:
+    """§4.7 — 서버는 이 `storage` 절을 §4.6 으로 가공 없이 옮긴다."""
+    response = RecStatusResponse.model_validate(
+        {
+            "cameras": [
+                {"cam_id": 1, "recording": True, "last_segment_at": "2026-08-14T05:37:10Z"},
+                {"cam_id": 2, "recording": True, "last_segment_at": "2026-08-14T05:37:10Z"},
+            ],
+            "storage": {
+                "total_gb": 500,
+                "used_gb": 378,
+                "free_gb": 122,
+                "retention_days": 7,
+                "oldest_segment_at": "2026-08-07T05:37:00Z",
+            },
+        }
+    )
+    assert set(response.storage.model_dump()) == set(SYSTEM_STATUS_EXAMPLE["storage"])
+
+
+def test_clip_ready_example_parses() -> None:
+    """§4.7 — `ready` 에는 사유가 없다."""
+    response = ClipResponse.model_validate(
+        {
+            "status": "ready",
+            "size_bytes": 4812345,
+            "download_url": "/clips/EV-20260814-0231.mp4",
+            "actual_from": "2026-08-14T05:36:53Z",
+            "actual_to": "2026-08-14T05:37:13Z",
+        }
+    )
+    assert response.reason is None
+
+
+def test_clip_not_found_example_carries_a_reason() -> None:
+    """§4.7 비-`ready` 응답 — 파일이 없으므로 나머지가 전부 `null` 이고 `reason` 이 온다.
+
+    `status` 만으로는 "보존 기간 경과"와 "그 시각에 녹화가 없었다"가 구분되지 않는다.
+    서버는 이 값으로 `clip_status = failed` 의 원인을 기록한다.
+    """
+    response = ClipResponse.model_validate(
+        {
+            "status": "not_found",
+            "size_bytes": None,
+            "download_url": None,
+            "actual_from": None,
+            "actual_to": None,
+            "reason": "보존 기간 경과 (oldest_segment_at 2026-08-07T05:37:00Z)",
+        }
+    )
+    assert response.status == "not_found"
+    assert response.size_bytes is None
+    assert response.download_url is None
+    assert response.actual_from is None
+    assert response.actual_to is None
+    assert response.reason is not None
 
 
 # --- §4.5 policies --------------------------------------------------------
@@ -499,7 +695,8 @@ POLICIES_EXAMPLE: dict[str, Any] = {
     "cls_min_conf": 0.60,
     "clip_pre_roll_s": 10,
     "clip_post_roll_s": 10,
-    "overlay_buffer_ms": 300,
+    "overlay_buffer_webrtc_ms": 400,
+    "overlay_buffer_hls_ms": 2800,
     "overlay_stale_ms": 1000,
     "fall_height_ratio_max": 0.5,
     "fall_axis_angle_min_deg": 55.0,
