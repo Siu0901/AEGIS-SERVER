@@ -90,9 +90,41 @@ def test_clip_outside_retention_is_not_found(rec_settings: RecSettings) -> None:
     )
 
     assert response.status == "not_found"
+    assert response.size_bytes is None
     assert response.download_url is None
     assert response.actual_from is None
     assert response.actual_to is None
+    # §4.7 비-ready 응답 — 왜 없는지 알려준다. 서버가 clip_status=failed 의 원인으로 남긴다.
+    assert response.reason is not None
+    assert "보존 기간 경과" in response.reason
+
+
+def test_not_found_distinguishes_expired_from_never_recorded(
+    rec_settings: RecSettings,
+) -> None:
+    """지워진 것과 찍은 적이 없는 것은 대응이 다르므로 같은 문구로 뭉뚱그리지 않는다.
+
+    보존 경과는 정상 동작이지만, 녹화 구간 한가운데가 비었다면 그 시간대에 카메라가
+    끊겼거나 REC 이 멈춘 것이다 — 그건 조사해야 할 사고다.
+    """
+    root = rec_settings.rec_media_root
+    write_run(root, 1, BASE_AT, 2)  # 0~8초
+    write_run(root, 1, BASE_AT + timedelta(seconds=120), 2)  # 120~128초
+
+    response = asyncio.run(
+        extract_clip(
+            rec_settings,
+            cam_id=1,
+            start=BASE_AT + timedelta(seconds=60),
+            end=BASE_AT + timedelta(seconds=70),
+            event_id="EV-TEST-GAP",
+        )
+    )
+
+    assert response.status == "not_found"
+    assert response.reason is not None
+    assert "보존 기간" not in response.reason
+    assert "녹화가 없다" in response.reason
 
 
 def test_clip_with_missing_tail_is_partial(rec_settings: RecSettings) -> None:
@@ -113,6 +145,29 @@ def test_clip_with_missing_tail_is_partial(rec_settings: RecSettings) -> None:
     assert response.actual_to is not None
     # 없는 시간을 만들어내지 않았는가.
     assert response.actual_to <= BASE_AT + timedelta(seconds=12.5)
+    # 어느 쪽이 모자랐는지 말해준다 — 앞이 잘린 것과 뒤가 잘린 것은 원인이 다르다.
+    assert response.reason is not None
+    assert "뒤" in response.reason
+
+
+def test_longer_than_requested_is_still_ready(rec_settings: RecSettings) -> None:
+    """§4.7 — 세그먼트 경계 때문에 클립이 요청보다 길어지는 것은 **정상 동작이다**.
+
+    요청 시각이 세그먼트 중간에 걸치면 그 세그먼트 시작부터 담기므로 앞이 늘어난다.
+    이벤트 클립에서는 앞뒤 맥락이 붙는 것이라 문제가 되지 않는다. 이걸 `partial` 로
+    보고하면 서버가 멀쩡한 증거 영상을 실패로 기록하게 된다.
+    """
+    write_run(rec_settings.rec_media_root, 1, BASE_AT, 3)  # 0~12초
+    start = BASE_AT + timedelta(seconds=5.5)  # 세그먼트 한가운데
+    end = BASE_AT + timedelta(seconds=9)
+
+    response = asyncio.run(
+        extract_clip(rec_settings, cam_id=1, start=start, end=end, event_id="EV-TEST-LONGER")
+    )
+
+    assert response.status == "ready"
+    assert response.reason is None
+    assert response.actual_from is not None and response.actual_from <= start
 
 
 def test_clip_does_not_bridge_recording_gaps(rec_settings: RecSettings) -> None:

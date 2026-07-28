@@ -177,9 +177,18 @@ async def extract_clip(
     )
     run = _best_run(_contiguous_runs(await _measure(candidates)), start, end)
     if run is None:
-        # 보존 기간이 지났거나 그 시각에 녹화가 없었다.
-        log.info("cam%d %s~%s 구간에 세그먼트가 없다", cam_id, start.isoformat(), end.isoformat())
-        return ClipResponse(status="not_found")
+        # 보존 기간이 지났거나 그 시각에 녹화가 없었다. **둘을 구분해서 알린다** —
+        # `status` 만으로는 "지웠다"와 "찍은 적이 없다"가 같아 보이고, 서버는 이 문구를
+        # 이벤트의 `clip_status = failed` 원인으로 남긴다(§4.7).
+        reason = _not_found_reason(segments, start)
+        log.info(
+            "cam%d %s~%s 구간에 세그먼트가 없다 — %s",
+            cam_id,
+            start.isoformat(),
+            end.isoformat(),
+            reason,
+        )
+        return ClipResponse(status="not_found", reason=reason)
 
     run_start, run_end = _run_bounds(run)
     # 이어붙인 타임라인의 0초 = run_start.
@@ -193,6 +202,10 @@ async def extract_clip(
     actual_from = run_start + timedelta(seconds=offset)
     actual_to = actual_from + timedelta(seconds=duration)
 
+    # **앞쪽이 길어진 것은 부족이 아니다.** 요청 시각이 세그먼트 중간에 걸치면 그
+    # 세그먼트 시작부터 포함되므로 클립이 요청보다 최대 세그먼트 길이만큼 길어지는데,
+    # §4.7 은 이것을 정상 동작으로 명시한다. 이벤트 클립에서는 앞뒤 맥락이 늘어나는
+    # 것이라 오히려 도움이 된다. `partial` 은 **요청 구간이 덜 담겼을 때만**이다.
     covered = actual_from <= start + timedelta(
         seconds=_COVERAGE_TOLERANCE_S
     ) and actual_to >= end - timedelta(seconds=_COVERAGE_TOLERANCE_S)
@@ -202,7 +215,47 @@ async def extract_clip(
         download_url=f"{CLIP_URL_PREFIX}/{destination.name}",
         actual_from=actual_from.astimezone(UTC),
         actual_to=actual_to.astimezone(UTC),
+        reason=None if covered else _partial_reason(start, end, actual_from, actual_to),
     )
+
+
+def _not_found_reason(segments: list[Segment], start: datetime) -> str:
+    """왜 못 찾았는지. 보존 경과와 미녹화를 구분한다.
+
+    가장 오래된 세그먼트보다 앞선 요청이면 보존 기간이 지나 지워진 것이고, 그 뒤라면
+    그 시각에 녹화 자체가 없었던 것이다(카메라 끊김 · REC 정지). 대응이 서로 다르므로
+    같은 문구로 뭉뚱그리지 않는다.
+    """
+    if not segments:
+        return "이 카메라의 녹화가 하나도 없다"
+    oldest = segments[0].start_at
+    if start < oldest:
+        return f"보존 기간 경과 (oldest_segment_at {_stamp(oldest)})"
+    return "그 시각에 녹화가 없다 (카메라 끊김 또는 REC 정지)"
+
+
+def _partial_reason(
+    start: datetime,
+    end: datetime,
+    actual_from: datetime,
+    actual_to: datetime,
+) -> str:
+    """요청 구간 중 **어느 쪽이** 모자랐는지. 앞이 잘린 것과 뒤가 잘린 것은 원인이 다르다.
+
+    앞이 모자라면 보존 경계나 녹화 시작 시각에 걸린 것이고, 뒤가 모자라면 아직
+    기록되지 않은 구간을 요청한 것이다(FN-REC-03 의 `+ margin` 예약이 있는 이유).
+    """
+    missing: list[str] = []
+    if actual_from > start + timedelta(seconds=_COVERAGE_TOLERANCE_S):
+        missing.append(f"앞 {(actual_from - start).total_seconds():.1f}초")
+    if actual_to < end - timedelta(seconds=_COVERAGE_TOLERANCE_S):
+        missing.append(f"뒤 {(end - actual_to).total_seconds():.1f}초")
+    return f"요청 구간 일부만 녹화되어 있다 — {' · '.join(missing)} 없음"
+
+
+def _stamp(at: datetime) -> str:
+    """§4.7 예시와 같은 표기(`2026-08-07T05:37:00Z`)."""
+    return at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 async def _cut(
