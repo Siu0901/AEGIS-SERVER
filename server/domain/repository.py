@@ -75,8 +75,13 @@ class EventRepository(Protocol):
         cam_id: int,
         track_id: int,
         zone_id: str | None,
+        at: datetime,
     ) -> int:
-        """동일 트랙·구역의 최근 7일 유사 이벤트 수. FN-EVT-06"""
+        """동일 트랙·구역의 최근 7일 유사 이벤트 수. FN-EVT-06
+
+        기준 시각 `at` 을 받는다. 구현이 시스템 시계를 읽으면 절대규칙 1이 깨지고,
+        무엇보다 어제 본 목록과 오늘 본 목록에서 같은 이벤트의 숫자가 달라진다.
+        """
         ...
 
     async def create(self, event: EventDetail) -> None: ...
