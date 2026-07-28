@@ -11,6 +11,7 @@ __all__ = [
     "AlertState",
     "AttachmentKind",
     "ChatRoute",
+    "ClipExtractStatus",
     "ClipStatus",
     "ComponentState",
     "DistanceMethod",
@@ -123,7 +124,15 @@ RepeatSubject = Literal["zone", "camera", "track"]
 AttachmentKind = Literal["clip", "image", "table", "event_ref"]
 
 #: 예약 클립 추출 상태. 기능명세서 §4.2 · §6.
+#: **서버가 보는 잡의 상태**다 — 예약됐는지, 파일이 준비됐는지, 실패했는지.
 ClipStatus = Literal["pending", "ready", "failed"]
+
+#: REC 구간 추출 결과. API명세서 §4.7 `POST /clips` 의 `status`.
+#:
+#: `ClipStatus` 와 **다른 축이다.** 이쪽은 요청 구간이 녹화에 얼마나 남아 있었는지를
+#: 말한다 — 전부 있었는지(`ready`), 일부만이었는지(`partial`), 보존 기간이 지나
+#: 하나도 없었는지(`not_found`). 두 열거형을 합치지 않는다.
+ClipExtractStatus = Literal["ready", "partial", "not_found"]
 
 #: 장면 검색 처리 경로. API명세서 §4.3.
 SearchMode = Literal["sql", "vector", "hybrid"]

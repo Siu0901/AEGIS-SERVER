@@ -13,6 +13,7 @@ from pydantic import AwareDatetime, Field
 from ._base import Homography, PointM, PointPx, SpecModel
 from .enums import (
     ChatRoute,
+    ClipExtractStatus,
     DistributionBy,
     EventStatus,
     MetricBucket,
@@ -36,6 +37,8 @@ __all__ = [
     "ChatResponse",
     "ChatSource",
     "ClipAttachment",
+    "ClipRequest",
+    "ClipResponse",
     "CloudStatus",
     "DistributionBucket",
     "EdgeStatus",
@@ -60,6 +63,9 @@ __all__ = [
     "MetricsTimeseriesResponse",
     "MuteAlertRequest",
     "NearbySnapshot",
+    "RecCameraStatus",
+    "RecStatusResponse",
+    "RecStorageStatus",
     "ReferencePerson",
     "RegulationRef",
     "RepeatItem",
@@ -602,8 +608,14 @@ class CameraStatus(SpecModel):
     """**서버가 보는 메인 스트림**(1920×1080, 라이브·녹화용) 상태."""
     sub_state: StreamState
     """**엣지가 보는 서브 스트림**(640×360, 추론용) 상태. `heartbeat` 값을 그대로 전달."""
-    fps: float
-    """엣지의 실제 처리 fps."""
+    fps: float | None
+    """엣지의 실제 처리 fps.
+
+    **엣지가 붙기 전(M1)에는 `null` 이다.** §4.6 예시는 엣지가 살아 있는 상태만 보여주고
+    미연결 시의 표기를 말하지 않는다. 0.0 으로 채우면 "엣지가 돌고 있는데 처리량이 0"
+    이라는 뜻이 되어 실제 장애와 구분되지 않으므로, 관측값 없음을 `null` 로 표현한다.
+    (명세서 확인 필요 항목 — docs/INDEX.md 참고)
+    """
 
 
 class McuStatus(SpecModel):
@@ -624,16 +636,35 @@ class CloudStatus(SpecModel):
 
 
 class StorageStatus(SpecModel):
-    """저장소 상태. API명세서 §4.6"""
+    """저장소 상태. API명세서 §4.6
 
-    retention_days: int
-    free_gb: int
+    값은 **REC(§4.7)의 `GET /status` 에서 온다.** 서버가 자체 디스크를 조회해 채우지
+    않는다 — 운용 시 녹화 디스크는 서버 노트북이 아니라 엣지 NVMe SSD 다.
+    """
+
+    retention_days: int | None
+    free_gb: int | None
+    """REC 에 닿지 못하면 `null` 이다.
+
+    서버의 로컬 디스크 값으로 대신 채우지 않는다. 그건 다른 디스크의 숫자이고,
+    "녹화 공간이 남아 있다"는 잘못된 확신을 준다. 관측하지 못했으면 관측하지
+    못했다고 말한다. 이때 `/ws/dashboard` 로 `system` `component="storage"`
+    `state="down"` 이 함께 나간다(§5.3).
+    (명세서 확인 필요 항목 — docs/INDEX.md 참고)
+    """
 
 
 class TimeSyncStatus(SpecModel):
     """엣지–서버 시각 차이. 크면 클립 추출 구간이 어긋난다. API명세서 §4.6"""
 
-    edge_offset_ms: int
+    edge_offset_ms: int | None
+    """`heartbeat` 로 관측한다. **엣지가 붙기 전(M1)에는 `null`.**
+
+    `fps` 와 같은 이유로 0 을 쓰지 않는다 — 0 은 "완벽히 동기화됨"이라는 강한 주장이고,
+    측정한 적이 없다는 사실과 정반대다. 클립 구간 정합이 이 값에 걸려 있으므로
+    측정 없음을 동기화됨으로 보이게 하면 안 된다.
+    (명세서 확인 필요 항목 — docs/INDEX.md 참고)
+    """
 
 
 class SystemStatus(SpecModel):
@@ -644,4 +675,71 @@ class SystemStatus(SpecModel):
     mcu: McuStatus
     cloud: CloudStatus
     storage: StorageStatus
+    """**REC(§4.7)의 `GET /status` 값을 전달한다.** 서버가 자체 디스크를 조회해 채우지
+    않는다 — 운용 시 녹화 디스크는 서버가 아니라 엣지 SSD 에 있다."""
     time_sync: TimeSyncStatus
+
+
+# --------------------------------------------------------------------------
+# §4.7 서버 → REC (녹화 컴포넌트 내부 API)
+# --------------------------------------------------------------------------
+# REC 은 메인 스트림 녹화와 구간 추출만 하는 독립 컴포넌트다. 개발 중에는 서버와 같은
+# 기계에서 돌지만 운용 시에는 엣지 NVMe SSD 위에서 돈다. **서버는 녹화 파일에 직접
+# 접근하지 않고 항상 이 API 를 쓴다** — 옮길 때 `RECORDER_BASE` 하나만 바꾸면 되도록.
+
+
+class ClipRequest(SpecModel):
+    """`POST /clips` 요청. API명세서 §4.7"""
+
+    cam_id: int
+    from_: AwareDatetime = Field(alias="from")
+    to: AwareDatetime
+    event_id: str
+    """추출 결과 파일명이자 서버가 자기 저장소에 옮길 때 쓰는 키."""
+
+
+class ClipResponse(SpecModel):
+    """`POST /clips` 응답. API명세서 §4.7"""
+
+    status: ClipExtractStatus
+
+    size_bytes: int | None = None
+    download_url: str | None = None
+    """`RECORDER_BASE` 기준 상대 경로."""
+
+    actual_from: AwareDatetime | None = None
+    actual_to: AwareDatetime | None = None
+    """세그먼트 경계 때문에 요청 구간과 다를 수 있다. **실제로 잘라낸 구간을 정확히 반환한다.**
+
+    파일이 만들어지지 않은 `not_found` 에서는 네 필드가 모두 `null` 이다.
+    §4.7 예시가 `ready` 한 경우만 보여주므로 나머지는 이 규칙으로 채운다.
+    """
+
+
+class RecCameraStatus(SpecModel):
+    """`GET /status` 의 카메라 항목. API명세서 §4.7"""
+
+    cam_id: int
+    recording: bool
+    last_segment_at: AwareDatetime | None = None
+    """마지막으로 닫힌 세그먼트의 시작 시각. 한 개도 없으면 `null`."""
+
+
+class RecStorageStatus(SpecModel):
+    """`GET /status` 의 저장소 절. API명세서 §4.7
+
+    §4.6 `storage`(2필드)보다 넓다. 서버는 이 값에서 §4.6 이 요구하는 만큼을 골라 싣는다.
+    """
+
+    total_gb: int
+    used_gb: int
+    free_gb: int
+    retention_days: int
+    oldest_segment_at: AwareDatetime | None = None
+
+
+class RecStatusResponse(SpecModel):
+    """`GET /status`. API명세서 §4.7"""
+
+    cameras: list[RecCameraStatus]
+    storage: RecStorageStatus
