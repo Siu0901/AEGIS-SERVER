@@ -35,8 +35,10 @@ DEPLOY = ROOT / "deploy"
 ALEMBIC_INI = ROOT / "server" / "infra" / "db" / "alembic.ini"
 
 #: `cams` 가 띄운 ffmpeg PID 를 적어두는 곳. `cams-stop` 이 읽는다.
+#: `--cams` 로 카메라를 나눠 띄우면 파일이 여러 개가 되므로 글롭으로 훑는다.
 #: `media/` 는 런타임 저장소이고 git 에서 제외된다.
-CAMS_PIDFILE = ROOT / "media" / "run" / "fake_cams.json"
+CAMS_PIDFILE_DIR = ROOT / "media" / "run"
+CAMS_PIDFILE_GLOB = "fake_cams*.json"
 
 
 class TaskError(RuntimeError):
@@ -253,7 +255,8 @@ def task_verify() -> int:
 
     step.nothing_to_do(
         "contracts -> front 타입 정합",
-        "생성기가 아직 없다 (M5). front/src/types/ 는 README 자리표시자뿐",
+        "생성기가 아직 없다 (M5). front/src/types/system.ts 는 §4.6·§5.3 을 손으로 옮긴 것이라"
+        " contracts 와 어긋나도 지금은 아무도 잡아주지 않는다",
     )
 
     say()
@@ -291,42 +294,68 @@ def task_dev() -> int:
     task_migrate()
     say()
     say("[dev] 다음은 각각 별도 터미널에서 띄운다:")
+    say("      카메라 uv run tasks.py cams")
+    say("      REC    uv run tasks.py rec")
     say("      서버   uv run uvicorn server.app.main:app --reload")
     say("      프론트 npm --prefix front run dev")
+    say()
+    say("      REC 을 띄우지 않으면 GET /system/status 의 storage 가 null 이 되고")
+    say("      대시보드에 저장소 down 이 뜬다. 그건 버그가 아니라 관측 결과다.")
     return 0
 
 
-def task_cams(videos: Sequence[str]) -> int:
-    say("[cams] 가짜 RTSP 2채널 송출")
-    run([sys.executable, str(DEPLOY / "fake_cams.py"), *videos])
+def task_cams(sources: Sequence[str], cams: str | None) -> int:
+    say("[cams] 가짜 RTSP 송출 (카메라당 main·sub 2경로)")
+    argv = [sys.executable, str(DEPLOY / "fake_cams.py")]
+    for source in sources:
+        argv += ["--source", source]
+    if cams:
+        argv += ["--cams", cams]
+    run(argv)
+    return 0
+
+
+def task_rec(extra: Sequence[str]) -> int:
+    """REC — 녹화 컴포넌트 (API명세서 §4.7).
+
+    별도 프로세스로 띄운다. 서버와 같은 기계에서 돌더라도 **HTTP 로만** 통신하므로,
+    M9 에 젯슨으로 옮길 때 `RECORDER_BASE` 만 바꾸면 된다.
+    """
+    say("[rec] 녹화 컴포넌트 — 메인 스트림 세그먼트 녹화 + 구간 추출")
+    run(uv("python", "-m", "recorder.main", *extra))
     return 0
 
 
 def task_cams_stop() -> int:
     """`cams` 가 띄운 ffmpeg 를 정리한다.
 
+    `--cams` 로 카메라를 나눠 띄웠으면 PID 파일도 여러 개다. 전부 훑는다 — 하나만
+    지우면 남은 송출이 계속 돌면서 다음 실측을 오염시킨다.
+
     `os.kill(pid, SIGTERM)` 은 Windows 에서 TerminateProcess 로 매핑되므로 양쪽에서
     동작한다. PID 재사용 가능성은 남지만 개발용 도구이므로 여기까지만 한다.
     """
     say("[cams-stop] 가짜 RTSP 송출 종료")
-    if not CAMS_PIDFILE.exists():
-        say(f"      기록된 프로세스가 없다 ({CAMS_PIDFILE.relative_to(ROOT).as_posix()} 없음)")
+    pidfiles = sorted(CAMS_PIDFILE_DIR.glob(CAMS_PIDFILE_GLOB))
+    if not pidfiles:
+        say(f"      기록된 프로세스가 없다 ({CAMS_PIDFILE_DIR.relative_to(ROOT).as_posix()})")
         return 0
 
-    record = json.loads(CAMS_PIDFILE.read_text(encoding="utf-8"))
     stopped = 0
-    for entry in record.get("processes", []):
-        pid = int(entry["pid"])
-        label = entry.get("label", "?")
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except OSError as exc:  # ProcessLookupError · PermissionError 포함
-            say(f"      pid {pid} ({label}) - 이미 없음 ({exc.__class__.__name__})")
-        else:
-            say(f"      pid {pid} ({label}) 종료")
-            stopped += 1
+    for pidfile in pidfiles:
+        record = json.loads(pidfile.read_text(encoding="utf-8"))
+        for entry in record.get("processes", []):
+            pid = int(entry["pid"])
+            label = entry.get("label", "?")
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError as exc:  # ProcessLookupError · PermissionError 포함
+                say(f"      pid {pid} ({label}) - 이미 없음 ({exc.__class__.__name__})")
+            else:
+                say(f"      pid {pid} ({label}) 종료")
+                stopped += 1
+        pidfile.unlink(missing_ok=True)
 
-    CAMS_PIDFILE.unlink()
     say(f"      {stopped}개 종료")
     return 0
 
@@ -373,13 +402,24 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("migrate", help="alembic upgrade head + policies 시드")
     sub.add_parser("types", help="contracts -> front TypeScript 타입 생성 (M5)")
 
-    cams = sub.add_parser("cams", help="가짜 RTSP 2채널 송출")
+    cams = sub.add_parser("cams", help="가짜 RTSP 4경로 송출 (cam1·cam2 × main·sub)")
     cams.add_argument(
-        "video",
-        nargs="*",
-        help="카메라 1·2 에 쓸 영상 파일. 없으면 컬러바 테스트 패턴",
+        "--source",
+        action="append",
+        default=[],
+        metavar="영상파일",
+        help="카메라에 쓸 영상 파일. 두 번 주면 카메라별로 다르게 쓴다. 없으면 testsrc2",
     )
-    sub.add_parser("cams-stop", help="cams 가 띄운 ffmpeg 종료")
+    cams.add_argument(
+        "--cams",
+        default=None,
+        metavar="번호목록",
+        help="송출할 카메라 (기본 1,2). 한 대만 끊어보려면 --cams 1 과 --cams 2 를 따로 띄운다",
+    )
+    sub.add_parser("cams-stop", help="cams 가 띄운 ffmpeg 전부 종료")
+
+    rec = sub.add_parser("rec", help="REC — 녹화 컴포넌트 (API명세서 §4.7)")
+    rec.add_argument("extra", nargs=argparse.REMAINDER, help="recorder 에 그대로 넘길 인자")
 
     sim = sub.add_parser("sim", help="가짜 엣지 실행")
     sim.add_argument("--case", default="no_helmet_resolved", help="sim/cases/ 의 시나리오 이름")
@@ -408,9 +448,11 @@ def dispatch(args: argparse.Namespace) -> int:
         case "types":
             return task_types()
         case "cams":
-            return task_cams(args.video)
+            return task_cams(args.source, args.cams)
         case "cams-stop":
             return task_cams_stop()
+        case "rec":
+            return task_rec(args.extra)
         case "sim":
             return task_sim(args.case, args.extra)
         case "mcu":
