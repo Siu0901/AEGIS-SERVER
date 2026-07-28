@@ -17,7 +17,9 @@ import argparse
 import io
 import sys
 
+from sqlalchemy import delete
 from sqlalchemy.dialects.postgresql import insert
+from sqlmodel import col
 
 from aegis_contracts import Policies
 from server.infra.db import Policy, create_db_engine
@@ -51,6 +53,14 @@ def seed(*, force: bool) -> int:
 
     with create_db_engine().begin() as connection:
         result = connection.execute(statement)
+        stale = connection.execute(
+            delete(Policy).where(col(Policy.key).notin_(list(defaults))).returning(col(Policy.key))
+        ).scalars()
+        for key in sorted(stale):
+            # 명세서에서 사라진 키다(예: v6 에서 경로별로 갈라진 `overlay_buffer_ms`).
+            # 남겨두면 런타임이 읽을 때마다 "계약에 없는 키" 경고가 나고, 사람은 그것을
+            # 소음으로 배우게 된다. 조용히 두지 말고 시드가 정리한다.
+            print(f"  · 계약에 없는 키 삭제: {key}")
 
     return int(result.rowcount)
 

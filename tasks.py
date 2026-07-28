@@ -285,6 +285,8 @@ def task_migrate() -> int:
     run(alembic("upgrade", "head"))
     say("[migrate] policies 기본값 시드")
     run(uv("python", "-m", "scripts.seed_policies"))
+    say("[migrate] zones 개발용 기본값 시드")
+    run(uv("python", "-m", "scripts.seed_zones"))
     return 0
 
 
