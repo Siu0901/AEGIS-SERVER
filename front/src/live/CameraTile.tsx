@@ -73,6 +73,24 @@ export default function CameraTile({ camera, name, recording }: Props) {
     return () => handle.stop()
   }, [live, path])
 
+  // 해상도는 프레임 콜백과 따로 채운다. `requestVideoFrameCallback` 은 창이 실제로
+  // 그려질 때만 불리므로(백그라운드 탭 등), 거기에만 기대면 재생 중인데도 해상도가
+  // 비어 보인다. 해상도는 라이브 여부와 무관한 사실이라 메타데이터에서 바로 읽는다.
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video) return
+    const update = () => {
+      if (video.videoWidth) setSize(`${video.videoWidth}×${video.videoHeight}`)
+    }
+    update()
+    video.addEventListener('loadedmetadata', update)
+    video.addEventListener('resize', update)
+    return () => {
+      video.removeEventListener('loadedmetadata', update)
+      video.removeEventListener('resize', update)
+    }
+  }, [kind])
+
   useEffect(() => {
     const video = videoRef.current
     if (!video || typeof video.requestVideoFrameCallback !== 'function') return
@@ -87,7 +105,6 @@ export default function CameraTile({ camera, name, recording }: Props) {
       // 타임코드와 이 값의 차이가 곧 영상 경로 지연이다.
       const wall = performance.timeOrigin + metadata.expectedDisplayTime
       setDisplayAt(formatUtc(wall))
-      setSize(`${video.videoWidth}×${video.videoHeight}`)
       handle = video.requestVideoFrameCallback(onFrame)
     }
 

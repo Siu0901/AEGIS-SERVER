@@ -31,6 +31,8 @@ class RecorderService:
             cam_id: CameraRecorder(cam_id, settings, clock) for cam_id in settings.rec_cam_ids
         }
         self._tasks: list[asyncio.Task[None]] = []
+        self._snapshot: dict[int, list[Segment]] | None = None
+        """스윕이 남겨두는 카메라별 세그먼트 목록. `GET /status` 가 이걸 읽는다."""
 
     @property
     def settings(self) -> RecSettings:
@@ -70,13 +72,25 @@ class RecorderService:
             try:
                 for recorder in self._recorders.values():
                     recorder.ensure_day_dirs()
-                self.sweep()
+                # 디스크를 훑는 작업이라 스레드로 보낸다. 여기서 이벤트 루프를 막으면
+                # 같은 루프에서 도는 녹화 감독 코루틴이 그동안 함께 멈춘다.
+                await asyncio.to_thread(self._sweep_and_snapshot)
             except asyncio.CancelledError:
                 raise
             except Exception:
                 # 스윕이 한 번 실패했다고 루프를 죽이면 그 뒤로 디스크가 조용히 찬다.
                 log.exception("보존 스윕 실패 — 다음 주기에 다시 시도한다")
             await asyncio.sleep(self._settings.rec_sweep_seconds)
+
+    def _sweep_and_snapshot(self) -> retention.RetentionPlan:
+        """보존 정책을 적용하고, 그 직후 상태를 스냅샷으로 남긴다.
+
+        스윕은 어차피 디스크를 훑는다. 그때 만든 목록을 버리지 않고 `GET /status` 가
+        쓰게 두면 상태 조회가 공짜가 된다.
+        """
+        plan = self.sweep()
+        self._snapshot = self._scan()
+        return plan
 
     def sweep(self) -> retention.RetentionPlan:
         """보존 정책 1회 적용. 테스트와 스윕 루프가 함께 쓴다."""
@@ -90,12 +104,31 @@ class RecorderService:
 
     # -- 상태 --------------------------------------------------------------
 
-    def status(self) -> RecStatusResponse:
-        """`GET /status` (API명세서 §4.7)."""
-        per_cam: dict[int, list[Segment]] = {
+    async def status(self) -> RecStatusResponse:
+        """`GET /status` (API명세서 §4.7).
+
+        **요청마다 디스크를 훑지 않는다.** 스윕이 남겨둔 스냅샷을 쓴다.
+        서버는 이 API 를 10초마다 부르고 대시보드를 열 때도 부르는데, 세그먼트가
+        12만 개(7일 × 2채널)까지 쌓이면 매번 훑는 비용이 응답 시간을 넘어선다.
+        실제로 여기서 ReadTimeout 이 나 대시보드의 저장소 칸이 비어 있었다.
+
+        스냅샷이 아직 없으면(기동 직후) 그때만 한 번 만든다. 그 스캔도 별도 스레드로
+        보낸다 — 이벤트 루프를 막으면 그 사이 녹화 감독 코루틴이 함께 멈춘다.
+        """
+        snapshot = self._snapshot
+        if snapshot is None:
+            snapshot = await asyncio.to_thread(self._scan)
+            self._snapshot = snapshot
+        return self._build_status(snapshot)
+
+    def _scan(self) -> dict[int, list[Segment]]:
+        """디스크를 훑어 카메라별 세그먼트 목록을 만든다. 블로킹."""
+        return {
             cam_id: scan_segments(self._settings.rec_media_root, cam_id)
             for cam_id in self._recorders
         }
+
+    def _build_status(self, per_cam: dict[int, list[Segment]]) -> RecStatusResponse:
         cameras: list[RecCameraStatus] = []
         for cam_id, recorder in self._recorders.items():
             last_at = _last_start(per_cam[cam_id])

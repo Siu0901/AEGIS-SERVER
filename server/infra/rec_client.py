@@ -60,7 +60,10 @@ class RecClient:
             response.raise_for_status()
             payload = response.json()
         except (httpx2.HTTPError, ValueError) as exc:
-            msg = f"REC 에 닿지 못했다 ({self._base_url}/status): {exc}"
+            # 예외 클래스명을 반드시 함께 남긴다. ConnectError 처럼 str() 이 비어 있는
+            # 예외가 있어서, 메시지만 찍으면 "REC 에 닿지 못했다: " 로 끝나 원인이
+            # 사라진다. 실제로 그 로그 한 줄 때문에 IPv6 문제를 한참 못 찾았다.
+            msg = f"REC 에 닿지 못했다 ({self._base_url}/status): {type(exc).__name__}: {exc}"
             raise RecUnavailableError(msg) from exc
         try:
             return RecStatusResponse.model_validate(payload)

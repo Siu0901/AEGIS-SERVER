@@ -87,7 +87,9 @@ class MediaMtxClient:
             response.raise_for_status()
             payload = response.json()
         except (httpx2.HTTPError, ValueError) as exc:
-            msg = f"mediamtx 제어 API 실패 ({self._base_url}{path}): {exc}"
+            # 클래스명을 함께 남긴다 — ConnectError 는 str() 이 비어 있어서 메시지만
+            # 찍으면 무엇이 잘못됐는지가 통째로 사라진다.
+            msg = f"mediamtx 제어 API 실패 ({self._base_url}{path}): {type(exc).__name__}: {exc}"
             raise MediaMtxUnavailableError(msg) from exc
         if not isinstance(payload, dict):
             msg = f"mediamtx 응답이 객체가 아니다: {type(payload).__name__}"

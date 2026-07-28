@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import sys
 
 from sqlalchemy.dialects.postgresql import insert
@@ -21,9 +22,21 @@ from sqlalchemy.dialects.postgresql import insert
 from aegis_contracts import Policies
 from server.infra.db import Policy, create_db_engine
 
+# 파이프로 넘어갈 때 파이썬은 콘솔 코드페이지가 아니라 로케일 인코딩(한글 Windows 는
+# cp949)을 쓴다. `tasks.py migrate` 가 이 모듈을 자식으로 돌리므로 출력이 파이프가 되고,
+# 그러면 '—' 하나에 UnicodeEncodeError 로 죽어서 **시드가 끝났는데도 실패로 보고된다.**
+# tasks.py · deploy/fake_cams.py 와 같은 처리를 여기에도 둔다.
+if isinstance(sys.stdout, io.TextIOWrapper):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 
 def seed(*, force: bool) -> int:
-    """시드를 적용하고 실제로 반영된 키 개수를 돌려준다."""
+    """시드를 적용하고 실제로 반영된 키 개수를 돌려준다.
+
+    드라이버가 영향 행 수를 모르면 `rowcount` 가 `-1` 이다. 그대로 출력하면
+    `-1/25 키 신규` 처럼 **사실이 아닌 숫자**가 나온다. 모를 때는 모른다고 하려고
+    `-1` 을 그대로 올려보내고, 표시하는 쪽에서 문구를 바꾼다.
+    """
     defaults = Policies().model_dump(mode="json")
     rows = [{"key": key, "value": value} for key, value in defaults.items()]
 
@@ -39,7 +52,7 @@ def seed(*, force: bool) -> int:
     with create_db_engine().begin() as connection:
         result = connection.execute(statement)
 
-    return int(result.rowcount or 0)
+    return int(result.rowcount)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -54,7 +67,8 @@ def main(argv: list[str] | None = None) -> int:
     affected = seed(force=args.force)
     total = len(Policies.model_fields)
     mode = "덮어씀" if args.force else "신규"
-    print(f"policies 시드 완료 — {affected}/{total} 키 {mode}")
+    count = f"{affected}/{total} 키" if affected >= 0 else f"{total} 키 중 일부(개수 미보고)"
+    print(f"policies 시드 완료 — {count} {mode}")
     return 0
 
 

@@ -26,6 +26,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import time
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -287,21 +288,81 @@ def task_migrate() -> int:
     return 0
 
 
+#: `dev` 가 한 터미널에서 함께 띄우는 것들.
+#:
+#: 카메라를 1·2 로 나눠 띄우는 이유: 한 대만 껐다 켜서 재연결을 확인하려면 프로세스가
+#: 나뉘어 있어야 한다. 하나로 묶으면 cam2 를 끄는 순간 cam1 까지 같이 내려간다.
+DEV_SERVICES: tuple[tuple[str, list[str]], ...] = (
+    ("cam1", [sys.executable, str(DEPLOY / "fake_cams.py"), "--cams", "1"]),
+    ("cam2", [sys.executable, str(DEPLOY / "fake_cams.py"), "--cams", "2"]),
+    ("rec", ["uv", "run", "python", "-m", "recorder.main"]),
+    ("server", [*uv("uvicorn", "server.app.main:app"), "--host", "127.0.0.1", "--port", "8000"]),
+    ("front", ["npm", "--prefix", str(FRONT), "run", "dev"]),
+)  # fmt: skip
+
+
 def task_dev() -> int:
+    """개발 스택 전체를 한 터미널에서 띄운다. Ctrl+C 로 전부 내린다.
+
+    따로따로 띄우면 터미널이 다섯 개 필요하고, 그중 하나가 조용히 죽어도 알아채기
+    어렵다. 실제로 카메라만 죽은 채 화면을 보면 "전부 끊김"으로 보이는데 원인이
+    어디인지 바로 드러나지 않는다.
+    """
     say("[dev] docker compose up -d")
     run(["docker", "compose", "up", "-d"])
     say("      postgres/redis/mosquitto/mediamtx 기동")
     task_migrate()
+
     say()
-    say("[dev] 다음은 각각 별도 터미널에서 띄운다:")
-    say("      카메라 uv run tasks.py cams")
-    say("      REC    uv run tasks.py rec")
-    say("      서버   uv run uvicorn server.app.main:app --reload")
-    say("      프론트 npm --prefix front run dev")
+    say("[dev] 프로세스 기동")
+    processes: list[tuple[str, subprocess.Popen[bytes]]] = []
+    try:
+        for name, argv in DEV_SERVICES:
+            exe = executable(argv[0])
+            say(f"      {name:<7} {shell_repr(argv)}")
+            processes.append((name, subprocess.Popen([exe, *argv[1:]], cwd=str(ROOT))))
+    except TaskError:
+        _stop_dev(processes)
+        raise
+
     say()
-    say("      REC 을 띄우지 않으면 GET /system/status 의 storage 가 null 이 되고")
-    say("      대시보드에 저장소 down 이 뜬다. 그건 버그가 아니라 관측 결과다.")
-    return 0
+    say("[dev] 실시간 관제  http://localhost:5173/live")
+    say("      API 문서     http://localhost:8000/docs")
+    say("      Ctrl+C 로 전부 내린다.")
+    say()
+
+    exit_code = 0
+    try:
+        while True:
+            dead = [(name, proc) for name, proc in processes if proc.poll() is not None]
+            if dead:
+                # 하나가 죽으면 전부 내린다. 카메라만 죽은 스택은 화면상 "전부 끊김"과
+                # 구분되지 않아서, 반쯤 살아 있는 상태로 두는 편이 더 헷갈린다.
+                for name, proc in dead:
+                    say(f"[dev] {name} 종료 (코드 {proc.returncode}) - 스택을 내린다")
+                exit_code = 1
+                break
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        say()
+        say("[dev] 종료 중...")
+    finally:
+        _stop_dev(processes)
+    return exit_code
+
+
+def _stop_dev(processes: Sequence[tuple[str, subprocess.Popen[bytes]]]) -> None:
+    for _, proc in processes:
+        if proc.poll() is None:
+            proc.terminate()
+    for name, proc in processes:
+        try:
+            proc.wait(timeout=8)
+        except subprocess.TimeoutExpired:
+            say(f"      {name} 응답 없음 - 강제 종료")
+            proc.kill()
+    # 감독자가 강제 종료되면 ffmpeg 손자 프로세스가 남을 수 있다.
+    task_cams_stop()
 
 
 def task_cams(sources: Sequence[str], cams: str | None) -> int:

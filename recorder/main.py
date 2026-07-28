@@ -80,9 +80,9 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
 
     @application.get("/status", response_model=RecStatusResponse)
-    def status() -> RecStatusResponse:
+    async def status() -> RecStatusResponse:
         """카메라별 녹화 상태와 저장소. 서버가 §4.6 `storage` 에 실어 나른다."""
-        return service.status()
+        return await service.status()
 
     @application.post("/clips", response_model=ClipResponse)
     async def create_clip(request: ClipRequest) -> ClipResponse:
