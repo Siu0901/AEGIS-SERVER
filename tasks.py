@@ -387,17 +387,32 @@ def task_rec(extra: Sequence[str]) -> int:
     return 0
 
 
-def task_cams_stop() -> int:
+def task_cams_stop(cams: str | None = None) -> int:
     """`cams` 가 띄운 ffmpeg 를 정리한다.
 
-    `--cams` 로 카메라를 나눠 띄웠으면 PID 파일도 여러 개다. 전부 훑는다 — 하나만
-    지우면 남은 송출이 계속 돌면서 다음 실측을 오염시킨다.
+    `--cams 2` 를 주면 **그 카메라만** 내린다. 재연결 확인(카메라 한 대만 끊고
+    복구되는지)을 하려면 나머지는 살아 있어야 하는데, PID 를 직접 찾아 죽이게 하면
+    실수로 다른 카메라까지 내리기 쉽다.
+
+    인자가 없으면 전부 내린다. `--cams` 로 나눠 띄웠으면 PID 파일이 여러 개이므로
+    전부 훑는다 — 하나만 지우면 남은 송출이 계속 돌면서 다음 실측을 오염시킨다.
 
     `os.kill(pid, SIGTERM)` 은 Windows 에서 TerminateProcess 로 매핑되므로 양쪽에서
     동작한다. PID 재사용 가능성은 남지만 개발용 도구이므로 여기까지만 한다.
     """
-    say("[cams-stop] 가짜 RTSP 송출 종료")
-    pidfiles = sorted(CAMS_PIDFILE_DIR.glob(CAMS_PIDFILE_GLOB))
+    if cams:
+        say(f"[cams-stop] 카메라 {cams} 송출만 종료")
+        wanted = [part.strip() for part in cams.split(",") if part.strip()]
+        pidfiles = [CAMS_PIDFILE_DIR / f"fake_cams_{'-'.join(wanted)}.json"]
+        pidfiles = [path for path in pidfiles if path.exists()]
+        if not pidfiles:
+            say(f"      카메라 {cams} 로 띄운 송출이 없다.")
+            say("      `uv run tasks.py dev` 는 카메라를 1·2 로 나눠 띄우므로")
+            say("      `uv run tasks.py cams-stop --cams 2` 처럼 한 대씩 지정한다.")
+            return 0
+    else:
+        say("[cams-stop] 가짜 RTSP 송출 전부 종료")
+        pidfiles = sorted(CAMS_PIDFILE_DIR.glob(CAMS_PIDFILE_GLOB))
     if not pidfiles:
         say(f"      기록된 프로세스가 없다 ({CAMS_PIDFILE_DIR.relative_to(ROOT).as_posix()})")
         return 0
@@ -477,7 +492,13 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="번호목록",
         help="송출할 카메라 (기본 1,2). 한 대만 끊어보려면 --cams 1 과 --cams 2 를 따로 띄운다",
     )
-    sub.add_parser("cams-stop", help="cams 가 띄운 ffmpeg 전부 종료")
+    cams_stop = sub.add_parser("cams-stop", help="cams 가 띄운 ffmpeg 종료")
+    cams_stop.add_argument(
+        "--cams",
+        default=None,
+        metavar="번호목록",
+        help="이 카메라만 종료 (예: --cams 2). 없으면 전부 종료",
+    )
 
     rec = sub.add_parser("rec", help="REC — 녹화 컴포넌트 (API명세서 §4.7)")
     rec.add_argument("extra", nargs=argparse.REMAINDER, help="recorder 에 그대로 넘길 인자")
@@ -511,7 +532,7 @@ def dispatch(args: argparse.Namespace) -> int:
         case "cams":
             return task_cams(args.source, args.cams)
         case "cams-stop":
-            return task_cams_stop()
+            return task_cams_stop(args.cams)
         case "rec":
             return task_rec(args.extra)
         case "sim":
