@@ -20,7 +20,7 @@
 | **M1** | 인프라와 통로 | 스트리밍·녹화 · DB 리포지토리 구현 · `/ws/edge`·`/ws/dashboard` · 시스템 상태 |
 | **M2** | 엣지 인터페이스와 이벤트 생성 | `/ws/edge` · 후보 병합(FN-EVT-01) · `overlay` · 오버레이 정합 · sim 시나리오 |
 | **M3** | 상태머신과 지표 | 확정 · 해소 · 쿨다운 · 소실 유예 · **재결합** · 수동 정정 · 반복 위반 · **시정률/판정 불가율** |
-| **M4** | 경고와 클립 | 음성 방송 · 경광등(MQTT) · 긴급 알림 · 수동 방송 · 클립 예약 추출 |
+| **M4** | 경고와 클립 | 음성 방송 · 경광등(MQTT) · 긴급 알림 · 수동 방송 · 클립 예약 추출 · 클라우드 격리 |
 | **M5** | 관제 화면 P0 | 개요 · 실시간 관제(오버레이 정합) · 이벤트 · `uv run tasks.py types` |
 | **M6** | 설정과 비전 로직 | 캘리브레이션 · 구역 편집 · 음원 매핑 · 정책 · `packages/vision` 순수 계산 |
 | **M7** | 지능 기능 | 임베딩 · 장면 검색 · LLM 분석 · 규정 매핑 · 챗봇 · 브리핑 |
@@ -81,20 +81,24 @@
 
 | FN-ID | 기능명 | 우선 | 계층 | 명세 위치 | 마일스톤 | 코드 위치(예정) | 상태 |
 |---|---|---|---|---|---|---|---|
-| FN-ALM-01 | 경고 발동 (사전 녹음 음성 방송) | P0 | SRV | 기능 §4.3 | M4 | `server/infra/audio/` · `assets/` | ⬜ |
-| FN-ALM-02 | 경광등 · 부저 제어 (MQTT) | P0 | SRV/MCU | 기능 §4.3 · API §3 | M4 | `server/infra/mqtt/` · `sim/mcu_sim/` | ⬜ |
-| FN-ALM-03 | 긴급 알림 (쓰러짐 · 관리자 확인) | P1 | SRV/WEB | 기능 §4.3 | M4 | `server/app/ws_dashboard.py` · `front/src/pages/LivePage.tsx` | ⬜ |
-| FN-ALM-04 | 수동 방송 송출 | P1 | WEB/SRV | 기능 §4.3 · API §4.5 | M4 | `server/app/routes/alerts.py` | ⬜ |
-| FN-ALM-05 | 경고 일시중지 (정비 작업 등) | P1 | WEB/SRV | 기능 §4.3 · API §4.5 | M4 | `server/app/routes/alerts.py` | ⬜ |
+| FN-ALM-01 | 경고 발동 (사전 녹음 음성 방송) | P0 | SRV | 기능 §4.3 | M4 | `server/infra/audio/` · `server/app/alert_service.py` · `assets/audio/` | ✅ |
+| FN-ALM-02 | 경광등 · 부저 제어 (MQTT) | P0 | SRV/MCU | 기능 §4.3 · API §3 | M4 | `server/infra/mqtt/` · `server/domain/mcu_state.py` · `sim/mcu_sim/` | ✅ |
+| FN-ALM-03 | 긴급 알림 (쓰러짐 · 관리자 확인) | P1 | SRV/WEB | 기능 §4.3 | M4 (서버) / M5 (화면) | `server/domain/event_machine.py`(`SEVERITY`) · `front/src/pages/LivePage.tsx` | 🟡 (화면만 남음) |
+| FN-ALM-04 | 수동 방송 송출 | P1 | WEB/SRV | 기능 §4.3 · API §4.5 | M4 (API) / M5 (화면) | `server/app/routes/alerts.py` | 🟡 (화면만 남음) |
+| FN-ALM-05 | 경고 일시중지 (정비 작업 등) | P1 | WEB/SRV | 기능 §4.3 · API §4.5 | M4 (API) / M5 (화면) | `server/app/routes/alerts.py` · `alert_service.py` | 🟡 (화면만 남음) |
 
 > **경고 방송은 TTS가 아니다.** 위반 유형별 사전 녹음 wav를 재생한다(생성 지연 제거).
-> 확정 → 방송 시작 **1초 이내**가 요구사항이다.
+> 확정 → 방송 시작 **1초 이내**가 요구사항이며, **실측 중앙값 43.8ms**다(아래 M4 실측표).
 > **이상 탐지(FN-AI-04)는 경고 방송을 발동하지 않는다.**
 >
-> **M3 에서 발동 지점은 이미 만들어져 있다.** 상태머신이 `alerted` · `re_alerted` 로
-> 전이할 때 `alerted_at` · `alert_count` 를 기록하고 §5.2 메시지를 발행한다. M4 가
-> 붙이는 것은 그 자리에서 **소리를 내고 MQTT 를 쏘는 부분**이며, 시정률의 기준점
-> (`alerted_at`)은 이미 확정되어 있어 나중에 흔들리지 않는다.
+> **상태머신은 소리를 내지 않는다.** `_to_alerted` · `_to_re_alerted` 가 `Effect.alert`
+> 에 `AlertIntent`(순수 판단)를 실어 보내고, 집행은 `server/app/alert_service.py` 가 한다.
+> 상태 문자열(`status == "alerted"`)로 되짚지 않는 이유는 **재시작 복구처럼 상태만 다시
+> 쓰는 경로**에서도 방송이 나가기 때문이다 — 지나간 위반에 뒤늦게 스피커가 울린다.
+>
+> **방송과 경광등은 서로를 막지 않는다.** 스피커가 죽어도 경광등은 켜지고 그 반대도
+> 같다. 소음이 심한 구역에서는 경광등이 유일한 경보이므로, 한쪽 실패로 다른 쪽을
+> 건너뛰면 하나 고장이 둘 고장이 된다.
 
 ---
 
@@ -104,7 +108,7 @@
 |---|---|---|---|---|---|---|---|
 | FN-REC-01 | 라이브 재스트리밍 (1080p 메인) | P0 | SRV | 기능 §4.4 | M1 | `server/infra/stream/` · `deploy/mediamtx.yml` · `front/src/live/` | ✅ |
 | FN-REC-02 | 7일 링버퍼 녹화 | P0 | REC | 기능 §4.4 · API §4.7 | M1 | `recorder/capture.py` · `recorder/retention.py` | ✅ |
-| FN-REC-03 | 이벤트 클립 · 키프레임 추출 | P0 | REC/SRV | 기능 §4.4 · API §4.7 | M1 (REC API) / M4 (예약 실행) | `recorder/clips.py` · `server/infra/clip/` | 🟡 |
+| FN-REC-03 | 이벤트 클립 · 키프레임 추출 | P0 | REC/SRV | 기능 §4.4 · API §4.7 | M1 (REC API) / M4 (예약 실행) | `recorder/clips.py` · `server/infra/clip/service.py` | ✅ |
 | FN-REC-04 | 이벤트 DB 저장 | P0 | SRV | 기능 §4.4 · §6 | M2 | `server/infra/db/repository.py` · `server/app/routes/events.py` | ✅ |
 | FN-REC-05 | 저장 용량 관리 | P1 | REC | 기능 §4.4 | M1 | `recorder/retention.py` | ✅ |
 
@@ -118,9 +122,14 @@
 > 없는 것이 같아 보이는데 대응이 다르다. **세그먼트 경계로 클립이 최대 10초 길어지는
 > 것은 정상 동작이며 `partial` 이 아니다.**
 >
-> **FN-REC-03 이 🟡 인 이유**: `POST /clips` · `GET /keyframe`(추출 API)는 M1 에서 동작하지만,
-> `confirmed_at + clip_post_roll_s + margin` 예약 실행과 `clip_status` 관리는 M4 다.
-> 예약을 걸 자리(확정 시각)는 M3 상태머신이 이미 만들어 두었다.
+> **예약 큐를 메모리에 두지 않았다.** 예약의 유일한 표현은 DB 의 `clip_status = pending`
+> 이고 실행 시각은 `confirmed_at + clip_post_roll_s + margin` 으로 계산된다. 그래서
+> **서버가 죽어도 예약이 남고, 재시작 뒤 첫 조회가 곧 복구다** — 복구 코드가 따로 없다.
+> `sim/cases/clip_recovery.yaml` 이 이것을 잠근다.
+>
+> **REC 에 닿지 못한 것은 잡의 실패가 아니다.** `pending` 으로 두어 다음 주기에 다시
+> 시도한다. `failed` 로 굳히면 REC 이 살아나도 아무도 다시 부르지 않는다. 반면
+> `partial` · `not_found` 는 REC 이 **정상 동작한 결과**이므로 `failed` + 사유 기록이다.
 
 > **클립은 확정 즉시 추출하지 않는다.** 확정 순간에는 사후 구간이 아직 녹화되지 않았다.
 > `confirmed_at + clip_post_roll_s + margin(2초)` 시점에 예약 실행하고, 그동안
@@ -154,7 +163,7 @@
 | FN-ID | 화면 | 우선 | 계층 | 명세 위치 | 마일스톤 | 코드 위치(예정) | 상태 |
 |---|---|---|---|---|---|---|---|
 | FN-UI-01 | 개요 — 핵심 지표 · 추세 · 분포 · 최근 이벤트 · 시스템 상태 | P0 | WEB | 기능 §4.6 | M5 | `front/src/pages/OverviewPage.tsx` | ⬜ |
-| FN-UI-02 | 실시간 관제 — 2채널 라이브 + 오버레이 · **단독 확대 보기** · 수동 방송 | P0 | WEB | 기능 §4.6 · API §5 | M1 (라이브·상태·확대) / M2 (오버레이) / M3 (경고 상태 표시) / M4 (수동 방송) | `front/src/pages/LivePage.tsx` · `front/src/live/` | 🟡 (수동 방송만 남음) |
+| FN-UI-02 | 실시간 관제 — 2채널 라이브 + 오버레이 · **단독 확대 보기** · 수동 방송 | P0 | WEB | 기능 §4.6 · API §5 | M1 (라이브·상태·확대) / M2 (오버레이) / M3 (경고 상태 표시) / M5 (수동 방송 버튼) | `front/src/pages/LivePage.tsx` · `front/src/live/` | 🟡 (수동 방송만 남음) |
 | FN-UI-03 | 이벤트 — 목록·필터 + 상세(클립·LLM·규정·타임라인) | P0 | WEB | 기능 §4.6 · API §4.1 | M5 | `front/src/pages/EventsPage.tsx` | ⬜ |
 | FN-UI-04 | 영상 검색 — 자연어 질의 · 유사도순 결과 | P1 | WEB | 기능 §4.6 · API §4.3 | M7 | `front/src/pages/SearchPage.tsx` | ⬜ |
 | FN-UI-05 | 분석 · 보고서 — 시정률 추이 · 반복 순위 · 히트맵 · 이상 탐지 | P1 | WEB | 기능 §4.6 · API §4.2 | M8 | `front/src/pages/AnalysisPage.tsx` | ⬜ |
@@ -183,7 +192,7 @@
 |---|---|---|---|---|---|---|---|
 | FN-CFG-01 | 카메라 캘리브레이션 (지면 4점 → 호모그래피) | P0 | SRV/WEB | 기능 §4.7 · API §4.5 | M6 | `packages/vision/homography.py` · `server/app/routes/cameras.py` | ⬜ |
 | FN-CFG-02 | 금지구역 편집 (폴리곤 → 지면 좌표) | P0 | SRV/WEB | 기능 §4.7 · API §4.5 | M6 | `server/app/routes/zones.py` · `front/src/pages/SettingsPage.tsx` | ⬜ |
-| FN-CFG-03 | 경고 음원 매핑 | P0 | SRV/WEB | 기능 §4.7 | M6 | `server/app/routes/alerts.py` · `assets/` | ⬜ |
+| FN-CFG-03 | 경고 음원 매핑 | P0 | SRV/WEB | 기능 §4.7 | M4 (저장소·조회) / M6 (화면) | `server/infra/db/models.py`(`alert_sounds`) · `server/infra/audio/library.py` · `scripts/seed_sounds.py` | 🟡 (화면만 남음) |
 | FN-CFG-04 | 임계값 정책 관리 | P1 | SRV/WEB | 기능 §4.7 · API §4.5 | M6 | `server/app/routes/policies.py` | ⬜ |
 | FN-CFG-05 | 위험 반경 설정 (클래스별) | P1 | SRV/WEB | 기능 §4.7 · API §4.5 | M6 | `server/app/routes/vehicle_classes.py` | ⬜ |
 
@@ -195,9 +204,9 @@
 
 | FN-ID | 기능명 | 우선 | 계층 | 명세 위치 | 마일스톤 | 코드 위치(예정) | 상태 |
 |---|---|---|---|---|---|---|---|
-| FN-SYS-01 | 구성요소 상태 감시 (엣지·카메라·MCU·클라우드·저장소) | P0 | SRV | 기능 §4.8 · API §4.6 | M1 (카메라·저장소) / M2 (엣지) / M3 (MCU) / M7 (클라우드) | `server/app/routes/system.py` · `server/domain/edge_state.py` · `server/infra/stream/watcher.py` | 🟡 (MCU·클라우드만 남음) |
+| FN-SYS-01 | 구성요소 상태 감시 (엣지·카메라·MCU·클라우드·저장소) | P0 | SRV | 기능 §4.8 · API §4.6 | M1 (카메라·저장소) / M2 (엣지) / M4 (MCU·클라우드) | `server/app/routes/system.py` · `server/domain/edge_state.py` · `mcu_state.py` · `cloud_state.py` | ✅ |
 | FN-SYS-02 | 시각 동기화 (NTP · 클립 정합의 전제) | P0 | SRV/EDGE | 기능 §4.8 | M1 (서버) / M2 (엣지 오프셋) | `server/infra/timesync.py` · `edge/` | 🟡 |
-| FN-SYS-03 | 클라우드 장애 격리 | P1 | SRV | 기능 §4.8 | M7 | `server/ai/adapter.py` | ⬜ |
+| FN-SYS-03 | 클라우드 장애 격리 | P1 | SRV | 기능 §4.8 | M4 (격리·표시) / M7 (실제 어댑터) | `server/domain/cloud_state.py` · `server/tests/test_cloud_isolation.py` | 🟡 (어댑터만 남음) |
 | FN-SYS-04 | 지표 집계 (시정률 · 평균 시정 시간 · 판정 불가율 · 분포) | P0 | SRV | 기능 §4.8 · API §4.2·§6.7 | M3 (summary) / M8 (분포·시계열) | `server/domain/metrics.py` · `server/app/routes/metrics.py` | 🟡 |
 | FN-SYS-05 | 판정 불가 집계 (`expired` 별도 집계) | P0 | SRV | 기능 §4.8 · API §6.7 | M3 | `server/domain/metrics.py` | ✅ |
 | FN-SYS-06 | 엣지 메시지 거부 집계 (로깅 · 카운터 · 노출) | P0 | SRV | 기능 §4.8 · API §2.2 | M2 | `server/app/ws_edge.py` · `server/domain/edge_state.py` · `server/app/routes/system.py` | ✅ |
@@ -488,6 +497,100 @@ FN-ID가 붙지 않는 기반 작업이다. 전부 완료되었고 `uv run tasks
 
 ---
 
+## M4 산출물 (경고와 클립)
+
+**이 단계에서 P0 루프가 닫힌다.** 감지 → 확정 → **경고(소리·빛)** → 시정 → 숫자.
+M3 까지는 "경고를 발동했다"는 기록만 있었고, 여기서 그 자리에 실제 장치가 붙었다.
+
+| 항목 | 위치 | 근거 | 상태 |
+|---|---|---|---|
+| 경고 의도(`AlertIntent`) — 상태머신이 내는 순수 판단 | `server/domain/alerts.py` · `event_machine.py` | FN-ALM-01·02 | ✅ |
+| 경고 집행 — wav 재생 · MQTT 발행 · 일시중지 · 실측 | `server/app/alert_service.py` | 기능 §4.3 | ✅ |
+| 재생 백엔드 (winsound / ffplay·aplay·paplay / none) | `server/infra/audio/player.py` | FN-ALM-01 | ✅ |
+| 음원 매핑 (**DB 에서 읽는다** · 경로 탈출 차단) | `server/infra/audio/library.py` · `alert_sounds` 테이블 | FN-CFG-03 · 절대규칙 6 | ✅ |
+| 무음 wav 자동 생성 + 매핑 시드 | `scripts/seed_sounds.py` · `assets/audio/` | FN-ALM-01 | ✅ |
+| MQTT 클라이언트 (`aegis/alert` 발행 · `device/status` 구독) | `server/infra/mqtt/client.py` | API §3 | ✅ |
+| MCU 상태 (신선도 판정 · `GET /system/status` 의 `mcu` 절) | `server/domain/mcu_state.py` | §4.6 · FN-SYS-01 | ✅ |
+| 클라우드 가용성 (분석만 중단 · 안전 루프 무관) | `server/domain/cloud_state.py` | FN-SYS-03 | ✅ |
+| `POST /alerts/manual` · `/alerts/mute` (204) | `server/app/routes/alerts.py` | §4.5 · FN-ALM-04·05 | ✅ |
+| 클립 예약 추출 (예약 큐 = DB · 재시작 복구) | `server/infra/clip/service.py` | FN-REC-03 · 기능 §4.4 | ✅ |
+| REC 클라이언트 확장 (`GET /keyframe` · `POST /clips` · 다운로드) | `server/infra/rec_client.py` | §4.7 | ✅ |
+| `GET /events/{id}/clip` · `/media/*` 정적 제공 | `server/app/routes/events.py` · `main.py` | §4.1 · §5 경로 규약 | ✅ |
+| 마이그레이션 `0004`(`dropped_at`) · `0005`(`alert_sounds`) | `server/infra/db/migrations/` | §6 | ✅ |
+| 시나리오 11종 (경고·클립 기대값 포함) + `clip_recovery` · `alert_muted` | `sim/cases/` · `sim/case_check.py` | — | ✅ |
+| 확정 → 방송 지연 실측 도구 | `scripts/measure_alert_latency.py` | FN-ALM-01 | ✅ |
+
+**실측치** (2026-07-30, 개발 노트북 · Windows · winsound · PostgreSQL 실물)
+
+| 항목 | 값 |
+|---|---|
+| **확정 → 방송 시작** (중앙값) | **43.8 ms** (평균 48.6 · p95 77.6 · 최대 87.6 · 30/30회) |
+| 같은 구간, 저장소를 메모리로 두면 | 중앙값 3.4 ms — 차이 약 40ms 가 **DB 쓰기 몫**이다 |
+| 요구 (FN-ALM-01) | 1000 ms — **약 23배 여유** |
+| 키프레임 1장 추출 (REC · ffmpeg) | **약 5초** ★ 아래 「뒤로 넘긴 이유」 |
+| 클립 20초 추출 + 전송 + 저장 | **14.9초** (1080p 15fps 2.5Mbps · 6.6MB) |
+| 실제 클립 검증 (`ffprobe`) | h264 1920×1080 15fps · **21.07초** (요청 20초 · 세그먼트 경계로 +1.07초) |
+| MQTT 왕복 (발행 → `mcu_sim` 수신) | 4종 전량 수신 · `fall` 만 level 3(연속 부저) |
+
+> **확정 → 방송을 재는 기준점은 `candidate.ts`(관측 시각)다.** 서버 수신 시각을 쓰면
+> 네트워크 지연이 예산에서 빠져 실제보다 좋아 보인다. `uv run python -m
+> scripts.measure_alert_latency --store db` 로 다시 잴 수 있다.
+>
+> **키프레임 추출을 뒤로 넘긴 이유** — 실측에서 한 장에 약 5초가 걸렸다(ffmpeg 이
+> 세그먼트를 열고 되감아 디코딩한다). 확정 처리 안에서 기다리면 그동안 같은 루프의
+> `/ws/edge` 수신이 멈춰 **10초치 프레임이 밀리고, 밀린 만큼 다른 이벤트의 타이머가
+> 늦게 흐른다.** 경고는 이보다 먼저 나가므로 1초 예산과는 무관하지만, 그다음 관측들이
+> 막히는 것은 시정률에 직접 영향을 준다. 그래서 `asyncio.create_task` 로 넘기고
+> 종료 시에만 기다린다(`ClipService.wait_idle`).
+
+**시나리오 11종** (`uv run tasks.py cases`) — M4 가 추가한 둘과 기존 아홉의 경고·클립 기대값
+
+| 시나리오 | 무엇을 잠그는가 | 경고 | 클립 |
+|---|---|---|---|
+| `normal_resolve` | 확정과 같은 순간에 방송 1회 · 예약 → ready | 1건 (level 2) | `ready` |
+| `no_resolve` | 쿨다운 30초 뒤 재경고는 `repeat: true` 로 나간다 | 2건 (2번째 repeat) | `ready` |
+| `fall_excluded` | **`fall` 은 항상 level 3**, 안전모는 2 | 2건 (3 · 2) | — |
+| `dropped` | 확정 전 소멸 — 방송도 예약도 없다 | **0건** | `null` |
+| **`alert_muted`** (신규) | 일시중지 중 **장치만** 조용하고 이벤트·지표는 그대로 | **0건** | `ready` |
+| **`clip_recovery`** (신규) | `pending` 중 서버 재시작 → 잡이 복구되어 `ready` | 1건 | **`ready`** |
+
+> `expect.alerts` 는 **전량 목록**이다. 기대보다 많이 나가도 실패한다 — 중복 경고는
+> 누락만큼이나 현장에서 문제이고, 그것을 막는 것이 쿨다운(FN-EVT-04)이다.
+>
+> `clip_recovery` 는 `expect.restarts: 1` 로 **재시작이 실제로 일어났는지**까지 잠근다.
+> `restart_at` 오타 하나로 평범한 시나리오가 되어 조용히 통과하는 것을 막는다.
+
+**설계 판단 (M4 에서 정한 것)**
+
+| 판단 | 이유 |
+|---|---|
+| 경고는 `Effect.alert`(순수 판단)로 나가고 집행은 앱 계층이 한다 | 상태 문자열로 되짚으면 **재시작 복구처럼 상태만 다시 쓰는 경로**에서도 방송이 나간다. 지나간 위반에 뒤늦게 스피커가 울리는 것이 그 결과다 |
+| `repeat` 을 상태가 아니라 **`alert_count`** 로 정한다 | 재시작 직후 `active` 로 복구된 이벤트가 첫 경고를 내보내는 경로가 있는데, 상태로 판별하면 그 첫 경고가 재경고로 나가 ESP32 가 상습 패턴을 점멸한다 |
+| 방송 실패와 경광등 실패가 서로를 막지 않는다 | 소음이 심한 구역에서는 경광등이 유일한 경보다. 한쪽 고장으로 다른 쪽을 건너뛰면 하나 고장이 둘 고장이 된다 |
+| 경고 실패로 **상태 전이를 되돌리지 않는다** | 되돌리면 `alerted_at` 이 사라져 시정률의 기준점이 없어진다. 위반이 관측된 것은 사실이므로 기록은 남기고, 실패는 따로 집계·표시한다 |
+| 재생기가 없으면 `SilentPlayer` 가 **매번 실패**한다 | 조용히 성공한 척하면 "경고음이 나갔다"는 기록만 남고 아무 소리도 나지 않는다. `AUDIO_BACKEND=none` 은 **명시적으로 선언할 때만** 고른다(절대규칙 9) |
+| 음원 매핑을 DB(`alert_sounds`)에 둔다 | 파일명을 코드에 박으면 절대규칙 6 과 FN-CFG-03(화면에서 지정) 둘 다 깨진다. §6 에 없는 테이블이라 「명세서 확인 필요」에 올렸다 |
+| 파일명에 경로가 섞이면 거부한다 | 수동 방송의 `sound`(§4.5)는 **바깥에서 온다.** 그것이 경로가 되면 서버 파일 아무거나 열 수 있다 |
+| 일시중지에 **기한이 반드시 있다** | 무기한으로 끌 수 있으면 꺼둔 것을 잊는 순간 감시가 조용히 멎는다. 그 상태는 오탐보다 위험하다 |
+| 일시중지가 **이벤트·지표를 건드리지 않는다** | 이벤트까지 멈추면 정비 시간 동안의 위반이 통째로 사라져 그 구간에 사고가 나도 기록이 없다. 다만 「방송 후」 시정률 분모에 남는 것이 옳은지는 명세서에 정의가 없어 아래에 올렸다 |
+| 수동 방송은 경광등을 **켜지 않는다** | §3 `AlertCommand` 는 `event_id` 와 `ViolationType` 을 필수로 요구하는데 수동 방송에는 둘 다 없다. 없는 값을 지어내면 ESP32 와 대시보드가 존재하지 않는 이벤트를 참조한다 |
+| 클립 예약 큐를 **DB 로만** 표현한다 | 메모리 타이머였다면 재시작 순간 진행 중이던 이벤트의 클립이 영원히 `pending` 으로 남는다. DB 질의 하나가 곧 복구라 복구 코드가 따로 없다 |
+| REC 미도달은 `pending` 유지, `partial`·`not_found` 는 `failed` | 앞은 **다시 시도할 수 있는 실패**이고 뒤는 원본이 없다는 **사실**이다. 둘을 합치면 REC 이 잠깐 죽은 이벤트가 영영 증거를 갖지 못한다 |
+| 키프레임 추출을 뒤로 넘긴다 | 실측 5초/장. 확정 처리 안에서 기다리면 그동안 `/ws/edge` 가 멈춰 다른 이벤트의 타이머가 밀린다 |
+| MCU 온라인 판정을 **브로커 연결이 아니라 보고 신선도**로 한다 | 서버가 브로커에 붙어 있어도 ESP32 는 전원이 나갔을 수 있다. `EdgeRuntime` 이 하트비트에 하는 것과 같은 방식이다 |
+| 클라우드는 기동 시 `available: false` 다 | "아직 불러본 적 없다"를 "쓸 수 있다"로 낙관하면 분석 결과가 비어 있는 이유가 화면에서 사라진다(§4.6 null 규약) |
+
+**FN-SYS-03 격리를 무엇으로 확인했는가** (`server/tests/test_cloud_isolation.py`)
+
+1. 클라우드가 죽은 상태(`available: false`)에서 `normal_resolve` 시나리오가 확정 →
+   방송 → 경광등 → 시정 → 시정률 1.00 까지 끝까지 돈다.
+2. 안전 경로(`server/domain` · `alert_service` · `infra/clip`)에 클라우드 클라이언트가
+   **하나도 없다** — `server/ai/` 는 비어 있고, 실패는 `GET /system/status` 의 `cloud`
+   절과 §5.3 `system` 으로만 나간다.
+3. 클라우드 상태가 바뀌어도 같은 응답의 카메라·엣지·저장소 절이 흔들리지 않는다.
+
+---
+
 ## 명세서 확인 필요
 
 명세서를 SSOT로 두고 **코드에서 임의로 채우지 않은** 항목이다. 사람이 판단해
@@ -560,19 +663,31 @@ FN-ID가 붙지 않는 기반 작업이다. 전부 완료되었고 `uv run tasks
 | `events.note` 컬럼 | **신설** | 마이그레이션 `0003` · `PATCH /events/{id}` 가 저장한다 |
 | 확정 전 소멸한 후보의 상태 값 | **`dropped` 신설.** 지표 전량 제외, 병합 키 미점유, `dropped / (dropped + 확정)` 은 진단용으로 보존 | `EventStatus.DROPPED` · `_to_dropped` · `Effect` 에서 `delete` 액션 제거 · 저장소 `delete` 제거 · 시나리오 `dropped` 추가 |
 
+**v10 (직전에 보고한 4건 + 2건 전량)** — 전부 코드에 반영했다.
+
+| 항목 | 확정된 내용 | 반영 |
+|---|---|---|
+| **§4.8 시정률 식** | `resolved / (resolved + resolved_late + unresolved)` 로 갱신 — §6.7 과 일치. **§6.7 을 따른 기존 판단이 맞았다** | 코드 변경 없음. `test_spec_v10.py` 가 세 절의 식이 같다는 것을 잠근다 |
+| **§4.2 판정 불가율 분모** | `resolved_late` **포함**으로 확정. 근거 명시 — 늦은 시정은 모집단이지 판정 불가가 아니다 | 코드 변경 없음(이미 §6.7 을 따랐다) + 회귀 테스트 |
+| **§4.2 · §5.3 예시의 `total_violations`** | **24** 로 정정(네 버킷 합) | 명세서 예시 회귀 테스트를 24 로 갱신하고, **예시 안에서 산술이 성립하는지**를 새 테스트가 검산한다 |
+| **§5.3 `metric` 에 `resolved_late`** | 추가됨 | `MetricMsg.resolved_late` · `_publish_metric` · `front/src/types/system.ts`. 화면이 받은 숫자만으로 시정률을 검산할 수 있게 됐다 |
+| **§4.1 `GET /events/{id}` 의 `last_alerted_at` · `note`** | 응답에 추가됨 — **저장만 되고 못 읽던 상태가 끝났다** | `EventSummary` 에 필수(nullable) 추가 · 저장소가 채운다 · 오탐 사유가 화면(FN-UI-03)까지 도달한다. **재시작 복구가 저장된 `last_alerted_at` 을 쓰게 되어**, 재경고를 여러 번 한 이벤트가 복구 직후 즉시 재경고하던 문제도 함께 사라졌다 |
+| **§6 `events.dropped_at`** | 추가됨 | 마이그레이션 `0004` · `_to_dropped` 가 시각을 찍고 §4.1 `timeline` 에 `dropped` 가 나온다. 종결 시각 셋(`resolved`·`expired`·`dropped`)이 모두 생겼다 |
+
 ### A. 남아 있는 확인 필요
 
-이번 반영 중에 드러난 **명세서 내부의 불일치**다. 코드는 더 구체적인 절(§6.7 정의)을
-따랐고, 그 선택을 여기 적는다(CLAUDE.md 절대규칙 8).
+M4 에서 새로 드러난 것들이다. 전부 **명세서가 요구하는 기능을 구현하려는데 둘 자리가
+없어서** 서버가 임시로 정한 것이며, 코드에는 그 사실을 주석으로 표시해 두었다.
 
 | 내용 | 상세 |
 |---|---|
-| **§4.8 의 시정률 식이 `resolved_late` 를 빠뜨렸다** | 기능명세서 §4.8 은 여전히 `correction_rate = resolved / (resolved + unresolved)` 다. API §4.2 · §6.7 은 `resolved / (resolved + resolved_late + unresolved)` 다. §4.8 표에 `dropped` 행은 추가됐으나 식은 갱신되지 않았다. **코드는 §6.7 을 따랐다.** 두 절의 식을 맞춰 달라 |
-| **§4.2 와 §6.7 의 판정 불가율 식이 다르다** | §4.2 는 `expired / (resolved + unresolved + expired)`, §6.7 은 `expired / (resolved + resolved_late + unresolved + expired)` 다. 늦은 시정이 판정 불가율 분모에 드는지가 갈린다. **코드는 §6.7 을 따랐다** — `resolved_late` 는 모집단이지 판정 불가가 아니므로 분모에 있어야 일관된다 |
-| **§4.2 예시의 `total_violations` 가 버킷 합과 안 맞는다** | 예시가 `total_violations: 23` 인데 `resolved(20) + resolved_late(1) + unresolved(2) + undetermined(1) = 24` 다. `resolved_late` 를 넣으면서 합계를 갱신하지 않은 것으로 보인다. **코드는 네 버킷의 합을 `total_violations` 로 낸다** — 응답 안에서 산술이 성립해야 하기 때문이다 |
-| **§5.3 `metric` 에 `resolved_late` 가 없고 nullable 여부도 없다** | §5.3 예시는 `resolved` · `unresolved` 만 싣고 비율은 숫자다. 그러나 같은 값이므로 분모가 0이면 `null` 을 실을 수밖에 없다. **코드는 두 비율을 nullable 로 넓히고 `resolved_late` 는 넣지 않았다**(§5.3 예시 그대로). 화면이 늦은 시정 건수를 알려면 `GET /metrics/summary` 를 읽어야 한다 |
-| **`dropped` 의 종결 시각 컬럼이 없다** | §6 `events` 에 `resolved_at` · `expired_at` 은 있으나 `dropped_at` 이 없다. 그래서 §4.1 `timeline` 에 `dropped` 가 나오지 않고, `dropped / (dropped + 확정)` 진단도 `detected_at` 기준으로만 기간을 끊을 수 있다. 없는 컬럼을 만들지 않았다 |
-| **`last_alerted_at` · `note` 를 다시 읽을 경로가 없다** | 두 컬럼은 §6 에 생겼는데 §4.1 `GET /events/{id}` 응답 필드 목록에는 없다. 그래서 **저장은 되지만 REST 로 다시 조회할 수 없다** — 오탐 사유를 화면에서 보려면 응답에 `note` 가 있어야 한다(FN-UI-03 · M5 가 이것을 필요로 한다). 응답 스키마에 추가할지 정해 달라 |
+| **경고 음원 매핑을 둘 자리가 §6 에 없다** ★ | FN-CFG-03(경고 음원 매핑 · **P0**)과 §4.3 "위반 유형에 **사전 매핑된** 음원 파일"이 매핑을 요구하는데, §6 데이터 모델에 대응 테이블이 없다. 파일명을 코드에 박으면 절대규칙 6(하드코딩 금지)과 FN-CFG-03(화면에서 지정) 둘 다 깨지므로 **`alert_sounds`(`key`·`filename`·`active`) 테이블을 서버가 만들었다**(마이그레이션 `0005`). `key` 는 위반 유형 넷과 수동 방송 이름(§4.5 `sound`)을 함께 담는다. §6 에 추가할지 정해 달라 |
+| **`POST /alerts/manual` · `/alerts/mute` 의 응답이 정의되지 않았다** | §4.5 는 두 요청 본문만 보여주고 응답 스키마가 없다. 없는 계약을 지어내지 않으려고 **204 No Content** 로 두었다. 그래서 **일시중지가 언제 풀리는지 화면이 다시 물어볼 경로가 없다** — `GET /system/status`(§4.6)에도 `GET /alerts` 같은 것에도 자리가 없다. 지금은 §5.3 `system`(`component: mcu`, `state: degraded`)으로 "그 카메라 경고가 멈췄다"를 한 번 알리는 것으로 대신한다. 조회 경로가 필요한지 정해 달라 |
+| **일시중지 중 확정된 이벤트가 「방송 후」 시정률 분모에 드는가** ★ | FN-ALM-05 로 장치를 멈춘 동안에도 확정·`alerted_at` 기록·시정 판정은 그대로 돈다(이벤트까지 멈추면 그 시간의 위반이 통째로 사라진다). 그런데 지표 이름이 「**방송 후** 시정률」이므로, 방송이 나가지 않은 건이 분모에 남는 것은 정의와 어긋난다. **지금은 지표를 건드리지 않는 쪽**(상태머신 무영향)으로 두었다 — 어느 쪽이든 근거가 필요하다 |
+| **`AlertCommand.duration_s` 에 대응하는 정책 키가 없다** | §3 이 경광등·부저 지속 시간을 요구하는데 §4.5 `GET /policies` 목록에 그 키가 없다. **장치 쪽 운용값**이라 상태머신 타이머와 성격이 다르다고 보아 서버 설정(`ALERT_DURATION_S`, 기본 5)에 두었다. 정책으로 올릴지 정해 달라 |
+| **클립 추출 여유(margin)에 대응하는 정책 키가 없다** | 기능명세서 §4.4 가 "여유(margin) **2초**"를 명시하는데 §4.5 정책 목록에 없다. 서버 설정(`CLIP_MARGIN_S`, 기본 2.0)에 두었다. `clip_pre_roll_s`·`clip_post_roll_s` 는 정책인데 이것만 아닌 것이 어색하다 |
+| **클립 실패 사유를 담을 컬럼이 §6 에 없다** | §4.7 은 `partial`·`not_found` 의 `reason` 을 서버가 기록하라고 하는데 §6 `events` 에 자리가 없다. 지금은 `note` 앞에 `[클립]` 접두사로 덧붙인다(기존 메모는 지우지 않는다). 관리자 메모와 한 칸을 쓰는 셈이라 `clip_reason` 전용 컬럼이 필요한지 정해 달라 |
+| **수동 방송의 `level` 을 장치로 내보낼 방법이 없다** | §4.5 `POST /alerts/manual` 이 `level` 을 받는데, 그것을 §3 `AlertCommand` 로 옮기려면 `event_id` 와 `type`(`ViolationType`)이 필요하고 수동 방송에는 둘 다 없다. 지금은 **스피커만** 울리고 경광등은 켜지 않는다. 수동 방송에도 경광등이 필요하면 §3 에 그 경우를 정의해 달라 |
 
 ### B. 판단이 필요했던 타입
 
