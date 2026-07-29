@@ -32,7 +32,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 FRONT = ROOT / "front"
-DEPLOY = ROOT / "deploy"
 ALEMBIC_INI = ROOT / "server" / "infra" / "db" / "alembic.ini"
 
 #: `cams` 가 띄운 ffmpeg PID 를 적어두는 곳. `cams-stop` 이 읽는다.
@@ -292,11 +291,14 @@ def task_migrate() -> int:
 
 #: `dev` 가 한 터미널에서 함께 띄우는 것들.
 #:
+#: 카메라는 **모듈로**(`-m deploy.fake_cams`) 띄운다 — 파일 경로로 실행하면
+#: `sys.path[0]` 이 `deploy/` 가 되어 레포 루트 기준 import 가 깨진다.
+#:
 #: 카메라를 1·2 로 나눠 띄우는 이유: 한 대만 껐다 켜서 재연결을 확인하려면 프로세스가
 #: 나뉘어 있어야 한다. 하나로 묶으면 cam2 를 끄는 순간 cam1 까지 같이 내려간다.
 DEV_SERVICES: tuple[tuple[str, list[str]], ...] = (
-    ("cam1", [sys.executable, str(DEPLOY / "fake_cams.py"), "--cams", "1"]),
-    ("cam2", [sys.executable, str(DEPLOY / "fake_cams.py"), "--cams", "2"]),
+    ("cam1", [sys.executable, "-m", "deploy.fake_cams", "--cams", "1"]),
+    ("cam2", [sys.executable, "-m", "deploy.fake_cams", "--cams", "2"]),
     ("rec", ["uv", "run", "python", "-m", "recorder.main"]),
     ("server", [*uv("uvicorn", "server.app.main:app"), "--host", "127.0.0.1", "--port", "8000"]),
     ("front", ["npm", "--prefix", str(FRONT), "run", "dev"]),
@@ -328,8 +330,8 @@ def task_dev() -> int:
         raise
 
     say()
-    say("[dev] 실시간 관제  http://localhost:5173/live")
-    say("      API 문서     http://localhost:8000/docs")
+    say("[dev] 실시간 관제  http://127.0.0.1:5173/live")
+    say("      API 문서     http://127.0.0.1:8000/docs")
     say("      Ctrl+C 로 전부 내린다.")
     say()
 
@@ -377,13 +379,17 @@ def _stop_dev(processes: Sequence[tuple[str, subprocess.Popen[bytes]]]) -> None:
     task_cams_stop()
 
 
-def task_cams(sources: Sequence[str], cams: str | None) -> int:
+def task_cams(sources: Sequence[str], cams: str | None, marker: bool = False) -> int:
     say("[cams] 가짜 RTSP 송출 (카메라당 main·sub 2경로)")
-    argv = [sys.executable, str(DEPLOY / "fake_cams.py")]
+    # **파일 경로가 아니라 모듈로 띄운다.** 파일 경로로 실행하면 `sys.path[0]` 이
+    # `deploy/` 가 되어 `deploy.marker_path`(marker 궤적 공유 정의)를 import 할 수 없다.
+    argv = [sys.executable, "-m", "deploy.fake_cams"]
     for source in sources:
         argv += ["--source", source]
     if cams:
         argv += ["--cams", cams]
+    if marker:
+        argv += ["--marker"]
     run(argv)
     return 0
 
@@ -454,6 +460,33 @@ def task_sim(case: str, extra: Sequence[str]) -> int:
     return 0
 
 
+def task_marker() -> int:
+    """오버레이 시간 정합(±100ms)을 화면으로 재는 방법을 안내한다.
+
+    영상에 태운 사각형과 시뮬레이터가 보내는 좌표가 **같은 수식**(`deploy/marker_path.py`)
+    에서 나온다. 화면에서 두 박스가 겹치면 정합이 맞는 것이고, 벌어진 거리가 곧 오차다.
+
+    실행 자체를 여기서 대신 하지 않는 이유: 카메라는 계속 떠 있어야 하고 시뮬레이터는
+    반복해서 돌리게 되므로, 두 프로세스의 수명이 다르다.
+    """
+    say("[marker] 오버레이 정합 검증 — 터미널 두 개가 필요하다")
+    say()
+    say("  1) 카메라를 marker 모드로 다시 띄운다 (기존 송출은 먼저 내린다)")
+    say("       uv run tasks.py cams-stop")
+    say("       uv run tasks.py cams --marker")
+    say()
+    say("  2) 같은 궤적의 좌표를 보낸다")
+    say("       uv run tasks.py sim --mode marker")
+    say()
+    say("  3) 화면을 연다 (정합 진단 표시를 켠 채로)")
+    say("       http://127.0.0.1:5173/live?debug=1")
+    say()
+    say("  볼 것: 영상 속 **자홍색 사각형**과 오버레이 **청록색 박스**가 겹치는가.")
+    say("  가로로 벌어진 거리가 시간 오차다 — 정규화 0.01 = 약 55ms (1920px 기준 19px).")
+    say("  궤적 정의는 deploy/marker_path.py 한 곳에만 있다.")
+    return 0
+
+
 def task_mcu(extra: Sequence[str]) -> int:
     say("[mcu] 가짜 ESP32")
     run(uv("python", "-m", "sim.mcu_sim.main", *extra))
@@ -504,6 +537,11 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="번호목록",
         help="송출할 카메라 (기본 1,2). 한 대만 끊어보려면 --cams 1 과 --cams 2 를 따로 띄운다",
     )
+    cams.add_argument(
+        "--marker",
+        action="store_true",
+        help="궤적이 결정적인 사각형을 영상에 태운다 (오버레이 정합 검증 · uv run tasks.py marker)",
+    )
     cams_stop = sub.add_parser("cams-stop", help="cams 가 띄운 ffmpeg 종료")
     cams_stop.add_argument(
         "--cams",
@@ -514,6 +552,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     rec = sub.add_parser("rec", help="REC — 녹화 컴포넌트 (API명세서 §4.7)")
     rec.add_argument("extra", nargs=argparse.REMAINDER, help="recorder 에 그대로 넘길 인자")
+
+    sub.add_parser("marker", help="오버레이 정합 검증 실행 방법 (marker 궤적 대조)")
 
     sim = sub.add_parser("sim", help="가짜 엣지 실행")
     sim.add_argument("--case", default="no_helmet_resolved", help="sim/cases/ 의 시나리오 이름")
@@ -542,11 +582,13 @@ def dispatch(args: argparse.Namespace) -> int:
         case "types":
             return task_types()
         case "cams":
-            return task_cams(args.source, args.cams)
+            return task_cams(args.source, args.cams, args.marker)
         case "cams-stop":
             return task_cams_stop(args.cams)
         case "rec":
             return task_rec(args.extra)
+        case "marker":
+            return task_marker()
         case "sim":
             return task_sim(args.case, args.extra)
         case "mcu":
