@@ -307,7 +307,11 @@ function personLabel(person: OverlayPerson, zones: Zone[], pending: boolean): st
   }
   const kinds = person.violations.map((v) => VIOLATION_LABEL[v] ?? v).join(' · ')
   // 확정 전이라는 사실을 라벨에도 적는다. 점선만으로는 캡처 화면에서 구분이 안 된다.
-  return pending ? `${who} · ${kinds} 확정 중` : `${who} · ${kinds}`
+  if (pending) return `${who} · ${kinds} 확정 중`
+  // 재경고(FN-EVT-04)는 쿨다운이 지나도록 시정되지 않았다는 뜻이다. 상습 상황을
+  // 화면에서 구분할 수 있어야 관리자가 현장에 나갈지 판단한다.
+  if (person.alert_state === 're_alerted') return `${who} · ${kinds} 재경고`
+  return `${who} · ${kinds}`
 }
 
 function drawVehicle(
