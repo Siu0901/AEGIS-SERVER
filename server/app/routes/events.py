@@ -2,17 +2,21 @@
 
 * `GET /events` · `GET /events/{event_id}` — 목록과 상세
 * `PATCH /events/{event_id}` — 오탐 표시 · 강제 종결
+* `GET /events/{event_id}/clip` — 클립 스트리밍 (video/mp4)
 
-클립(`clip_url`)과 키프레임은 아직 비어 있다 — 예약 추출이 M4(FN-REC-03)다. 그 자리를
-그럴듯한 값으로 메우지 않는다.
+클립은 확정 즉시 준비되지 않는다(FN-REC-03). `clip_status` 가 `pending` 인 동안은
+아직 파일이 없으므로 **404 로 없는 것을 없다고 말한다** — 빈 파일이나 200 을 돌려주면
+화면이 재생을 시도하다 조용히 실패한다.
 """
 
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Annotated, Protocol
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import FileResponse
 from pydantic import AwareDatetime
 
 from aegis_contracts import (
@@ -96,6 +100,49 @@ async def get_event(request: Request, event_id: str) -> EventDetail:
     if event is None:
         raise _error(404, "NOT_FOUND", "요청한 이벤트가 존재하지 않습니다", {"event_id": event_id})
     return event
+
+
+@router.get(
+    "/events/{event_id}/clip",
+    responses={
+        200: {"content": {"video/mp4": {}}, "description": "이벤트 클립"},
+        404: {"model": ErrorResponse},
+        503: {"model": ErrorResponse},
+    },
+)
+async def get_event_clip(request: Request, event_id: str) -> FileResponse:
+    """FN-REC-03 — 이벤트 클립 스트리밍. API명세서 §4.1
+
+    `clip_url`(`/media/clips/...`)로도 같은 파일에 닿을 수 있지만, 이 경로는 **이벤트를
+    거쳐** 찾는다. 클라이언트가 저장소 구조를 몰라도 되고, 아직 준비되지 않은 클립을
+    `clip_status` 로 구분해 알려줄 수 있다.
+    """
+    try:
+        event = await _reader(request).get(event_id)
+    except OSError as exc:
+        raise _unavailable(exc) from exc
+    if event is None:
+        raise _error(404, "NOT_FOUND", "요청한 이벤트가 존재하지 않습니다", {"event_id": event_id})
+
+    if event.clip_url is None:
+        # 아직 예약 실행 전이거나(pending) 원본이 없어 실패한 것이다(failed). 이 응답
+        # 모델(§4.1)에는 `clip_status` 칸이 없으므로 사유는 `note` 로 나간다 —
+        # 클립 실패는 `[클립]` 접두사로 거기 기록된다(`server/infra/clip/service.py`).
+        raise _error(
+            404,
+            "NOT_FOUND",
+            "클립이 아직 준비되지 않았습니다",
+            {"event_id": event_id, "note": event.note},
+        )
+
+    media_root: Path = request.app.state.settings.media_root
+    path = media_root / "clips" / f"{event_id}.mp4"
+    if not path.is_file():
+        # DB 는 준비됐다는데 파일이 없다. 조용히 404 로만 넘기지 않는다 — 저장소가
+        # 지워졌거나 `media_root` 가 바뀐 것이고, 그 사실이 로그에 남아야 한다.
+        log.error("clip_url 은 있는데 파일이 없다: %s (%s)", event_id, path)
+        raise _error(404, "NOT_FOUND", "클립 파일을 찾을 수 없습니다", {"event_id": event_id})
+    return FileResponse(path, media_type="video/mp4", filename=path.name)
 
 
 @router.patch(
