@@ -1,0 +1,137 @@
+# reassoc_success — 트랙이 끊겼다가 재결합되어 시정까지 이어진 경우
+#
+# 서버가 이렇게 판정하기를 기대한다:
+#   +3.5s   확정·경고
+#   +8.0s   트랙 소실 → lost (종결하지 않는다 · track_lost_grace_s = 15)
+#   +11.0s  새 트랙 4 등장 → 재결합 (Δt=3s · 반경 min(1.5×3, 5)=4.5m · 실제 1.8m)
+#   +21.0s  해소 · 재결합 시점부터 resolve_duration_s(10초)를 새로 채운다
+#
+# 재결합하지 못했다면 +23.0s 에 expired(판정 불가)로 끝났을 것이다.
+
+name: reassoc_success
+description: 가림으로 트랙이 끊겼다가 같은 사람으로 재결합되어 시정된 경우
+cam_id: 1
+frame_fps: 8
+
+timeline:
+  - at: 0.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.91
+        bbox: [0.197, 0.364, 0.273, 0.764]
+        helmet: "off"
+        helmet_conf: 0.88
+        foot_point: [0.235, 0.762]
+        foot_point_m: [4.21, 7.85]
+        foot_conf: 0.88
+        posture: standing
+        height_ratio: 0.97
+        axis_angle_deg: 8.2
+        stillness_s: 0.4
+        in_zone: forklift_lane
+
+  - at: 0.5
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violation_type: no_helmet
+    zone_id: forklift_lane
+    bbox: [0.197, 0.364, 0.273, 0.764]
+    conf: 0.91
+    foot_point_m: [4.21, 7.85]
+    foot_conf: 0.88
+    helmet: "off"
+    helmet_conf: 0.88
+    posture: standing
+    observed_ms: 500
+    nearby: []
+
+  - at: 8.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.89
+        bbox: [0.216, 0.363, 0.292, 0.763]
+        helmet: "off"
+        helmet_conf: 0.87
+        foot_point: [0.254, 0.761]
+        foot_point_m: [4.55, 7.90]
+        foot_conf: 0.86
+        posture: standing
+        height_ratio: 0.96
+        axis_angle_deg: 7.9
+        stillness_s: 0.4
+        in_zone: forklift_lane
+
+  # --- 설비에 가려 엣지가 트랙을 포기했다 ---
+  - at: 8.0
+    type: track_lost
+    cam_id: 1
+    track_id: 3
+    class: person
+    last_foot_point_m: [4.55, 7.90]
+    last_helmet: "off"
+    reason: occluded
+
+  # --- 3초 뒤 1.8m 떨어진 곳에 새 트랙 번호로 다시 나타났다 ---
+  - at: 11.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 4
+        conf: 0.90
+        bbox: [0.281, 0.361, 0.357, 0.762]
+        helmet: "on"
+        helmet_conf: 0.93
+        foot_point: [0.319, 0.760]
+        foot_point_m: [6.20, 8.10]
+        foot_conf: 0.88
+        posture: standing
+        height_ratio: 0.97
+        axis_angle_deg: 6.8
+        stillness_s: 0.3
+        in_zone: forklift_lane
+
+  - at: 25.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 4
+        conf: 0.91
+        bbox: [0.300, 0.360, 0.376, 0.761]
+        helmet: "on"
+        helmet_conf: 0.94
+        foot_point: [0.338, 0.759]
+        foot_point_m: [6.80, 8.20]
+        foot_conf: 0.89
+        posture: standing
+        height_ratio: 0.97
+        axis_angle_deg: 6.1
+        stillness_s: 0.3
+        in_zone: forklift_lane
+
+expect:
+  events:
+    # 트랙 번호가 4로 바뀌어 있다는 것 자체가 재결합이 일어났다는 증거다.
+    - track_id: 4
+      violation_type: no_helmet
+      status: resolved
+      alert_count: 1
+      alerted_at_s: 3.5
+      resolved_at_s: 21.0
+      resolution_sec: 18
+  metrics:
+    correction_rate: 1.0
+    undetermined_rate: 0.0
+    total_violations: 1
+    resolved: 1
+    unresolved: 0
+    undetermined: 0
+    fall_events: 0

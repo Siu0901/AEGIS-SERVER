@@ -1,0 +1,98 @@
+# reassoc_fail — 트랙이 끊긴 뒤 돌아오지 않아 판정 불가로 종결
+#
+# 서버가 이렇게 판정하기를 기대한다:
+#   +3.5s   확정·경고
+#   +8.0s   트랙 소실 → lost
+#   +23.0s  유예 만료 → expired · track_lost_grace_s = 15
+#
+# **expired 는 미시정이 아니다.** 시정률 분모·분자 모두에서 빠지고
+# `undetermined_rate` 로 따로 집계된다(§6.7). 그래서 시정률은 0.0 이 아니라
+# "모집단이 비었다"이고, 판정 불가율이 1.0 이다.
+
+name: reassoc_fail
+description: 재결합에 실패해 판정 불가(expired)로 끝난 경우
+cam_id: 1
+frame_fps: 8
+
+timeline:
+  - at: 0.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.91
+        bbox: [0.197, 0.364, 0.273, 0.764]
+        helmet: "off"
+        helmet_conf: 0.88
+        foot_point: [0.235, 0.762]
+        foot_point_m: [4.21, 7.85]
+        foot_conf: 0.88
+        posture: standing
+        height_ratio: 0.97
+        axis_angle_deg: 8.2
+        stillness_s: 0.4
+        in_zone: forklift_lane
+
+  - at: 0.5
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violation_type: no_helmet
+    zone_id: forklift_lane
+    bbox: [0.197, 0.364, 0.273, 0.764]
+    conf: 0.91
+    foot_point_m: [4.21, 7.85]
+    foot_conf: 0.88
+    helmet: "off"
+    helmet_conf: 0.88
+    posture: standing
+    observed_ms: 500
+    nearby: []
+
+  - at: 8.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.88
+        bbox: [0.216, 0.363, 0.292, 0.763]
+        helmet: "off"
+        helmet_conf: 0.86
+        foot_point: [0.254, 0.761]
+        foot_point_m: [4.55, 7.90]
+        foot_conf: 0.85
+        posture: standing
+        height_ratio: 0.96
+        axis_angle_deg: 7.9
+        stillness_s: 0.4
+        in_zone: forklift_lane
+
+  # --- 화면 밖으로 나갔고 끝까지 돌아오지 않는다 ---
+  - at: 8.0
+    type: track_lost
+    cam_id: 1
+    track_id: 3
+    class: person
+    last_foot_point_m: [4.55, 7.90]
+    last_helmet: "off"
+    reason: out_of_view
+
+expect:
+  # 유예 만료(+23.0s)를 보려면 마지막 메시지 뒤로 계속 시간을 흘려보내야 한다.
+  tail_s: 20.0
+  events:
+    - track_id: 3
+      violation_type: no_helmet
+      status: expired
+      alert_count: 1
+      alerted_at_s: 3.5
+  metrics:
+    correction_rate: 0.0
+    undetermined_rate: 1.0
+    total_violations: 1
+    resolved: 0
+    unresolved: 0
+    undetermined: 1
+    fall_events: 0

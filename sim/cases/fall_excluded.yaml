@@ -1,0 +1,169 @@
+# fall_excluded — 쓰러짐은 시정률 모집단에 들어가지 않는다
+#
+# 기능명세서 §4.8 · API명세서 §6.7 — `fall` 은 **자력 시정이 불가능한 유형**이라
+# 시정률에서 전량 제외하고 따로 센다. 방송을 듣고 스스로 안전모를 쓰는 것과
+# 쓰러진 사람이 일어나는 것은 같은 종류의 사건이 아니다.
+#
+# 두 사람을 함께 둔 이유: 쓰러짐이 분모에 섞이면 시정률이 1.0 이 아니라 0.5 로
+# 떨어진다. 그 차이가 이 검사의 전부다.
+#
+#   track 3 — 쓰러짐. 끝까지 일어나지 않는다 → alerted 로 남지만 지표에서 제외
+#   track 5 — 안전모 미착용 → 착용 → 시정 완료 → 시정률 1.0 의 유일한 모집단
+
+name: fall_excluded
+description: fall 이벤트가 시정률 분모에 들어가지 않는지
+cam_id: 1
+frame_fps: 8
+
+timeline:
+  - at: 0.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.88
+        bbox: [0.120, 0.640, 0.330, 0.760]
+        helmet: "on"
+        helmet_conf: 0.91
+        foot_point: [0.225, 0.758]
+        foot_point_m: [3.10, 7.60]
+        foot_conf: 0.72
+        posture: fallen
+        height_ratio: 0.41
+        axis_angle_deg: 78.5
+        stillness_s: 6.2
+        in_zone: null
+      - class: person
+        track_id: 5
+        conf: 0.92
+        bbox: [0.520, 0.360, 0.596, 0.762]
+        helmet: "off"
+        helmet_conf: 0.89
+        foot_point: [0.558, 0.760]
+        foot_point_m: [11.40, 7.90]
+        foot_conf: 0.88
+        posture: standing
+        height_ratio: 0.97
+        axis_angle_deg: 7.4
+        stillness_s: 0.3
+        in_zone: forklift_lane
+
+  - at: 0.5
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violation_type: fall
+    zone_id: null
+    bbox: [0.120, 0.640, 0.330, 0.760]
+    conf: 0.88
+    foot_point_m: [3.10, 7.60]
+    posture: fallen
+    observed_ms: 500
+    nearby: []
+
+  - at: 0.5
+    type: candidate
+    cam_id: 1
+    track_id: 5
+    violation_type: no_helmet
+    zone_id: forklift_lane
+    bbox: [0.520, 0.360, 0.596, 0.762]
+    conf: 0.92
+    foot_point_m: [11.40, 7.90]
+    foot_conf: 0.88
+    helmet: "off"
+    helmet_conf: 0.89
+    posture: standing
+    observed_ms: 500
+    nearby: []
+
+  # --- track 5 가 안전모를 쓴다. track 3 은 그대로 쓰러져 있다 ---
+  - at: 6.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.87
+        bbox: [0.120, 0.640, 0.330, 0.760]
+        helmet: "on"
+        helmet_conf: 0.90
+        foot_point: [0.225, 0.758]
+        foot_point_m: [3.10, 7.60]
+        foot_conf: 0.71
+        posture: fallen
+        height_ratio: 0.40
+        axis_angle_deg: 79.1
+        stillness_s: 11.8
+        in_zone: null
+      - class: person
+        track_id: 5
+        conf: 0.93
+        bbox: [0.540, 0.359, 0.616, 0.761]
+        helmet: "on"
+        helmet_conf: 0.94
+        foot_point: [0.578, 0.759]
+        foot_point_m: [11.90, 7.95]
+        foot_conf: 0.89
+        posture: standing
+        height_ratio: 0.97
+        axis_angle_deg: 6.8
+        stillness_s: 0.3
+        in_zone: forklift_lane
+
+  - at: 17.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.86
+        bbox: [0.120, 0.640, 0.330, 0.760]
+        helmet: "on"
+        helmet_conf: 0.90
+        foot_point: [0.225, 0.758]
+        foot_point_m: [3.10, 7.60]
+        foot_conf: 0.70
+        posture: fallen
+        height_ratio: 0.40
+        axis_angle_deg: 79.4
+        stillness_s: 22.8
+        in_zone: null
+      - class: person
+        track_id: 5
+        conf: 0.92
+        bbox: [0.559, 0.358, 0.635, 0.760]
+        helmet: "on"
+        helmet_conf: 0.95
+        foot_point: [0.597, 0.758]
+        foot_point_m: [12.40, 8.00]
+        foot_conf: 0.88
+        posture: standing
+        height_ratio: 0.97
+        axis_angle_deg: 6.2
+        stillness_s: 0.3
+        in_zone: forklift_lane
+
+expect:
+  events:
+    - track_id: 3
+      violation_type: fall
+      status: alerted
+      alert_count: 1
+      alerted_at_s: 3.5
+    - track_id: 5
+      violation_type: no_helmet
+      status: resolved
+      alert_count: 1
+      alerted_at_s: 3.5
+      resolved_at_s: 16.0
+  metrics:
+    # 쓰러짐이 분모에 섞였다면 0.5 가 나왔을 자리다.
+    correction_rate: 1.0
+    undetermined_rate: 0.0
+    total_violations: 1
+    resolved: 1
+    unresolved: 0
+    undetermined: 0
+    fall_events: 1

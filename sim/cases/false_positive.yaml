@@ -1,0 +1,175 @@
+# false_positive — 수동 정정된 이벤트는 지표에서 전량 빠진다
+#
+# FN-EVT-05 · §6.7 — 관리자가 오탐으로 표시한 건은 분자에도 분모에도 넣지 않는다.
+# 분모에 남기면 **시스템이 틀렸다는 사실이 "작업자가 시정하지 않았다"로 둔갑**한다.
+#
+#   track 3 — 진짜 위반. 착용으로 시정 → 시정률의 유일한 모집단
+#   track 5 — 오탐. 끝까지 미해소지만 +20.0s 에 관리자가 오탐으로 표시 → 전량 제외
+#
+# 제외가 동작하지 않으면 시정률이 1.0 이 아니라 0.5 로 나온다.
+
+name: false_positive
+description: 수동 정정(is_false_positive)된 이벤트가 시정률에서 전량 빠지는지
+cam_id: 1
+frame_fps: 8
+
+timeline:
+  - at: 0.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.91
+        bbox: [0.197, 0.364, 0.273, 0.764]
+        helmet: "off"
+        helmet_conf: 0.88
+        foot_point: [0.235, 0.762]
+        foot_point_m: [4.21, 7.85]
+        foot_conf: 0.88
+        posture: standing
+        height_ratio: 0.97
+        axis_angle_deg: 8.2
+        stillness_s: 0.4
+        in_zone: forklift_lane
+      - class: person
+        track_id: 5
+        conf: 0.79
+        bbox: [0.620, 0.372, 0.688, 0.758]
+        helmet: "off"
+        helmet_conf: 0.63
+        foot_point: [0.654, 0.756]
+        foot_point_m: [14.20, 8.40]
+        foot_conf: 0.74
+        posture: standing
+        height_ratio: 0.95
+        axis_angle_deg: 9.8
+        stillness_s: 1.2
+        in_zone: forklift_lane
+
+  - at: 0.5
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violation_type: no_helmet
+    zone_id: forklift_lane
+    bbox: [0.197, 0.364, 0.273, 0.764]
+    conf: 0.91
+    foot_point_m: [4.21, 7.85]
+    foot_conf: 0.88
+    helmet: "off"
+    helmet_conf: 0.88
+    posture: standing
+    observed_ms: 500
+    nearby: []
+
+  - at: 0.5
+    type: candidate
+    cam_id: 1
+    track_id: 5
+    violation_type: no_helmet
+    zone_id: forklift_lane
+    bbox: [0.620, 0.372, 0.688, 0.758]
+    conf: 0.79
+    foot_point_m: [14.20, 8.40]
+    foot_conf: 0.74
+    helmet: "off"
+    helmet_conf: 0.63
+    posture: standing
+    observed_ms: 500
+    nearby: []
+
+  - at: 6.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.92
+        bbox: [0.262, 0.361, 0.339, 0.762]
+        helmet: "on"
+        helmet_conf: 0.94
+        foot_point: [0.300, 0.760]
+        foot_point_m: [6.02, 7.91]
+        foot_conf: 0.89
+        posture: standing
+        height_ratio: 0.98
+        axis_angle_deg: 6.4
+        stillness_s: 0.2
+        in_zone: forklift_lane
+      - class: person
+        track_id: 5
+        conf: 0.78
+        bbox: [0.622, 0.372, 0.690, 0.758]
+        helmet: "off"
+        helmet_conf: 0.62
+        foot_point: [0.656, 0.756]
+        foot_point_m: [14.25, 8.42]
+        foot_conf: 0.73
+        posture: standing
+        height_ratio: 0.95
+        axis_angle_deg: 9.9
+        stillness_s: 1.4
+        in_zone: forklift_lane
+
+  - at: 22.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.90
+        bbox: [0.281, 0.360, 0.358, 0.761]
+        helmet: "on"
+        helmet_conf: 0.95
+        foot_point: [0.319, 0.759]
+        foot_point_m: [6.44, 7.93]
+        foot_conf: 0.88
+        posture: standing
+        height_ratio: 0.98
+        axis_angle_deg: 5.1
+        stillness_s: 0.3
+        in_zone: forklift_lane
+      - class: person
+        track_id: 5
+        conf: 0.77
+        bbox: [0.624, 0.372, 0.692, 0.758]
+        helmet: "off"
+        helmet_conf: 0.61
+        foot_point: [0.658, 0.756]
+        foot_point_m: [14.30, 8.44]
+        foot_conf: 0.72
+        posture: standing
+        height_ratio: 0.95
+        axis_angle_deg: 10.1
+        stillness_s: 1.6
+        in_zone: forklift_lane
+
+# 관리자가 화면에서 오탐으로 표시한다 (PATCH /events/{id} · FN-EVT-05).
+manual:
+  - at: 20.0
+    match: {track_id: 5, violation_type: no_helmet}
+    patch: {is_false_positive: true, note: "안전모를 든 채 이동 중이었음"}
+
+expect:
+  events:
+    - track_id: 3
+      violation_type: no_helmet
+      status: resolved
+      alert_count: 1
+      alerted_at_s: 3.5
+      resolved_at_s: 16.0
+    # 오탐 표시는 상태를 바꾸지 않는다. 지표에서만 빠진다.
+    - track_id: 5
+      violation_type: no_helmet
+      status: alerted
+      alert_count: 1
+  metrics:
+    # 오탐이 분모에 남았다면 0.5 가 나왔을 자리다.
+    correction_rate: 1.0
+    undetermined_rate: 0.0
+    total_violations: 1
+    resolved: 1
+    unresolved: 0
+    undetermined: 0
+    fall_events: 0

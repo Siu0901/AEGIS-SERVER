@@ -1,0 +1,109 @@
+# normal_resolve — 확정 → 경고 → 안전모 착용 → 시정 완료
+#
+# 서버가 이렇게 판정하기를 기대한다:
+#   +3.5s   확정·경고   · confirm_duration_s = 3 (후보 +0.5s 부터 관측 3초)
+#   +6.0s   위반 소멸 관측 시작 (helmet: on)
+#   +16.0s  해소(resolved) · resolve_duration_s = 10
+#
+# 시뮬레이터는 위 판정을 하지 않는다. 관측된 사실만 올린다(엣지는 판단하지 않는다).
+# `ts` 는 적지 않는다 — 시작 시각 + `at` 으로 주입된다.
+
+name: normal_resolve
+description: 안전모 미착용이 확정·경고 후 착용으로 시정된 기본 경로
+cam_id: 1
+frame_fps: 8
+
+timeline:
+  - at: 0.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.91
+        bbox: [0.197, 0.364, 0.273, 0.764]
+        helmet: "off"
+        helmet_conf: 0.88
+        foot_point: [0.235, 0.762]
+        foot_point_m: [4.21, 7.85]
+        foot_conf: 0.88
+        posture: standing
+        height_ratio: 0.97
+        axis_angle_deg: 8.2
+        stillness_s: 0.4
+        in_zone: forklift_lane
+
+  - at: 0.5
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violation_type: no_helmet
+    zone_id: forklift_lane
+    bbox: [0.197, 0.364, 0.273, 0.764]
+    conf: 0.91
+    foot_point_m: [4.21, 7.85]
+    foot_conf: 0.88
+    helmet: "off"
+    helmet_conf: 0.88
+    posture: standing
+    observed_ms: 500
+    nearby: []
+
+  # --- 안전모 착용 → 위반 소멸 관측 시작 ---
+  - at: 6.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.92
+        bbox: [0.262, 0.361, 0.339, 0.762]
+        helmet: "on"
+        helmet_conf: 0.94
+        foot_point: [0.300, 0.760]
+        foot_point_m: [6.02, 7.91]
+        foot_conf: 0.89
+        posture: standing
+        height_ratio: 0.98
+        axis_angle_deg: 6.4
+        stillness_s: 0.2
+        in_zone: forklift_lane
+
+  - at: 17.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.90
+        bbox: [0.281, 0.360, 0.358, 0.761]
+        helmet: "on"
+        helmet_conf: 0.95
+        foot_point: [0.319, 0.759]
+        foot_point_m: [6.44, 7.93]
+        foot_conf: 0.88
+        posture: standing
+        height_ratio: 0.98
+        axis_angle_deg: 5.1
+        stillness_s: 0.3
+        in_zone: forklift_lane
+
+expect:
+  events:
+    - track_id: 3
+      violation_type: no_helmet
+      status: resolved
+      zone_id: forklift_lane
+      alert_count: 1
+      confirmed_at_s: 3.5
+      alerted_at_s: 3.5
+      resolved_at_s: 16.0
+      resolution_sec: 12
+  metrics:
+    correction_rate: 1.0
+    undetermined_rate: 0.0
+    total_violations: 1
+    resolved: 1
+    unresolved: 0
+    undetermined: 0
+    fall_events: 0

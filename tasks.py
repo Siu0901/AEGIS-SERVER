@@ -460,6 +460,21 @@ def task_sim(case: str, extra: Sequence[str]) -> int:
     return 0
 
 
+def task_cases(case: str | None) -> int:
+    """시나리오 기대값 자동 대조 (FN-EVT-02~07 · FN-SYS-04/05).
+
+    `uv run tasks.py verify` 의 pytest 단계에도 같은 검사가 들어 있다. 이 태스크는
+    시정률·판정 불가율을 **표로** 보기 위한 것이다 — 시나리오를 고칠 때 어느 숫자가
+    움직였는지 한눈에 보려면 pass/fail 만으로는 부족하다.
+    """
+    say("[cases] 시나리오 기대값 대조 — 서버·DB 없이 상태머신에 직접 태운다")
+    argv = uv("python", "-m", "sim.case_check")
+    if case:
+        argv += ["--case", case]
+    run(argv)
+    return 0
+
+
 def task_marker() -> int:
     """오버레이 시간 정합(±100ms)을 화면으로 재는 방법을 안내한다.
 
@@ -553,6 +568,9 @@ def build_parser() -> argparse.ArgumentParser:
     rec = sub.add_parser("rec", help="REC — 녹화 컴포넌트 (API명세서 §4.7)")
     rec.add_argument("extra", nargs=argparse.REMAINDER, help="recorder 에 그대로 넘길 인자")
 
+    cases = sub.add_parser("cases", help="시나리오 기대값 자동 대조 (지표를 표로 확인)")
+    cases.add_argument("--case", default=None, help="이 시나리오만 검사 (기본: 전부)")
+
     sub.add_parser("marker", help="오버레이 정합 검증 실행 방법 (marker 궤적 대조)")
 
     sim = sub.add_parser("sim", help="가짜 엣지 실행")
@@ -587,6 +605,8 @@ def dispatch(args: argparse.Namespace) -> int:
             return task_cams_stop(args.cams)
         case "rec":
             return task_rec(args.extra)
+        case "cases":
+            return task_cases(args.case)
         case "marker":
             return task_marker()
         case "sim":

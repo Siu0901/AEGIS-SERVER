@@ -1,0 +1,163 @@
+# id_switch_guard — 재결합 직후에 위반이 사라져 보여도 즉시 시정으로 인정하지 않는다
+#
+# 이 시나리오가 지키는 규칙: **재결합은 이벤트를 살리는 처리이지 시정을 인정하는
+# 처리가 아니다**(FN-EVT-07 ③). 추적 ID 스위치로 다른 작업자가 트랙을 물려받으면
+# 위반이 사라진 것처럼 보이는데, 그것을 시정으로 세면 시정률이 **과대**해진다.
+# 세 가지 실패 모드 중 지표가 부풀려지는 방향이라 가장 위험하다(기능명세서 §4.2).
+#
+# 서버가 이렇게 판정하기를 기대한다:
+#   +3.5s   확정·경고
+#   +6.0s   안전모 착용 관측 시작 → 해소 타이머 시작
+#   +8.0s   트랙 소실 (이 시점까지 해소 타이머 2초 적립)
+#   +10.0s  새 트랙 4 로 재결합 → **해소 타이머를 0부터 다시 시작**
+#   +20.0s  해소
+#
+# 적립분 2초를 이어받았다면 +18.0s 에 끝났을 것이다. 그 2초 차이가 이 검사의 전부다.
+
+name: id_switch_guard
+description: 재결합 직후 위반이 사라져도 해소 타이머를 0부터 다시 채우는지
+cam_id: 1
+frame_fps: 8
+
+timeline:
+  - at: 0.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.91
+        bbox: [0.197, 0.364, 0.273, 0.764]
+        helmet: "off"
+        helmet_conf: 0.88
+        foot_point: [0.235, 0.762]
+        foot_point_m: [4.21, 7.85]
+        foot_conf: 0.88
+        posture: standing
+        height_ratio: 0.97
+        axis_angle_deg: 8.2
+        stillness_s: 0.4
+        in_zone: forklift_lane
+
+  - at: 0.5
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violation_type: no_helmet
+    zone_id: forklift_lane
+    bbox: [0.197, 0.364, 0.273, 0.764]
+    conf: 0.91
+    foot_point_m: [4.21, 7.85]
+    foot_conf: 0.88
+    helmet: "off"
+    helmet_conf: 0.88
+    posture: standing
+    observed_ms: 500
+    nearby: []
+
+  # --- 안전모 착용 → 해소 타이머가 흐르기 시작한다 ---
+  - at: 6.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.92
+        bbox: [0.243, 0.362, 0.319, 0.763]
+        helmet: "on"
+        helmet_conf: 0.93
+        foot_point: [0.281, 0.761]
+        foot_point_m: [5.10, 7.95]
+        foot_conf: 0.88
+        posture: standing
+        height_ratio: 0.97
+        axis_angle_deg: 7.1
+        stillness_s: 0.3
+        in_zone: forklift_lane
+
+  # --- 2초 뒤 트랙이 끊긴다 (해소까지 8초 남은 상태) ---
+  - at: 8.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.90
+        bbox: [0.252, 0.362, 0.328, 0.763]
+        helmet: "on"
+        helmet_conf: 0.93
+        foot_point: [0.290, 0.761]
+        foot_point_m: [5.30, 7.98]
+        foot_conf: 0.87
+        posture: standing
+        height_ratio: 0.97
+        axis_angle_deg: 6.9
+        stillness_s: 0.3
+        in_zone: forklift_lane
+
+  - at: 8.0
+    type: track_lost
+    cam_id: 1
+    track_id: 3
+    class: person
+    last_foot_point_m: [5.30, 7.98]
+    last_helmet: "on"
+    reason: occluded
+
+  # --- 2초 뒤 1.3m 옆에서 새 트랙 번호로 나타난다 (Δt=2s · 반경 3.0m) ---
+  - at: 10.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 4
+        conf: 0.91
+        bbox: [0.271, 0.361, 0.347, 0.762]
+        helmet: "on"
+        helmet_conf: 0.94
+        foot_point: [0.309, 0.760]
+        foot_point_m: [6.50, 8.10]
+        foot_conf: 0.88
+        posture: standing
+        height_ratio: 0.97
+        axis_angle_deg: 6.4
+        stillness_s: 0.3
+        in_zone: forklift_lane
+
+  - at: 24.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 4
+        conf: 0.91
+        bbox: [0.290, 0.360, 0.366, 0.761]
+        helmet: "on"
+        helmet_conf: 0.95
+        foot_point: [0.328, 0.759]
+        foot_point_m: [7.00, 8.20]
+        foot_conf: 0.89
+        posture: standing
+        height_ratio: 0.97
+        axis_angle_deg: 5.8
+        stillness_s: 0.3
+        in_zone: forklift_lane
+
+expect:
+  events:
+    - track_id: 4
+      violation_type: no_helmet
+      status: resolved
+      alert_count: 1
+      alerted_at_s: 3.5
+      # ★ 18.0 이 아니라 20.0 이어야 한다. 적립분을 이어받지 않았다는 증거다.
+      resolved_at_s: 20.0
+      resolution_sec: 16
+  metrics:
+    correction_rate: 1.0
+    undetermined_rate: 0.0
+    total_violations: 1
+    resolved: 1
+    unresolved: 0
+    undetermined: 0
+    fall_events: 0
