@@ -91,8 +91,11 @@ class Policies(SpecModel):
     # 차이가 나므로(M1 실측: WebRTC 0.27~0.34초 · LL-HLS 약 2.5초) 단일 값으로는
     # ±100ms 정합 목표를 맞출 수 없다. 클라이언트는 현재 재생 경로를 알고 있으므로
     # 그에 맞는 값을 골라 쓰고, 어느 경로로 재생 중인지 화면에 표시한다.
-    overlay_buffer_webrtc_ms: float = 400.0
-    """WebRTC(WHEP) 재생 시 오버레이 지연 버퍼. 실측 지연 0.27~0.34초 기준."""
+    overlay_buffer_webrtc_ms: float = 300.0
+    """WebRTC(WHEP) 재생 시 오버레이 지연 버퍼. **영상 지연 실측 중앙값(약 305ms)에 맞춘다.**
+
+    값이 크면 박스가 뒤처지고 작으면 앞선다(§4.5). 400 이던 것을 실측에 맞춰 내렸다.
+    """
 
     overlay_buffer_hls_ms: float = 2800.0
     """LL-HLS 폴백 재생 시 오버레이 지연 버퍼. 실측 지연 약 2.5초 기준."""

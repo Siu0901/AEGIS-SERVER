@@ -78,7 +78,7 @@ class DetectedPerson(SpecModel):
 class DetectedVehicle(SpecModel):
     """`frame` 메시지의 vehicle(지게차) 객체. API명세서 §2.1
 
-    지게차는 지면 주행 장비라 접점이 명확하므로 `anchor_m` 이 접지 기준점이 된다.
+    지게차는 지면 주행 장비라 접점이 명확하므로 `anchor` 가 접지 기준점이 된다.
     """
 
     class_: Literal["vehicle"] = Field(alias="class")
@@ -86,7 +86,17 @@ class DetectedVehicle(SpecModel):
     conf: float
     bbox: Bbox
 
+    anchor: PointPx
+    """지면 기준점의 **정규화 좌표**. 오버레이 거리선의 끝점이다(§5.1).
+
+    **`bbox` 아래변 중앙이 아니다.** 마스크 하단에서 산출한 값이라 포크가 뻗었거나
+    적재물이 있으면 박스 중앙과 어긋난다. 클라이언트가 `bbox` 로 추정하지 않도록
+    엣지가 반드시 함께 싣는다(§2.1).
+    """
+
     anchor_m: PointM
+    """위 좌표를 호모그래피로 변환한 지면 실좌표(m). 거리·구역 판정 기준."""
+
     moving: bool
     danger_radius_m: float
 
@@ -129,17 +139,32 @@ class CandidateMsg(SpecModel):
     """`candidate` — 이벤트 후보. API명세서 §2.2
 
     규칙에 걸렸을 때만 전송한다. **확정·경고 판단은 서버가 한다.**
+
+    **메시지 하나에 위반 유형 하나다.** 한 트랙에 두 유형이 동시에 걸리면 후보
+    메시지를 유형 수만큼 각각 보낸다 — 유형마다 조건 충족 시작 시각이 달라
+    `observed_ms` 가 각각의 값을 가져야 하기 때문이다. 하나로 묶으면 어느 유형의
+    관측 시간인지 알 수 없어 확정 판정(FN-EVT-02)의 참고값이 무의미해진다.
     """
 
     type: Literal["candidate"] = "candidate"
     cam_id: int
     ts: AwareDatetime
     track_id: int
-    violations: list[ViolationType]
+
+    violations: list[ViolationType] = Field(min_length=1, max_length=1)
+    """이 메시지가 나르는 위반 유형 **하나**. §2.2 의 배열 형태는 유지한다."""
+
     bbox: Bbox
     conf: float
     foot_point_m: PointM
+
     observed_ms: int
+    """**이 메시지의 위반 유형**을 연속 관측한 시간(ms). 서버 확정 판정의 참고값."""
+
+    @property
+    def violation(self) -> ViolationType:
+        """이 후보의 위반 유형. 배열이지만 원소는 항상 하나다."""
+        return self.violations[0]
 
     zone_id: str | None
     """침입한 구역이 없으면 `null`. **필드 자체는 항상 실린다**(§2.1 `in_zone` 과 동일 규약)."""

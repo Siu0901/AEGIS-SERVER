@@ -81,7 +81,12 @@ StreamState = Literal["ok", "reconnecting", "down"]
 
 #: 오버레이 박스의 경고 단계. API명세서 §5.1 `objects[].alert_state`.
 #: `EventStatus` 중 **진행 중**인 값만 쓴다(종결 상태 `resolved`·`expired` 는 오지 않는다).
-AlertState = Literal["active", "alerted", "re_alerted", "lost"]
+#:
+#: **`candidate` 와 `null` 은 다르다.** `candidate` 는 위반 조건이 관측됐으나 아직
+#: 확정 전이고, `null` 은 이 트랙에 진행 중 이벤트가 아예 없다는 뜻이다. 대시보드는
+#: `candidate` 를 **위반 색(적색)으로 그리지 않는다** — 확정 전이므로 위반으로 단정할
+#: 수 없다. 다만 확정 진행 중임은 구분 가능하게 표시한다(§5.1).
+AlertState = Literal["candidate", "active", "alerted", "re_alerted", "lost"]
 
 #: 위험 등급. API명세서 §3 `AlertCommand.level` · §5.2 `severity` — **같은 척도, 같은 값**.
 #: 1=주의(부저 없음) / 2=경고 / 3=긴급(연속 부저). **`fall` 은 항상 3** 이다.
