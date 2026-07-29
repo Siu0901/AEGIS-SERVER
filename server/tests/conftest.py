@@ -7,10 +7,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from aegis_contracts import (
+    AlertCommand,
     EventDetail,
     EventListQuery,
     EventStatus,
@@ -23,17 +25,27 @@ from aegis_contracts import (
     Zone,
 )
 from aegis_contracts.enums import StreamState
+from aegis_vision.clock import Clock
+from server.app.alert_service import AlertService
 from server.app.config import ServerSettings
+from server.domain.mcu_state import McuRuntime
 from server.domain.metrics import MetricsRow
+from server.infra.audio import SoundLibrary
 from server.infra.rec_client import RecUnavailableError
 
 __all__ = [
+    "ASSETS_AUDIO",
     "REC_STATUS",
+    "SOUND_MAP",
     "FakeEventStore",
+    "FakeMqtt",
+    "FakePlayer",
     "FakePolicyStore",
     "FakeRecClient",
+    "FakeSoundStore",
     "FakeWatcher",
     "FakeZoneStore",
+    "make_alerts",
     "make_settings",
     "rec_status_with",
 ]
@@ -169,7 +181,24 @@ class FakeEventStore:
         self.created: list[EventDetail] = []
         self.updates: list[tuple[str, dict[str, Any]]] = []
         self.notes: dict[str, str] = {}
+        self.clip_status: dict[str, str] = {}
+        """§6 `events.clip_status`. §4.1 응답 모델에 없는 컬럼이라 따로 든다."""
+        self.keyframe_paths: dict[str, list[str]] = {}
         self.fail_with: Exception | None = None
+
+    async def find_due_clip_jobs(self, now: datetime, delay_s: float) -> list[str]:
+        """FN-REC-03 — 실행 시각이 지난 `pending` 예약. DB 질의와 같은 조건이다.
+
+        **예약이 여기(저장소)에만 있다는 것이 요점이다.** 그래서 `ClipService` 를 새로
+        만들어도(= 재시작) 같은 목록이 나온다.
+        """
+        return sorted(
+            item.event_id
+            for item in self.items
+            if self.clip_status.get(item.event_id) == "pending"
+            and item.confirmed_at is not None
+            and item.confirmed_at + timedelta(seconds=delay_s) <= now
+        )
 
     async def find_open_events(
         self, cam_id: int, track_id: int
@@ -199,12 +228,19 @@ class FakeEventStore:
         # 응답에 날문자열이 실려도 테스트가 통과한다.
         if "status" in patch:
             patch["status"] = EventStatus(patch["status"])
-        note = patch.pop("note", None)
-        if note is not None:
-            # `note` 는 DB `events` 컬럼(§6)이고 §4.1 응답 모델에는 없다.
-            # 실제 저장소와 마찬가지로 저장소 쪽에서 기억한다.
+        if (note := patch.get("note")) is not None:
+            # §4.1 이 응답에 `note` 를 추가하면서 모델 필드가 됐다. 그대로 반영하되,
+            # 저장소가 기억했는지를 테스트가 따로 볼 수 있게 사본도 남긴다.
             self.notes[event_id] = note
-        patch.pop("last_alerted_at", None)
+        if (status := patch.pop("clip_status", None)) is not None:
+            self.clip_status[event_id] = str(status)
+        if (clip_path := patch.pop("clip_path", None)) is not None:
+            # 실제 저장소는 경로를 URL 로 바꿔 내려준다(§5 「경로 규약」).
+            patch["clip_url"] = f"/media/clips/{PurePosixPath(str(clip_path)).name}"
+        if (keyframes := patch.pop("keyframe_paths", None)) is not None:
+            self.keyframe_paths[event_id] = list(keyframes)
+        # `dropped_at` 은 §6 컬럼이고 §4.1 응답에는 없다(종결 시각은 `timeline` 로 나간다).
+        patch.pop("dropped_at", None)
         for index, item in enumerate(self.items):
             if item.event_id == event_id:
                 self.items[index] = item.model_copy(update=patch)
@@ -267,3 +303,87 @@ class FakePolicyStore:
         if self.fail_with is not None:
             raise self.fail_with
         return self.policies
+
+
+# --------------------------------------------------------------------------
+# 경고 (FN-ALM-01 · 02)
+# --------------------------------------------------------------------------
+# **테스트는 소리를 내지도 브로커에 붙지도 않는다.** 재생기와 MQTT 를 가짜로 바꿔
+# "무엇을 틀었고 무엇을 발행했는가"만 기록한다. 실물을 쓰면 사운드 장치가 없는 CI 와
+# 브로커가 떠 있는 개발 기계에서 결과가 달라진다.
+
+#: 레포의 음원 디렉토리. `assets/` 는 사람이 관리하는 자산 자리다(CLAUDE.md 디렉토리 표).
+ASSETS_AUDIO = Path(__file__).resolve().parent.parent.parent / "assets" / "audio"
+
+#: 기본 음원 매핑. `scripts/seed_sounds.py` 가 DB 에 넣는 것과 같은 모양이다.
+SOUND_MAP: dict[str, str] = {
+    "no_helmet": "no_helmet.wav",
+    "zone_intrusion": "zone_intrusion.wav",
+    "proximity": "proximity.wav",
+    "fall": "fall.wav",
+    "custom_notice": "custom_notice.wav",
+}
+
+
+class FakeSoundStore:
+    """`SoundReader` 대역 — `alert_sounds` 테이블 대신 dict 하나."""
+
+    def __init__(self, mapping: dict[str, str] | None = None) -> None:
+        self.mapping = dict(SOUND_MAP if mapping is None else mapping)
+        self.calls = 0
+
+    async def load_sounds(self) -> dict[str, str]:
+        self.calls += 1
+        return dict(self.mapping)
+
+
+class FakePlayer:
+    """`SoundPlayer` 대역. 판 파일을 순서대로 기억한다."""
+
+    name = "fake"
+
+    def __init__(self, *, fail: bool = False) -> None:
+        self.played: list[Path] = []
+        self.fail = fail
+
+    def play(self, path: Path) -> None:
+        if self.fail:
+            msg = f"재생 장치가 없다 (테스트): {path.name}"
+            raise RuntimeError(msg)
+        self.played.append(path)
+
+
+class FakeMqtt:
+    """`MqttSender` 대역. 발행한 `AlertCommand` 를 순서대로 기억한다."""
+
+    def __init__(self, *, fail: bool = False) -> None:
+        self.published: list[AlertCommand] = []
+        self.fail = fail
+
+    async def publish_alert(self, command: AlertCommand) -> None:
+        if self.fail:
+            msg = "브로커에 닿지 못했다 (테스트)"
+            raise RuntimeError(msg)
+        self.published.append(command)
+
+
+def make_alerts(
+    clock: Clock,
+    *,
+    player: FakePlayer | None = None,
+    mqtt: FakeMqtt | None = None,
+    sounds: FakeSoundStore | None = None,
+    audio_dir: Path | None = None,
+) -> AlertService:
+    """가짜 장치로 묶은 `AlertService`.
+
+    음원 파일은 레포의 `assets/audio/` 를 그대로 본다 — `scripts/seed_sounds.py` 가
+    무음 wav 를 깔아 두므로 파일 존재 검사까지 실제와 같은 경로로 돈다.
+    """
+    return AlertService(
+        library=SoundLibrary(audio_dir or ASSETS_AUDIO, sounds or FakeSoundStore()),
+        player=player or FakePlayer(),
+        clock=clock,
+        mcu=McuRuntime(),
+        mqtt=mqtt or FakeMqtt(),
+    )

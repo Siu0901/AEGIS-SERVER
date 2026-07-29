@@ -49,6 +49,41 @@ class ServerSettings(BaseSettings):
     ntp_server: str = "pool.ntp.org"
     ntp_warn_offset_ms: float = 100.0
 
+    # --- 경고 (FN-ALM-01 · 02) ---
+    audio_dir: Path = Path("./assets/audio")
+    """사전 녹음 wav 가 사는 곳. 파일명 매핑은 코드가 아니라 DB(`alert_sounds`)에 있다."""
+
+    audio_backend: str = "auto"
+    """`auto` · `winsound` · `ffplay`/`aplay`/`paplay` · `none`.
+
+    `none` 은 **명시적으로만** 고른다. 사운드 장치가 없는 기계에서 서버가 조용해지는 것은
+    설정으로 선언해야 하는 사실이지 서버가 알아서 판단할 일이 아니다(절대규칙 9).
+    """
+
+    mqtt_host: str = "127.0.0.1"
+    """MQTT 브로커. **`localhost` 를 쓰지 않는다** — Windows 에서 `::1` 로 먼저 풀려
+    연결마다 IPv6 타임아웃을 먹는다(M2 에서 좌표 지연 2.8초의 원인이었다)."""
+
+    mqtt_port: int = 1883
+
+    alert_duration_s: int = 5
+    """§3 `AlertCommand.duration_s` — 경광등·부저 지속 시간.
+
+    ⚠ 명세서에 대응 정책 키가 없다(§4.5 목록에 없음). **장치 쪽 운용값**이라 상태머신
+    타이머와 성격이 달라 서버 설정에 두었다. `docs/INDEX.md` 「명세서 확인 필요」 참조.
+    """
+
+    mcu_stale_after_s: float = 30.0
+    """장치 상태 보고가 이 시간 이상 끊기면 오프라인으로 본다(`sim/mcu_sim` 주기 10초 × 3)."""
+
+    # --- 클립 예약 추출 (FN-REC-03) ---
+    clip_margin_s: float = 2.0
+    """`confirmed_at + clip_post_roll_s` 뒤에 더 기다리는 여유. 기능명세서 §4.4 가 2초로 정했다.
+
+    ⚠ 정책 키가 아니라 서버 설정이다. §4.5 `GET /policies` 목록에 이 키가 없어서
+    DB `policies` 에 넣으면 계약(`Policies`)과 어긋난다 — 「명세서 확인 필요」 참조.
+    """
+
     @field_validator("cam_ids", mode="before")
     @classmethod
     def _split_cam_ids(cls, value: object) -> object:

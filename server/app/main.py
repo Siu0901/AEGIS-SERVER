@@ -9,12 +9,14 @@
 * `GET /api/v1/metrics/summary` (§4.2 · FN-SYS-04 · FN-SYS-05)
 * `GET /api/v1/zones` · `/policies` (§4.5) — 오버레이가 읽는 폴리곤과 지연 버퍼
 * `/ws/edge` (§2) — 엣지 메시지 수신 · 검증 · 상태머신 입력 (FN-EVT-01 · FN-SYS-06)
+* `POST /api/v1/alerts/manual` · `/alerts/mute` (§4.5 · FN-ALM-04 · FN-ALM-05)
+* `GET /api/v1/events/{id}/clip` · `/media/*` (§4.1 · FN-REC-03)
 * `/ws/dashboard` (§5) — `system` · `overlay` · `event_created` · `event_updated` · `metric`
 * 이벤트 상태머신 틱 (확정 · 해소 · 쿨다운 · 소실 유예 · 재결합)
+* 경고 집행 — 사전 녹음 wav 재생 · `aegis/alert` 발행 (FN-ALM-01 · 02)
+* 클립 예약 추출 루프 (FN-REC-03) — **예약은 DB 에 있으므로 재시작하면 그대로 복구된다**
 * mediamtx 폴링으로 메인 스트림 상태 관측 (`server/infra/stream`)
 * 기동 시 NTP 오프셋 확인 (FN-SYS-02)
-
-경고 발동(wav · MQTT)과 클립 예약 추출은 M4 다.
 
 **여기에 로직을 두지 않는다.** 이 파일은 설정을 읽어 부품을 연결하고 수명주기를
 관리하는 곳이고, 시스템 시계를 읽는 `RealClock` 을 만드는 곳이기도 하다
@@ -33,10 +35,12 @@ from typing import Protocol
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from aegis_contracts import ComponentSystemMsg, Policies
 from aegis_contracts.enums import ComponentState, StreamState
 from aegis_vision.clock import Clock, RealClock
+from server.app.alert_service import SOUND_REFRESH_SECONDS, AlertService
 from server.app.config import ServerSettings, get_server_settings
 from server.app.event_service import (
     POLICY_REFRESH_SECONDS,
@@ -45,6 +49,7 @@ from server.app.event_service import (
     EventStore,
     PolicyReader,
 )
+from server.app.routes import alerts as alert_routes
 from server.app.routes import events as event_routes
 from server.app.routes import metrics as metric_routes
 from server.app.routes import policies as policy_routes
@@ -52,15 +57,21 @@ from server.app.routes import system as system_routes
 from server.app.routes import zones as zone_routes
 from server.app.ws_dashboard import DashboardHub
 from server.app.ws_edge import EdgeGateway
+from server.domain.cloud_state import CloudRuntime
 from server.domain.edge_state import EdgeRuntime
 from server.domain.event_machine import EventMachine
+from server.domain.mcu_state import McuRuntime
 from server.domain.overlay import LiveTracks
+from server.infra.audio import SoundLibrary, SoundReader, resolve_player
+from server.infra.clip import CLIP_POLL_SECONDS, ClipService
 from server.infra.db.repository import (
     DbEventRepository,
     DbPolicyRepository,
+    DbSoundRepository,
     DbZoneRepository,
 )
 from server.infra.db.session import create_db_engine
+from server.infra.mqtt import MqttAlertClient
 from server.infra.rec_client import RecClient, RecUnavailableError, StorageReader
 from server.infra.stream import MediaMtxClient, StreamWatcher
 from server.infra.timesync import check_time_sync
@@ -93,6 +104,10 @@ def create_app(
     events: EventStore | None = None,
     zones: object | None = None,
     policies: PolicyReader | None = None,
+    sounds: SoundReader | None = None,
+    alerts: AlertService | None = None,
+    clips: ClipService | None = None,
+    mqtt: MqttAlertClient | None = None,
 ) -> FastAPI:
     """부품을 조립한다. 인자를 주지 않으면 설정에 맞는 실물을 만든다.
 
@@ -110,11 +125,51 @@ def create_app(
     engine = create_db_engine() if events is None or zones is None or policies is None else None
     hub = DashboardHub()
     edge = EdgeRuntime()
+    mcu = McuRuntime(stale_after_s=resolved.mcu_stale_after_s)
+    cloud = CloudRuntime()
     tracks = LiveTracks()
     event_store: EventStore | None = events or (DbEventRepository(engine) if engine else None)
     policy_reader: PolicyReader | None = policies or (
         DbPolicyRepository(engine) if engine else None
     )
+    storage: StorageReader = rec_client or RecClient(resolved.recorder_base)
+
+    # FN-ALM-02 — 브로커가 없어도 기동을 막지 않는다. 붙는 것은 `start()` 에서 비동기로
+    # 시도하고, 그때까지 경광등 경고는 실패로 집계된다(조용히 성공하지 않는다).
+    mqtt_client = mqtt
+    if mqtt_client is None and alerts is None:
+        mqtt_client = MqttAlertClient(
+            host=resolved.mqtt_host,
+            port=resolved.mqtt_port,
+            mcu=mcu,
+            clock=ticker,
+            publish=hub.broadcast,
+        )
+    # FN-ALM-01 — 음원 매핑은 DB 에서 읽는다(절대규칙 6). 파일명이 코드에 없다.
+    alert_service = alerts or AlertService(
+        library=SoundLibrary(
+            resolved.audio_dir,
+            sounds or (DbSoundRepository(engine) if engine else None),
+        ),
+        player=resolve_player(resolved.audio_backend),
+        clock=ticker,
+        mcu=mcu,
+        mqtt=mqtt_client,
+        publish=hub.broadcast,
+        alert_duration_s=resolved.alert_duration_s,
+    )
+    # FN-REC-03 — 예약 큐는 DB 의 `clip_status = pending` 이다. 메모리 타이머를 쓰지
+    # 않으므로 재시작해도 예약이 남는다.
+    clip_service = clips
+    if clip_service is None and event_store is not None and isinstance(storage, RecClient):
+        clip_service = ClipService(
+            rec=storage,
+            store=event_store,  # type: ignore[arg-type]
+            clock=ticker,
+            media_root=resolved.media_root,
+            publish=hub.broadcast,
+            margin_s=resolved.clip_margin_s,
+        )
     # 임계값은 기동 직후 DB 에서 덮어쓴다(`EventService.start`). 여기 있는 `Policies()`
     # 는 계약 기본값이며 DB 시드의 원천이기도 하다(절대규칙 6).
     event_service = EventService(
@@ -124,8 +179,9 @@ def create_app(
         clock=ticker,
         store=event_store,
         policies=policy_reader,
+        alerts=alert_service,
+        clips=clip_service,
     )
-    storage: StorageReader = rec_client or RecClient(resolved.recorder_base)
     watcher: StreamObserver = stream_watcher or StreamWatcher(
         client=MediaMtxClient(resolved.mediamtx_api),
         cam_ids=resolved.cam_ids,
@@ -144,27 +200,47 @@ def create_app(
             warn_offset_ms=resolved.ntp_warn_offset_ms,
         )
         await watcher.start()
+        if mqtt_client is not None:
+            await mqtt_client.start()
+        await alert_service.start()
         # 재시작 전에 열려 있던 이벤트를 되살린다. 두지 않으면 그 이벤트들이
         # 영원히 미해소로 남아 시정률 분모를 오염시킨다.
         await event_service.start()
-        storage_task = asyncio.create_task(
-            _watch_storage(storage, hub, ticker), name="storage-watch"
-        )
-        tick_task = asyncio.create_task(_tick_events(event_service), name="event-tick")
+        if clip_service is not None:
+            clip_service.set_policies(event_service.machine.policies)
+        tasks = [
+            asyncio.create_task(_watch_storage(storage, hub, ticker), name="storage-watch"),
+            asyncio.create_task(
+                _tick_events(event_service, alert_service, clip_service), name="event-tick"
+            ),
+        ]
+        if clip_service is not None:
+            # 첫 순회가 곧 **재시작 복구**다 — 서버가 죽어 있는 동안 실행 시각이 지난
+            # `pending` 잡이 여기서 집힌다(기능명세서 §4.4).
+            tasks.append(asyncio.create_task(_run_clips(clip_service), name="clip-jobs"))
         log.info(
-            "서버 기동 — cams=%s mediamtx=%s rec=%s",
+            "서버 기동 — cams=%s mediamtx=%s rec=%s mqtt=%s:%s",
             resolved.cam_ids,
             resolved.mediamtx_api,
             resolved.recorder_base,
+            resolved.mqtt_host,
+            resolved.mqtt_port,
         )
         try:
             yield
         finally:
-            for task in (storage_task, tick_task):
+            for task in tasks:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+            if clip_service is not None:
+                # 뒤로 넘긴 키프레임 추출을 마저 끝낸다. 여기서 버리면 확정 직전에
+                # 내린 서버가 그 이벤트의 그림을 영영 남기지 않는다 — 클립과 달리
+                # 키프레임은 DB 에 예약이 없어 재시작이 되살려주지 못한다.
+                await clip_service.wait_idle()
             await watcher.stop()
+            if mqtt_client is not None:
+                await mqtt_client.stop()
             await storage.aclose()
 
     application = FastAPI(
@@ -188,17 +264,34 @@ def create_app(
     application.state.rec_client = storage
     application.state.stream_watcher = watcher
     application.state.edge = edge
+    application.state.mcu = mcu
+    application.state.cloud = cloud
     application.state.tracks = tracks
     application.state.events = event_store
     application.state.event_service = event_service
+    application.state.alerts = alert_service
+    application.state.clips = clip_service
     application.state.zones = zones or (DbZoneRepository(engine) if engine else None)
     application.state.policies = policy_reader
 
     application.include_router(system_routes.router, prefix=API_PREFIX)
     application.include_router(event_routes.router, prefix=API_PREFIX)
     application.include_router(metric_routes.router, prefix=API_PREFIX)
+    application.include_router(alert_routes.router, prefix=API_PREFIX)
     application.include_router(zone_routes.router, prefix=API_PREFIX)
     application.include_router(policy_routes.router, prefix=API_PREFIX)
+
+    # §5 「경로 규약」 — 클라이언트에는 URL 만 나가고(`clip_url` · `keyframe_urls`),
+    # 그 URL 이 가리키는 곳이 여기다. 파일시스템 경로는 응답에 실리지 않는다.
+    #
+    # **REC 의 7일 원본이 아니다.** 여기 있는 것은 서버가 영구 보관하는 이벤트 클립과
+    # 키프레임뿐이며, 원본은 엣지 SSD 에 있고 §4.7 API 로만 닿는다(기능명세서 §4.4).
+    resolved.media_root.mkdir(parents=True, exist_ok=True)
+    application.mount(
+        "/media",
+        StaticFiles(directory=resolved.media_root),
+        name="media",
+    )
 
     @application.exception_handler(HTTPException)
     async def spec_error(request: Request, exc: HTTPException) -> JSONResponse:
@@ -250,7 +343,29 @@ def create_app(
     return application
 
 
-async def _tick_events(service: EventService) -> None:
+async def _run_clips(service: ClipService) -> None:
+    """FN-REC-03 — 실행 시각이 지난 클립 예약을 처리한다.
+
+    **첫 순회가 재시작 복구다.** 예약은 DB 의 `clip_status = pending` 하나로 표현되고
+    실행 시각은 `confirmed_at + clip_post_roll_s + margin` 으로 계산되므로, 서버가 죽어
+    있는 동안 때가 지난 잡도 여기서 함께 집힌다(기능명세서 §4.4).
+
+    예외를 삼키지 않는다(절대규칙 9). 한 번의 실패로 루프를 죽이면 그 뒤 모든 이벤트가
+    증거 없이 남는다.
+    """
+    while True:
+        try:
+            await service.run_due()
+        except Exception:
+            log.exception("클립 예약 처리가 실패했다 — 다음 주기에 다시 시도한다")
+        await asyncio.sleep(CLIP_POLL_SECONDS)
+
+
+async def _tick_events(
+    service: EventService,
+    alerts: AlertService,
+    clips: ClipService | None = None,
+) -> None:
     """상태머신에 시간을 흘려보낸다 — 소실 감지 · 유예 만료 · 쿨다운.
 
     확정과 해소는 프레임이 도착할 때 그 자리에서 판정되므로 이 루프에 걸리지 않는다.
@@ -260,17 +375,30 @@ async def _tick_events(service: EventService) -> None:
     예외를 삼키지 않는다(CLAUDE.md 절대규칙 9). 한 번의 실패로 루프를 죽이면 그 뒤
     모든 이벤트가 종결되지 않으므로 로그를 남기고 계속 돈다.
     """
-    since_refresh = 0.0
+    since_policy = 0.0
+    since_sound = 0.0
     while True:
         await asyncio.sleep(TICK_SECONDS)
         try:
             await service.tick()
         except Exception:
             log.exception("이벤트 틱이 실패했다 — 다음 주기에 다시 시도한다")
-        since_refresh += TICK_SECONDS
-        if since_refresh >= POLICY_REFRESH_SECONDS:
-            since_refresh = 0.0
+        since_policy += TICK_SECONDS
+        since_sound += TICK_SECONDS
+        if since_policy >= POLICY_REFRESH_SECONDS:
+            since_policy = 0.0
             await service.refresh_policies()
+            if clips is not None:
+                # `clip_pre_roll_s` · `clip_post_roll_s` 도 DB 값이다(절대규칙 6).
+                # 상태머신이 방금 읽은 것을 그대로 나눠 쓴다 — 두 번 읽으면 같은 순간에
+                # 서로 다른 사전/사후 구간으로 클립을 뽑는 창이 생긴다.
+                clips.set_policies(service.machine.policies)
+        if since_sound >= SOUND_REFRESH_SECONDS:
+            # 설정 화면(FN-CFG-03 · M6)에서 음원을 바꾸면 이만큼 안에 반영된다.
+            # 경고 경로에서 DB 를 읽지 않기 위한 주기 갱신이다 — 1초 예산 안에
+            # DB 왕복을 넣지 않는다.
+            since_sound = 0.0
+            await alerts.refresh_sounds()
 
 
 async def _watch_storage(client: StorageReader, hub: DashboardHub, clock: Clock) -> None:

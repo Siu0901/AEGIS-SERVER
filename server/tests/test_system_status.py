@@ -8,9 +8,12 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from fastapi.testclient import TestClient
 
 from aegis_contracts import SystemStatus
+from aegis_vision.clock import FakeClock
 from server.app.main import create_app
 
 from .conftest import (
@@ -19,9 +22,13 @@ from .conftest import (
     FakePolicyStore,
     FakeRecClient,
     FakeWatcher,
+    make_alerts,
     make_settings,
     rec_status_with,
 )
+
+#: 실측 시각이 필요 없는 테스트들이라 고정 시각 하나로 충분하다.
+NOW = datetime(2026, 8, 14, 5, 37, 0, tzinfo=UTC)
 
 
 def _client(watcher: FakeWatcher, rec: FakeRecClient) -> TestClient:
@@ -33,6 +40,9 @@ def _client(watcher: FakeWatcher, rec: FakeRecClient) -> TestClient:
         stream_watcher=watcher,
         events=FakeEventStore(),
         policies=FakePolicyStore(),
+        # 경고 집행자를 가짜 장치로 끼운다. 실물이면 기동 시 DB(음원 매핑)와
+        # MQTT 브로커에 붙는데, 테스트는 바깥 프로세스에 닿지 않는다.
+        alerts=make_alerts(FakeClock(NOW)),
     )
     return TestClient(app)
 

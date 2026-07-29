@@ -21,6 +21,7 @@ from .conftest import (
     FakePolicyStore,
     FakeRecClient,
     FakeWatcher,
+    make_alerts,
     make_settings,
 )
 
@@ -111,6 +112,9 @@ def build(store: FakeEventStore | None = None) -> tuple[TestClient, FakeEventSto
         stream_watcher=FakeWatcher({1: "ok", 2: "ok"}),
         events=events,
         policies=FakePolicyStore(),
+        # 실물 경고 집행자는 기동 시 DB(음원 매핑)와 MQTT 에 붙는다. 테스트는
+        # 바깥 프로세스에 닿지 않는다(conftest 서두).
+        alerts=make_alerts(FakeClock(datetime(2026, 8, 14, 5, 37, 0, tzinfo=UTC))),
     )
     return TestClient(app), events
 
