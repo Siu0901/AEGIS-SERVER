@@ -102,6 +102,7 @@ v2.0 · 2026-07-18
       "track_id": 11,
       "conf": 0.87,
       "bbox": [0.591, 0.389, 0.838, 0.756],
+      "anchor": [0.714, 0.754],
       "anchor_m": [7.02, 8.90],
       "moving": true,
       "danger_radius_m": 3.0
@@ -141,7 +142,10 @@ v2.0 · 2026-07-18
 
 | 필드 | 타입 | 설명 |
 |---|---|---|
-| `anchor_m` | float[2] | 지게차의 지면 기준점 실좌표. 지게차는 지면 주행 장비라 접점이 명확하다 |
+| `anchor` | float[2] | 지게차의 지면 기준점 **정규화 좌표**. `anchor_m` 을 산출하기 전의 픽셀 위치이며, 오버레이 거리선의 끝점으로 쓰인다 |
+| `anchor_m` | float[2] | 위 좌표를 호모그래피로 변환한 지면 실좌표. 지게차는 지면 주행 장비라 접점이 명확하다 |
+
+※ `anchor` 는 마스크 하단에서 산출한 값이며 **bbox 아래변 중앙이 아니다.** 클라이언트가 bbox 로 추정하지 않도록 엣지가 반드시 함께 싣는다.
 | `moving` | bool | 최근 프레임 대비 위치 변화 여부. **이동 중이면 위험도를 상향 조정**한다 |
 | `danger_radius_m` | float | 해당 클래스에 설정된 위험 반경. 지게차 기본 3.0m |
 
@@ -202,7 +206,9 @@ v2.0 · 2026-07-18
 | `bbox` / `conf` | float[4] / float | ✔ | 대상의 박스와 감지 신뢰도 |
 | `foot_conf` | float | | 접지점 신뢰도. **`fall` 등 접지점이 무의미한 경우 생략 가능** |
 | `posture` | string | | `fall` 위반의 근거 |
-| `observed_ms` | int | ✔ | 엣지가 이 조건을 연속 관측한 시간(ms). 서버 확정 판정의 참고값 |
+| `observed_ms` | int | ✔ | 엣지가 **이 메시지의 `violation_type` 조건을** 연속 관측한 시간(ms). 서버 확정 판정의 참고값 |
+
+**후보 메시지 하나에는 위반 유형이 하나만 담긴다.** 한 트랙에 두 유형(예: `no_helmet` + `zone_intrusion`)이 동시에 걸리면 **`candidate` 메시지를 유형 수만큼 각각 보낸다.** 유형마다 조건 충족 시작 시각이 다르므로 `observed_ms` 도 각각의 값을 갖는다.
 | `nearby[]` | array | | **주변 위험 지게차 목록** — 아래 상세 |
 
 **`nearby[]` 상세**
@@ -645,7 +651,7 @@ v2.0 · 2026-07-18
   "cls_min_conf": 0.60,
   "clip_pre_roll_s": 10,
   "clip_post_roll_s": 10,
-  "overlay_buffer_webrtc_ms": 400,
+  "overlay_buffer_webrtc_ms": 300,
   "overlay_buffer_hls_ms": 2800,
   "overlay_stale_ms": 1000,
   "fall_height_ratio_max": 0.5,
@@ -674,7 +680,7 @@ v2.0 · 2026-07-18
 | `cls_min_crop_px` | **최소 크롭 높이.** 미달 시 분류 결과를 채택하지 않는다 |
 | `cls_min_conf` | **최소 분류 신뢰도.** 미달 시 결과를 채택하지 않는다 |
 | `clip_pre_roll_s` / `clip_post_roll_s` | 이벤트 클립의 사전·사후 구간(초) |
-| `overlay_buffer_webrtc_ms` | WebRTC 재생 시 오버레이 지연 버퍼 |
+| `overlay_buffer_webrtc_ms` | WebRTC 재생 시 오버레이 지연 버퍼. **영상 지연 실측 중앙값(약 305ms)에 맞춘다.** 값이 크면 박스가 뒤처지고 작으면 앞선다 |
 | `overlay_buffer_hls_ms` | HLS 폴백 재생 시 오버레이 지연 버퍼 |
 | `overlay_stale_ms` | 이 시간 이상 좌표 갱신이 없으면 박스를 흐리게 표시 |
 | `fall_height_ratio_max` | 높이 비율이 이 값 이하이면 쓰러짐 조건 ① 충족 |
@@ -911,7 +917,9 @@ FN-UI-02 표시 규칙(위반자 적색·근접 거리선·거리 라벨)을 채
 | `objects[].bbox` | float[4] | **`[x1, y1, x2, y2]`** 좌상단·우하단 정규화 좌표(§1.2). `[x, y, w, h]` 가 아니다 |
 | `objects[].violations` | string[] | 현재 이 트랙에 걸려 있는 위반 유형. 없으면 빈 배열. **박스 색을 결정한다** |
 | `objects[].event_ids` | string[] | 대응하는 진행 중 이벤트 ID. 클릭 시 상세로 이동 |
-| `objects[].alert_state` | string·null | `active` / `alerted` / `re_alerted` / `lost` 중 하나. 없으면 `null` |
+| `objects[].alert_state` | string·null | `candidate` / `active` / `alerted` / `re_alerted` / `lost` 중 하나. **진행 중 이벤트가 아예 없으면 `null`** |
+
+**`candidate` 와 `null` 은 다르다**: `candidate` 는 위반 조건이 관측됐으나 아직 확정 전인 상태이고, `null` 은 이 트랙에 이벤트가 없다는 뜻이다. 대시보드는 `candidate` 를 **위반 색(적색)으로 그리지 않는다** — 확정 전이므로 위반으로 단정할 수 없다. 다만 확정 진행 중임을 알 수 있도록 구분 가능한 표시를 둔다.
 | `objects[].nearby[].dist_m` | float | 사람↔차량 지면 거리. **거리선 라벨(예: 3.2 m)의 원천** |
 | `objects[].nearby[].anchor` | float[2] | 상대 차량의 정규화 접지 좌표. 거리선의 반대편 끝점 |
 | `objects[].nearby[].in_danger_zone` | bool | 위험 반경 이내 여부 |
