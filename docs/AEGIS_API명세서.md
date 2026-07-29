@@ -433,6 +433,7 @@ v2.0 · 2026-07-18
   "undetermined_rate": 0.05,
   "total_violations": 23,
   "resolved": 20,
+  "resolved_late": 1,
   "unresolved": 2,
   "undetermined": 1,
   "avg_resolution_sec": 41,
@@ -443,7 +444,8 @@ v2.0 · 2026-07-18
 
 | 필드 | 산출 |
 |---|---|
-| `correction_rate` | `resolved / (resolved + unresolved)`. **`fall`과 `expired`는 제외** |
+| `correction_rate` | `resolved / (resolved + resolved_late + unresolved)`. **`fall`과 `expired`는 제외.** 분모가 0이면 `null` |
+| `resolved_late` | 해소됐으나 `resolve_window_s` 초과. 분모에만 들어간다. `unresolved` 와 섞지 않는다 |
 | `undetermined` | 재결합 실패로 종결된 `expired` 건수. **시정률 분모·분자 모두에서 제외** |
 | `undetermined_rate` | `expired / (resolved + unresolved + expired)`. 시정률과 **항상 병기**한다 |
 | `fall_events` | 쓰러짐 이벤트 수. 별도 집계 |
@@ -640,6 +642,7 @@ v2.0 · 2026-07-18
   "resolve_duration_s": 10,
   "cooldown_s": 30,
   "resolve_window_s": 300,
+  "track_miss_timeout_ms": 1500,
   "track_lost_grace_s": 15,
   "reassoc_window_s": 10,
   "reassoc_max_speed_ms": 1.5,
@@ -671,6 +674,7 @@ v2.0 · 2026-07-18
 | `resolve_duration_s` | 위반 소멸 → 해소 판정 지속 조건 |
 | `cooldown_s` | 재경고 최소 간격 |
 | `resolve_window_s` | 이 시간 내 해소된 건만 시정률 분자에 포함 (기본 300초) |
+| `track_miss_timeout_ms` | `frame` 에서 해당 `track_id` 가 이 시간 이상 관측되지 않으면 **소실로 간주**한다(기본 1500ms). 엣지가 `track_lost` 를 보내지 못하고 끊긴 경우의 대비책이다. 표시용 키인 `overlay_stale_ms` 와 혼용하지 않는다 |
 | `track_lost_grace_s` | 트랙 소실 후 `expired` 종결까지의 유예 (기본 15초) |
 | `reassoc_window_s` | 재결합을 시도하는 최대 경과 시간 |
 | `reassoc_max_speed_ms` | 재결합 반경 산출용 최대 보행속도(m/s). **반경 = 이 값 × Δt** |
@@ -945,6 +949,11 @@ FN-UI-02 표시 규칙(위반자 적색·근접 거리선·거리 라벨)을 채
   "keyframe_url":"/media/keyframes/EV-20260814-0231_0.jpg" }
 ```
 
+`keyframe_url` 은 **`null` 이 될 수 있다.** 키프레임 추출이 실패했거나 REC 에 도달하지 못한 경우다. 존재하지 않는 URL 을 문자열로 내보내지 않는다.
+
+```json
+```
+
 ```json
 { "type":"event_updated","event_id":"EV-20260814-0231",
   "status":"resolved","resolved_at":"2026-08-14T05:37:40Z","resolution_sec":37 }
@@ -956,14 +965,16 @@ FN-UI-02 표시 규칙(위반자 적색·근접 거리선·거리 라벨)을 채
 
 | 전이 | 함께 싣는 필드 |
 |---|---|
-| → `alerted` | `alerted_at`, `alert_count`, `severity` |
-| → `re_alerted` | `alerted_at`(최근), `alert_count` |
+| → `alerted` | `alerted_at`, `last_alerted_at`, `alert_count`, `severity` |
+| → `re_alerted` | `last_alerted_at`, `alert_count` |
 | → `lost` | `lost_at` |
 | `lost` → 복귀 | `track_id`(갱신된 값), `reassoc_count` |
 | → `resolved` | `resolved_at`, `resolution_sec` |
 | → `expired` | `expired_at` |
 | 클립 준비 완료 | `clip_status`, `clip_url` |
 | 수동 정정 | `is_false_positive`, `note` |
+
+**`alerted_at` 은 최초 경고 시각이며 변경하지 않는다.** 재경고 시각은 `last_alerted_at` 에 따로 싣는다. `resolution_sec` 이 `alerted_at → resolved_at` 으로 정의되어 있으므로, 재경고할 때마다 `alerted_at` 을 갱신하면 **재경고가 많을수록 시정 소요 시간이 짧아져 지표가 부풀려진다.** 두 필드를 분리해 이를 막는다.
 
 **`severity`**: `1`(주의) / `2`(경고) / `3`(긴급). §3 `AlertCommand.level` 과 동일한 척도이며 같은 값을 쓴다.
 
@@ -1157,9 +1168,21 @@ H는 캘리브레이션 시 지면 4점의 (픽셀, 실측 미터) 쌍으로 1�
 ### 6.7 `correction_rate` (방송 후 시정률)
 
 ```
-correction_rate    = resolved / (resolved + unresolved)
-undetermined_rate  = expired  / (resolved + unresolved + expired)
+correction_rate    = resolved / (resolved + resolved_late + unresolved)
+undetermined_rate  = expired  / (resolved + resolved_late + unresolved + expired)
 ```
+
+**분모가 0이면 `null` 을 반환한다.** `0.0` 은 "시정률이 0%"라는 주장이지만, 실제로는 "판정 가능한 이벤트가 없다"는 뜻이다. 판정 불가 이벤트만 있는 구간에서 시정률 0%가 표시되면 시스템이 전혀 작동하지 않은 것처럼 보인다. 대시보드는 `null` 을 `–` 로 표시한다.
+
+**`resolved` / `resolved_late` / `unresolved` 는 서로 배타적이다.**
+
+| 버킷 | 정의 |
+|---|---|
+| `resolved` | `resolve_window_s` **이내**에 해소됨. **분자에 들어가는 유일한 버킷** |
+| `resolved_late` | 해소됐으나 `resolve_window_s` 초과. 분모에만 들어간다 |
+| `unresolved` | 아직 해소되지 않음(`alerted` / `re_alerted`) |
+
+늦은 시정을 `unresolved` 에 섞지 않는다. "시정은 했으나 늦었다"와 "아직 안 했다"는 현장에서 의미가 다르고, 합쳐두면 응답만 보고 원인을 구분할 수 없다.
 
 | 이벤트 종결 상태 | 시정률 분자 | 시정률 분모 | 비고 |
 |---|---|---|---|

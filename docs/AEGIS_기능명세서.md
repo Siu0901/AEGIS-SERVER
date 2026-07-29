@@ -256,6 +256,7 @@ v2.0 · 2026-07-18
 | `lost` | 대상 트랙이 관측되지 않음 (유예 상태) | 직전 상태로 복귀 / `expired` |
 | `resolved` | 위반 소멸 상태가 해소 지속시간 이상 유지 | (종료 · **시정 성공**) |
 | `expired` | `lost` 상태로 `track_lost_grace_s` 경과, 재결합 실패 | (종료 · **판정 불가**) |
+| `dropped` | 확정 전(`candidate`) 상태에서 조건이 사라져 소멸 | (종료 · **지표 전량 제외**) |
 
 ```
 candidate ─→ active ─→ alerted ⇄ re_alerted
@@ -268,6 +269,18 @@ candidate ─→ active ─→ alerted ⇄ re_alerted
 
             alerted / re_alerted ──위반 소멸 지속──→ resolved (시정 성공)
 ```
+
+**`dropped` 를 둔 이유**
+
+후보가 확정 지속시간(3초)을 채우지 못하고 사라지는 일은 정상적으로 흔하다. 이 레코드를 **삭제하지 않고 `dropped` 로 종결**한다.
+
+| 대안 | 문제 |
+|---|---|
+| 레코드 삭제 | 후보가 얼마나 확정에 실패하는지 알 수 없어져 `confirm_duration_s` 를 튜닝할 근거가 사라진다 |
+| `expired` 로 종결 | 판정 불가율이 오염된다. `expired` 는 "경고까지 갔는데 시정 여부를 못 봤다"는 뜻이다 |
+| `candidate` 로 방치 | 병합 키(`cam_id+track_id+violation_type`)를 계속 점유해 같은 트랙의 새 위반이 병합되어 버린다 |
+
+`dropped` 는 **시정률·판정 불가율 어느 쪽에도 들어가지 않는다.** 다만 `dropped / (dropped + 확정)` 비율은 확정 지속시간이 적절한지 판단하는 진단값이므로 보존한다. 비율이 지나치게 높으면 3초가 너무 길거나 엣지 후보 생성이 과민한 것이다.
 
 **`lost`를 둔 이유**: 트랙 소실을 즉시 종결로 처리하면 세 가지 왜곡이 발생한다.
 
@@ -582,7 +595,10 @@ confirmed_at + post_roll : 사후 세그먼트 기록 완료
 | `alerted` / `re_alerted` 미해소 | 분모 포함 (unresolved) |
 | **`expired` (재결합 실패)** | **분자·분모 모두 제외**, `undetermined`로 별도 집계 |
 | `is_false_positive = true` | 전량 제외 |
+| `dropped` (확정 전 소멸) | 전량 제외. 진단용으로만 집계 |
 | `fall` | 전량 제외 (대상자가 스스로 시정할 수 없음), 별도 카운트 |
+
+**분모가 0이면 시정률은 `null` 이다.** `0.0` 은 "시정률 0%"라는 주장이므로, 판정 가능한 이벤트가 없는 구간과 구분되어야 한다.
 
 **`expired`를 제외하는 근거**: 추적이 끊긴 이벤트는 시정 여부를 관측하지 못한 것이지 시정하지 않은 것이 아니다. 미시정으로 계산하면 시스템 성능이 부당하게 낮게 나오고, 시정으로 계산하면 지표가 부풀려져 방어할 수 없다. 제외하되 그 비율을 **함께 공개**하는 것이 정확하며, 검증 가능한 지표가 된다.
 
@@ -649,6 +665,8 @@ stride 32에 맞춘 `640×384` 로 rect 추론하면 패딩이 12px씩으로 줄
 | `resolution_sec` | int | 경고→시정 소요 |
 | `alert_count` | int | 재경고 포함 횟수 |
 | `lost_at` / `expired_at` | timestamptz | 트랙 소실·판정 불가 종결 시각 |
+| `last_alerted_at` | timestamptz | **최근** 경고 시각. `alerted_at`(최초)은 변경하지 않는다 |
+| `note` | text | 관리자 메모. 수동 정정(`is_false_positive`) 사유 등 |
 | `reassoc_count` | int | 재결합 횟수 |
 | `prev_track_ids` | jsonb | 재결합 이전 트랙 번호 이력 |
 | `min_distance_m` | float | 최소 근접 거리 |
