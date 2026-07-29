@@ -19,9 +19,9 @@
 스키마 불일치는 일시적 장애가 아니라 엣지 코드의 결함이라 재전송해도 같은 결과가
 반복되고, 실시간 안전 루프에 재시도 대기를 넣으면 지연만 늘어난다.
 
-**M2 에는 상태머신이 없다.** 확정(FN-EVT-02) · 해소(FN-EVT-03) · 쿨다운(FN-EVT-04) ·
-소실 유예와 재결합(FN-EVT-07)은 M3 다. 그래서 여기서 만든 이벤트는 `candidate` 에
-머물고, §5.2 `event_created`(신규 **확정** 이벤트)는 아직 발행하지 않는다.
+**판정은 여기 없다.** 확정·해소·쿨다운·소실 유예·재결합은 `server/domain/event_machine.py`
+가 정하고 `server/app/event_service.py` 가 집행한다. 이 파일은 소켓 하나의 수명과
+스키마 검증까지만 책임진다.
 """
 
 from __future__ import annotations
@@ -36,21 +36,17 @@ from pydantic import TypeAdapter, ValidationError
 from aegis_contracts import (
     CandidateMsg,
     EdgeMessage,
-    EventDetail,
-    EventStatus,
-    EventSummary,
     FrameMsg,
     HeartbeatMsg,
     SpecModel,
     TrackLostMsg,
-    ViolationType,
 )
 from aegis_vision.clock import Clock
+from server.app.event_service import EventService
 from server.domain.edge_state import EdgeRuntime
-from server.domain.event_machine import build_candidate_event, merge_changes, plan_candidate
 from server.domain.overlay import LiveTracks, compose_overlay
 
-__all__ = ["MAX_LOGGED_PAYLOAD", "EdgeGateway", "EventStore"]
+__all__ = ["MAX_LOGGED_PAYLOAD", "EdgeGateway"]
 
 log = logging.getLogger("server.ws.edge")
 
@@ -61,20 +57,6 @@ _ADAPTER: TypeAdapter[Any] = TypeAdapter(EdgeMessage)
 #: 자르지 않으면 프레임 하나가 수 KB 라 로그가 금방 덮인다. 그렇다고 안 남기면
 #: "무엇이 거부됐는지"를 영영 알 수 없다 — 그게 FN-SYS-06 이 막으려는 상황이다.
 MAX_LOGGED_PAYLOAD = 2000
-
-
-class EventStore(Protocol):
-    """`/ws/edge` 가 요구하는 이벤트 저장소. 구현은 `server/infra/db/repository.py`."""
-
-    async def find_open_events(
-        self, cam_id: int, track_id: int
-    ) -> dict[ViolationType, EventSummary]: ...
-
-    async def next_event_id(self, at: Any) -> str: ...
-
-    async def create(self, event: EventDetail) -> None: ...
-
-    async def update(self, event_id: str, changes: dict[str, Any]) -> None: ...
 
 
 class Publisher(Protocol):
@@ -97,7 +79,7 @@ class EdgeGateway:
         tracks: LiveTracks,
         publish: Publisher,
         clock: Clock,
-        events: EventStore | None = None,
+        events: EventService,
     ) -> None:
         self._edge = edge
         self._tracks = tracks
@@ -115,7 +97,10 @@ class EdgeGateway:
         except WebSocketDisconnect:
             pass
         finally:
-            self._tracks.clear()
+            # 오버레이 표시만 내린다. 진행 중 이벤트는 남겨 두고 상태머신이 미관측으로
+            # 보아 `lost` → `expired`(판정 불가)로 종결한다 — 관측 주체가 사라졌다는
+            # 사실을 "시정했다"로도 "미시정"으로도 바꾸지 않기 위해서다.
+            self._events.clear_tracks()
             for message in self._edge.disconnect(self._clock.now()):
                 await self._publish(message)
             log.info("엣지 연결 종료")
@@ -126,11 +111,14 @@ class EdgeGateway:
         if message is None:
             return
         if isinstance(message, FrameMsg):
+            # **판정이 먼저다.** 오버레이는 이벤트 상태를 합쳐서 나가므로(§5.1),
+            # 같은 프레임으로 해소가 결정됐다면 그 결과가 이 프레임에 반영되어야 한다.
+            await self._events.on_frame(message)
             await self._publish(compose_overlay(message, self._tracks))
         elif isinstance(message, CandidateMsg):
-            await self._on_candidate(message)
+            await self._events.on_candidate(message)
         elif isinstance(message, TrackLostMsg):
-            self._on_track_lost(message)
+            await self._on_track_lost(message)
         elif isinstance(message, HeartbeatMsg):
             for change in self._edge.apply_heartbeat(message, self._clock.now()):
                 await self._publish(change)
@@ -173,53 +161,13 @@ class EdgeGateway:
     # 메시지별 처리
     # ------------------------------------------------------------------
 
-    async def _on_candidate(self, candidate: CandidateMsg) -> None:
-        """FN-EVT-01 — 동일 `cam_id` + `track_id` + 위반 유형이면 새로 만들지 않는다."""
-        if self._events is None:
-            log.error(
-                "이벤트 저장소가 없어 후보를 기록하지 못했다 — cam=%s track=%s",
-                candidate.cam_id,
-                candidate.track_id,
-            )
-            return
+    async def _on_track_lost(self, message: TrackLostMsg) -> None:
+        """FN-EVT-07 ① — 소실 유예로 넘기고 오버레이에서는 즉시 내린다.
 
-        open_events = await self._events.find_open_events(candidate.cam_id, candidate.track_id)
-        plan = plan_candidate(
-            candidate, {violation: item.event_id for violation, item in open_events.items()}
-        )
-
-        merged: dict[ViolationType, tuple[str, EventStatus]] = {
-            violation: (item.event_id, item.status) for violation, item in open_events.items()
-        }
-
-        for violation, event_id in plan.updates:
-            changes = merge_changes(open_events[violation], candidate)
-            if changes:
-                await self._events.update(event_id, changes)
-
-        for violation in plan.creates:
-            event_id = await self._events.next_event_id(candidate.ts)
-            event = build_candidate_event(candidate, violation, event_id)
-            await self._events.create(event)
-            merged[violation] = (event_id, event.status)
-            log.info(
-                "이벤트 생성 %s — cam=%s track=%s type=%s",
-                event_id,
-                candidate.cam_id,
-                candidate.track_id,
-                violation.value,
-            )
-
-        self._tracks.record_candidate(candidate, merged)
-
-    def _on_track_lost(self, message: TrackLostMsg) -> None:
-        """오버레이에서 그 트랙을 내린다.
-
-        **이벤트를 `lost` 로 전이시키지 않는다** — 소실 유예(FN-EVT-07 ①)는 상태머신과
-        함께 M3 에 붙는다. 지금 전이만 흉내 내면 유예 만료가 없어 `expired` 로 끝나는
-        길이 막히고, 그 이벤트들이 영원히 `lost` 로 남아 판정 불가율을 왜곡한다.
+        **종결하지 않는다.** 진행 중 이벤트는 `lost` 로 가서 `track_lost_grace_s` 동안
+        재결합을 기다리고, 그 안에 돌아오지 못하면 `expired`(판정 불가)가 된다.
         """
-        self._tracks.forget(message.cam_id, message.track_id)
+        await self._events.on_track_lost(message)
         log.info(
             "트랙 소실 — cam=%s track=%s reason=%s",
             message.cam_id,

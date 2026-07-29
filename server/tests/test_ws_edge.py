@@ -16,7 +16,13 @@ from aegis_contracts import OverlayMsg, SystemStatus
 from aegis_vision.clock import FakeClock
 from server.app.main import create_app
 
-from .conftest import FakeEventStore, FakeRecClient, FakeWatcher, make_settings
+from .conftest import (
+    FakeEventStore,
+    FakePolicyStore,
+    FakeRecClient,
+    FakeWatcher,
+    make_settings,
+)
 
 TS = "2026-08-14T05:37:02.183Z"
 
@@ -50,7 +56,7 @@ CANDIDATE: dict[str, Any] = {
     "cam_id": 1,
     "ts": TS,
     "track_id": 3,
-    "violations": ["no_helmet"],
+    "violation_type": "no_helmet",
     "zone_id": "forklift_lane",
     "bbox": [0.197, 0.364, 0.273, 0.764],
     "conf": 0.91,
@@ -64,7 +70,11 @@ CANDIDATE: dict[str, Any] = {
 }
 
 #: 같은 트랙의 **다른** 유형. 후보가 유형 수만큼 따로 오는 것을 재현한다(§2.2).
-ZONE_CANDIDATE: dict[str, Any] = {**CANDIDATE, "violations": ["zone_intrusion"], "observed_ms": 500}
+ZONE_CANDIDATE: dict[str, Any] = {
+    **CANDIDATE,
+    "violation_type": "zone_intrusion",
+    "observed_ms": 500,
+}
 
 HEARTBEAT: dict[str, Any] = {
     "type": "heartbeat",
@@ -100,6 +110,7 @@ def build(store: FakeEventStore | None = None) -> tuple[TestClient, FakeEventSto
         rec_client=FakeRecClient(),
         stream_watcher=FakeWatcher({1: "ok", 2: "ok"}),
         events=events,
+        policies=FakePolicyStore(),
     )
     return TestClient(app), events
 
@@ -287,15 +298,19 @@ def test_track_lost_takes_the_box_state_down() -> None:
     assert payload["objects"][0]["violations"] == []
 
 
-def test_track_lost_does_not_transition_the_event() -> None:
-    """소실 유예(FN-EVT-07 ①)는 상태머신과 함께 M3 다. 전이만 흉내 내면 `expired` 로
-    끝나는 길이 없어 판정 불가율이 왜곡된다."""
+def test_track_lost_before_confirmation_discards_the_candidate() -> None:
+    """확정 전 후보는 이벤트가 아니다. `expired` 로 종결하지 않고 지운다.
+
+    `expired` 로 보내면 "위반이었는지도 확정되지 않은 것"이 판정 불가율(§6.7)에
+    섞여 그 숫자의 뜻이 흐려진다. 그렇다고 `candidate` 인 채로 두면 병합 키
+    (FN-EVT-01)를 계속 점유해 같은 트랙의 다음 위반이 이벤트를 못 만든다.
+    """
     client, events = build()
     with client, client.websocket_connect("/ws/edge") as edge:
         edge.send_json(CANDIDATE)
         edge.send_json(TRACK_LOST)
-    assert events.updates == []
-    assert {e.status for e in events.items} == {"candidate"}
+    assert events.deleted == [events.created[0].event_id]
+    assert events.items == []
 
 
 # --------------------------------------------------------------------------

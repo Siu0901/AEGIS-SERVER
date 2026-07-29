@@ -47,7 +47,11 @@ class EventStatus(StrEnum):
 
 
 class ViolationType(StrEnum):
-    """위반 유형. API명세서 §2.2 `violations[]` · §4.1 `violation_type`."""
+    """위반 유형. API명세서 §2.2 · §4.1 · §5.2 의 `violation_type`.
+
+    §5.1 `overlay.objects[].violations` 만 **배열**이다 — 한 트랙에 이벤트가 여럿
+    걸릴 수 있어 화면이 합쳐 보여주기 때문이다. 후보·이벤트는 유형 하나에 1:1이다.
+    """
 
     NO_HELMET = "no_helmet"
     ZONE_INTRUSION = "zone_intrusion"

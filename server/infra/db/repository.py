@@ -20,7 +20,7 @@ import base64
 import binascii
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from pathlib import PurePosixPath
 from typing import Any
@@ -34,10 +34,12 @@ from aegis_contracts import (
     EventStatus,
     EventSummary,
     Policies,
+    TimelineEntry,
     ViolationType,
     Zone,
 )
 from server.domain.event_machine import format_event_id
+from server.domain.metrics import MetricsRow
 from server.infra.db.models import Event as EventRow
 from server.infra.db.models import Policy as PolicyRow
 from server.infra.db.models import Zone as ZoneRow
@@ -189,7 +191,10 @@ class DbEventRepository:
         return found
 
     async def find_lost_by_camera(self, cam_id: int) -> list[EventSummary]:
-        """재결합 후보가 되는 `lost` 이벤트들. FN-EVT-07 ② — M4."""
+        """재결합 후보가 되는 `lost` 이벤트들. FN-EVT-07 ②
+
+        런타임 재결합은 상태머신이 메모리에서 하므로 이 질의는 진단·복구용이다.
+        """
         return await asyncio.to_thread(self._find_lost_by_camera, cam_id)
 
     def _find_lost_by_camera(self, cam_id: int) -> list[EventSummary]:
@@ -201,6 +206,56 @@ class DbEventRepository:
         )
         with Session(self._engine) as session:
             return [_summary(row, 0) for row in session.exec(statement)]
+
+    async def find_open_all(self) -> list[EventSummary]:
+        """종결되지 않은 이벤트 전량. 서버 재시작 시 상태머신을 되살리는 데 쓴다.
+
+        복구하지 않으면 그 이벤트들은 어떤 전이도 받지 못한 채 `alerted` 로 남아
+        시정률 분모에 영원히 미해소로 계상된다 — 재시작 한 번이 지표를 왜곡한다.
+        """
+        return await asyncio.to_thread(self._find_open_all)
+
+    def _find_open_all(self) -> list[EventSummary]:
+        statement = (
+            select(EventRow)
+            .where(col(EventRow.status).in_([status.value for status in OPEN_STATUSES]))
+            .where(col(EventRow.is_false_positive).is_(False))
+            .order_by(col(EventRow.detected_at))
+        )
+        with Session(self._engine) as session:
+            return [_summary(row, 0) for row in session.exec(statement)]
+
+    async def metrics_rows(self, from_: datetime | None, to: datetime | None) -> list[MetricsRow]:
+        """FN-SYS-04 · FN-SYS-05 — 지표 집계에 필요한 네 칸만 긁어온다.
+
+        판정(무엇이 분자이고 무엇이 분모인가)은 SQL 이 아니라
+        `server/domain/metrics.py` 가 한다. 집계 규칙이 §6.7 표 하나에만 있어야
+        나중에 값이 이상할 때 어디를 봐야 하는지가 분명해진다.
+        """
+        return await asyncio.to_thread(self._metrics_rows, from_, to)
+
+    def _metrics_rows(self, from_: datetime | None, to: datetime | None) -> list[MetricsRow]:
+        statement = select(
+            EventRow.violation_type,
+            EventRow.status,
+            EventRow.resolution_sec,
+            EventRow.is_false_positive,
+        )
+        if from_ is not None:
+            statement = statement.where(col(EventRow.detected_at) >= from_)
+        if to is not None:
+            statement = statement.where(col(EventRow.detected_at) <= to)
+        with Session(self._engine) as session:
+            rows = list(session.exec(statement))
+        return [
+            MetricsRow(
+                violation_type=ViolationType(violation_type),
+                status=EventStatus(status),
+                resolution_sec=resolution_sec,
+                is_false_positive=is_false_positive,
+            )
+            for violation_type, status, resolution_sec, is_false_positive in rows
+        ]
 
     async def count_repeat_7d(
         self,
@@ -299,10 +354,10 @@ class DbEventRepository:
             session.add(_row(event))
             session.commit()
 
-    async def update(self, event_id: str, changes: dict[str, Any]) -> None:
+    async def update(self, event_id: str, changes: Mapping[str, Any]) -> None:
         await asyncio.to_thread(self._update, event_id, changes)
 
-    def _update(self, event_id: str, changes: dict[str, Any]) -> None:
+    def _update(self, event_id: str, changes: Mapping[str, Any]) -> None:
         with Session(self._engine) as session:
             row = session.get(EventRow, event_id)
             if row is None:
@@ -315,9 +370,33 @@ class DbEventRepository:
             session.commit()
 
     async def set_status(self, event_id: str, status: EventStatus, at: datetime) -> None:
-        """상태 전이 1건. 전이 판단 자체는 도메인 상태머신이 한다(M3)."""
+        """상태 전이 1건. 전이 판단 자체는 도메인 상태머신이 한다.
+
+        평상시 경로는 이쪽이 아니다 — 상태머신은 상태와 시각을 함께 담은 `Effect`
+        를 내므로 `update` 한 번으로 끝난다. 이 메서드는 상태만 알고 있는 호출자
+        (운영 도구·복구 스크립트)를 위한 편의 경로다.
+        """
         stamp = _STATUS_STAMP.get(status)
         await self.update(event_id, {"status": status.value, **(stamp(at) if stamp else {})})
+
+    async def delete(self, event_id: str) -> None:
+        """확정되지 않은 채 소멸한 후보를 지운다.
+
+        **확정된 이벤트에는 쓰지 않는다.** 지워도 되는 것은 상태머신이 `candidate`
+        단계에서 폐기한 건뿐이며, 그 레코드는 어떤 지표에도 들어간 적이 없다.
+        남겨두면 병합 키(FN-EVT-01)를 계속 점유해 같은 트랙의 다음 위반이 이벤트를
+        만들지 못한다.
+        """
+        await asyncio.to_thread(self._delete, event_id)
+
+    def _delete(self, event_id: str) -> None:
+        with Session(self._engine) as session:
+            row = session.get(EventRow, event_id)
+            if row is None:
+                log.warning("지울 이벤트가 없다: %s", event_id)
+                return
+            session.delete(row)
+            session.commit()
 
 
 class DbZoneRepository:
@@ -443,9 +522,30 @@ def _detail(row: EventRow, repeat_count_7d: int) -> EventDetail:
         llm_analysis=row.llm_analysis,
         regulation_refs=row.regulation_refs,  # type: ignore[arg-type]
         similar_incidents=row.similar_incidents,  # type: ignore[arg-type]
-        # 상태 전이 타임라인(§4.1)은 상태머신이 생긴 뒤에야 채울 것이 있다 — M3.
-        timeline=[],
+        timeline=_timeline(row),
     )
+
+
+def _timeline(row: EventRow) -> list[TimelineEntry]:
+    """상태 전이 타임라인(§4.1). **저장된 시각들로 재구성한다.**
+
+    전이 로그 테이블을 따로 두지 않는 이유는 기능명세서 §6 에 그런 테이블이 없기
+    때문이다. 전이표(§4.2)의 각 상태에는 대응하는 시각 컬럼이 하나씩 있으므로
+    그것만으로 순서가 복원된다.
+
+    `re_alerted` 는 여기 없다 — 재경고 시각을 담는 컬럼이 없고 `alert_count` 만
+    남는다. 없는 시각을 지어내지 않는다.
+    """
+    stamps: list[tuple[datetime | None, EventStatus]] = [
+        (row.detected_at, EventStatus.CANDIDATE),
+        (row.confirmed_at, EventStatus.ACTIVE),
+        (row.alerted_at, EventStatus.ALERTED),
+        (row.lost_at, EventStatus.LOST),
+        (row.resolved_at, EventStatus.RESOLVED),
+        (row.expired_at, EventStatus.EXPIRED),
+    ]
+    entries = [TimelineEntry(at=at, state=state) for at, state in stamps if at is not None]
+    return sorted(entries, key=lambda entry: entry.at)
 
 
 def _row(event: EventDetail) -> EventRow:

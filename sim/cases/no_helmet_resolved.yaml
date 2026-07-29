@@ -58,7 +58,7 @@ timeline:
     type: candidate
     cam_id: 1
     track_id: 3
-    violations: [no_helmet]
+    violation_type: no_helmet
     zone_id: forklift_lane
     bbox: [0.197, 0.364, 0.273, 0.764]
     conf: 0.91
@@ -82,7 +82,7 @@ timeline:
     type: candidate
     cam_id: 1
     track_id: 3
-    violations: [zone_intrusion]
+    violation_type: zone_intrusion
     zone_id: forklift_lane
     bbox: [0.197, 0.364, 0.273, 0.764]
     conf: 0.91
@@ -106,7 +106,7 @@ timeline:
     type: candidate
     cam_id: 1
     track_id: 3
-    violations: [no_helmet]
+    violation_type: no_helmet
     zone_id: forklift_lane
     bbox: [0.199, 0.363, 0.276, 0.765]
     conf: 0.93
@@ -123,7 +123,7 @@ timeline:
     type: candidate
     cam_id: 1
     track_id: 3
-    violations: [zone_intrusion]
+    violation_type: zone_intrusion
     zone_id: forklift_lane
     bbox: [0.199, 0.363, 0.276, 0.765]
     conf: 0.93

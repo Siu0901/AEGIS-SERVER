@@ -77,6 +77,7 @@ __all__ = [
     "StorageStatus",
     "SystemStatus",
     "TableAttachment",
+    "TableCell",
     "TimeSyncStatus",
     "TimelineEntry",
     "TimeseriesPoint",
@@ -431,12 +432,20 @@ class ImageAttachment(SpecModel):
     label: str
 
 
+#: `TableAttachment.rows[][]` 의 셀. API명세서 §4.4 — **string / number / null 만.**
+#:
+#: `Any` 로 열어두지 않는다. 표는 SQL 집계 결과를 그대로 옮기는 자리라 중첩 객체나
+#: 배열이 들어오면 화면이 렌더링할 수 없고, 그 사실이 런타임까지 숨는다.
+#: `bool` 은 파이썬에서 `int` 의 하위형이라 여기에 이미 포함된다.
+TableCell = str | int | float | None
+
+
 class TableAttachment(SpecModel):
     """`attachments[]` 의 표 첨부 — SQL 집계 결과 표시용. API명세서 §4.4"""
 
     kind: Literal["table"] = "table"
     columns: list[str]
-    rows: list[list[Any]]
+    rows: list[list[TableCell]]
     label: str
 
 

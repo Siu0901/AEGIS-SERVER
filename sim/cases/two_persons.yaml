@@ -84,7 +84,7 @@ timeline:
     type: candidate
     cam_id: 2
     track_id: 8
-    violations: [no_helmet]
+    violation_type: no_helmet
     zone_id: null
     bbox: [0.574, 0.342, 0.657, 0.693]
     conf: 0.90
@@ -100,7 +100,7 @@ timeline:
     type: candidate
     cam_id: 2
     track_id: 8
-    violations: [no_helmet]
+    violation_type: no_helmet
     zone_id: null
     bbox: [0.566, 0.342, 0.650, 0.698]
     conf: 0.91
@@ -129,7 +129,7 @@ timeline:
     type: candidate
     cam_id: 2
     track_id: 8
-    violations: [no_helmet]
+    violation_type: no_helmet
     zone_id: null
     bbox: [0.553, 0.342, 0.639, 0.705]
     conf: 0.91
@@ -147,7 +147,7 @@ timeline:
     type: candidate
     cam_id: 2
     track_id: 8
-    violations: [no_helmet]
+    violation_type: no_helmet
     zone_id: null
     bbox: [0.540, 0.342, 0.628, 0.713]
     conf: 0.92
@@ -166,7 +166,7 @@ timeline:
     type: candidate
     cam_id: 2
     track_id: 8
-    violations: [proximity]
+    violation_type: proximity
     zone_id: null
     bbox: [0.540, 0.342, 0.628, 0.713]
     conf: 0.92
@@ -237,7 +237,7 @@ timeline:
     type: candidate
     cam_id: 2
     track_id: 8
-    violations: [no_helmet]
+    violation_type: no_helmet
     zone_id: null
     bbox: [0.529, 0.341, 0.619, 0.719]
     conf: 0.92
@@ -255,7 +255,7 @@ timeline:
     type: candidate
     cam_id: 2
     track_id: 8
-    violations: [proximity]
+    violation_type: proximity
     zone_id: null
     bbox: [0.529, 0.341, 0.619, 0.719]
     conf: 0.92
@@ -273,7 +273,7 @@ timeline:
     type: candidate
     cam_id: 2
     track_id: 8
-    violations: [no_helmet]
+    violation_type: no_helmet
     zone_id: null
     bbox: [0.520, 0.341, 0.611, 0.725]
     conf: 0.93
@@ -291,7 +291,7 @@ timeline:
     type: candidate
     cam_id: 2
     track_id: 8
-    violations: [proximity]
+    violation_type: proximity
     zone_id: null
     bbox: [0.520, 0.341, 0.611, 0.725]
     conf: 0.93
@@ -320,7 +320,7 @@ timeline:
     type: candidate
     cam_id: 2
     track_id: 8
-    violations: [no_helmet]
+    violation_type: no_helmet
     zone_id: null
     bbox: [0.510, 0.340, 0.602, 0.731]
     conf: 0.93
@@ -339,7 +339,7 @@ timeline:
     type: candidate
     cam_id: 2
     track_id: 8
-    violations: [proximity]
+    violation_type: proximity
     zone_id: null
     bbox: [0.510, 0.340, 0.602, 0.731]
     conf: 0.93

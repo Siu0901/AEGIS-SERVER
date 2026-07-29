@@ -1,10 +1,10 @@
-"""`GET /events` · `GET /events/{event_id}` (API명세서 §4.1 · FN-REC-04).
+"""이벤트 조회와 수동 정정 (API명세서 §4.1 · FN-REC-04 · FN-EVT-05).
 
-M2 에서 여기 쌓이는 것은 **후보 단계 이벤트**뿐이다(`status = "candidate"`).
-확정·경고·해소 시각과 클립·키프레임은 각각 M3 에서 채워진다 — 지금 그 자리를
-그럴듯한 값으로 메우면 시정률의 원천 데이터가 처음부터 오염된다.
+* `GET /events` · `GET /events/{event_id}` — 목록과 상세
+* `PATCH /events/{event_id}` — 오탐 표시 · 강제 종결
 
-`PATCH /events/{event_id}`(수동 정정 · FN-EVT-05)는 M4 다.
+클립(`clip_url`)과 키프레임은 아직 비어 있다 — 예약 추출이 M4(FN-REC-03)다. 그 자리를
+그럴듯한 값으로 메우지 않는다.
 """
 
 from __future__ import annotations
@@ -21,10 +21,12 @@ from aegis_contracts import (
     EventDetail,
     EventListQuery,
     EventListResponse,
+    EventPatchRequest,
     EventStatus,
     EventSummary,
     ViolationType,
 )
+from server.app.event_service import EventService
 
 __all__ = ["router"]
 
@@ -89,6 +91,38 @@ async def list_events(
 async def get_event(request: Request, event_id: str) -> EventDetail:
     try:
         event = await _reader(request).get(event_id)
+    except OSError as exc:
+        raise _unavailable(exc) from exc
+    if event is None:
+        raise _error(404, "NOT_FOUND", "요청한 이벤트가 존재하지 않습니다", {"event_id": event_id})
+    return event
+
+
+@router.patch(
+    "/events/{event_id}",
+    response_model=EventDetail,
+    responses={404: {"model": ErrorResponse}, 503: {"model": ErrorResponse}},
+)
+async def patch_event(
+    request: Request,
+    event_id: str,
+    body: EventPatchRequest,
+) -> EventDetail:
+    """FN-EVT-05 — 수동 정정. 기능명세서 §4.2 · API명세서 §4.1
+
+    | 요청 | 뜻 |
+    |---|---|
+    | `is_false_positive` | 오탐이었다. **지표에서 전량 제외**된다(§6.7) |
+    | `force_resolve` | 시스템이 놓친 시정을 관리자가 종결한다 |
+
+    **`fall` 은 관리자 확인으로 종결하는 것이 기본 절차다** — 쓰러진 사람은 방송을
+    듣고 스스로 시정할 수 없으므로 자동 해소 조건이 성립하지 않는다.
+    """
+    service: EventService | None = getattr(request.app.state, "event_service", None)
+    if service is None:
+        raise _error(503, "NOT_FOUND", "이벤트 저장소가 연결되지 않았습니다")
+    try:
+        event = await service.patch(event_id, body)
     except OSError as exc:
         raise _unavailable(exc) from exc
     if event is None:

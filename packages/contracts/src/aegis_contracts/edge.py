@@ -151,20 +151,23 @@ class CandidateMsg(SpecModel):
     ts: AwareDatetime
     track_id: int
 
-    violations: list[ViolationType] = Field(min_length=1, max_length=1)
-    """이 메시지가 나르는 위반 유형 **하나**. §2.2 의 배열 형태는 유지한다."""
+    violation_type: ViolationType
+    """이 메시지가 나르는 위반 유형 **하나**. 배열이 아니다(§2.2).
+
+    이벤트 병합 키가 `cam_id + track_id + violation_type`(FN-EVT-01)이고 유형마다
+    확정 타이머와 해소 조건이 독립적으로 돈다. REST(§4.1) · 대시보드(§5.2)의
+    `violation_type` 과 이름이 일치한다.
+
+    **`overlay.objects[].violations`(§5.1)와 혼동하지 않는다.** 저쪽은 배열이다 —
+    한 트랙에 이벤트가 여럿 걸릴 수 있고 화면은 그것을 합쳐 보여준다.
+    """
 
     bbox: Bbox
     conf: float
     foot_point_m: PointM
 
     observed_ms: int
-    """**이 메시지의 위반 유형**을 연속 관측한 시간(ms). 서버 확정 판정의 참고값."""
-
-    @property
-    def violation(self) -> ViolationType:
-        """이 후보의 위반 유형. 배열이지만 원소는 항상 하나다."""
-        return self.violations[0]
+    """**이 메시지의 `violation_type`** 을 연속 관측한 시간(ms). 서버 확정 판정의 참고값."""
 
     zone_id: str | None
     """침입한 구역이 없으면 `null`. **필드 자체는 항상 실린다**(§2.1 `in_zone` 과 동일 규약)."""

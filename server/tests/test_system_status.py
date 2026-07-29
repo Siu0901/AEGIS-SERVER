@@ -13,11 +13,27 @@ from fastapi.testclient import TestClient
 from aegis_contracts import SystemStatus
 from server.app.main import create_app
 
-from .conftest import REC_STATUS, FakeRecClient, FakeWatcher, make_settings, rec_status_with
+from .conftest import (
+    REC_STATUS,
+    FakeEventStore,
+    FakePolicyStore,
+    FakeRecClient,
+    FakeWatcher,
+    make_settings,
+    rec_status_with,
+)
 
 
 def _client(watcher: FakeWatcher, rec: FakeRecClient) -> TestClient:
-    app = create_app(make_settings(), rec_client=rec, stream_watcher=watcher)
+    # 저장소도 가짜를 넣는다 — 기동 시 상태머신이 진행 중 이벤트와 정책값을 읽으므로
+    # 주입하지 않으면 테스트가 실제 DB 에 붙는다(conftest 서두의 원칙).
+    app = create_app(
+        make_settings(),
+        rec_client=rec,
+        stream_watcher=watcher,
+        events=FakeEventStore(),
+        policies=FakePolicyStore(),
+    )
     return TestClient(app)
 
 

@@ -6,14 +6,14 @@ FN-UI-02 표시 규칙(위반자 적색 · 근접 거리선 · 거리 라벨)을
 
 **I/O 가 없다**(CLAUDE.md 절대규칙 2).
 
-M2 의 범위에서 유의할 것:
+유의할 것:
 
-* `alert_state` 는 M2 에서 대부분 **`candidate`** 다. 확정 판정이 M3 이기 때문이다.
-  `candidate` 와 `null` 은 다르다 — 전자는 위반 조건이 관측됐으나 확정 전, 후자는
-  이 트랙에 진행 중 이벤트가 아예 없다는 뜻이다(§5.1).
-* 위반 표시는 후보가 들어온 순간부터 켜지고 **꺼지지 않는다.** 해소 판정
-  (FN-EVT-03)이 M3 이기 때문이다. 지금 임의의 시간으로 끄면 그 값이 곧 가짜
-  시정률이 된다 — 트랙이 사라질 때만 지운다.
+* `alert_state` 는 상태머신이 정한다(M3). `candidate` 와 `null` 은 다르다 — 전자는
+  위반 조건이 관측됐으나 아직 확정 전이고, 후자는 이 트랙에 진행 중 이벤트가 아예
+  없다는 뜻이다(§5.1). 대시보드는 `candidate` 를 적색으로 그리지 않는다.
+* 위반 표시는 후보가 들어오면 켜지고 **이벤트가 종결될 때 꺼진다.** 끄는 시점을
+  정하는 것은 해소 판정(FN-EVT-03)이지 이 모듈이 아니다 — 여기서 임의의 시간으로
+  끄면 그 값이 곧 가짜 시정률이 된다.
 """
 
 from __future__ import annotations
@@ -117,6 +117,26 @@ class LiveTracks:
         state.events = {violation: event_id for violation, (event_id, _) in events.items()}
         state.statuses = {violation: status for violation, (_, status) in events.items()}
         state.nearby = tuple(candidate.nearby)
+
+    def set_events(
+        self,
+        cam_id: int,
+        track_id: int,
+        events: dict[ViolationType, tuple[str, EventStatus]],
+    ) -> None:
+        """상태머신이 전이시킨 결과를 오버레이에 반영한다.
+
+        후보가 다시 오기를 기다리지 않는다. 해소·종결은 후보 없이 일어나므로
+        (FN-EVT-03 은 위반이 **사라진** 것을 보는 판정이다) 여기서 지우지 않으면
+        시정된 사람의 박스가 계속 적색으로 남는다.
+        """
+        state = self._tracks.get((cam_id, track_id))
+        if state is None:
+            if not events:
+                return
+            state = self._tracks.setdefault((cam_id, track_id), TrackState())
+        state.events = {violation: event_id for violation, (event_id, _) in events.items()}
+        state.statuses = {violation: status for violation, (_, status) in events.items()}
 
     def forget(self, cam_id: int, track_id: int) -> None:
         """트랙이 사라졌다. **새 트랙이 같은 번호를 물려받아도 위반을 이어받지 않도록** 지운다."""

@@ -13,6 +13,7 @@ M0 에서는 타입이 계약 모델(`aegis_contracts`)로 표현되어 있다. 
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any, Protocol
 
@@ -26,6 +27,7 @@ from aegis_contracts import (
     ViolationType,
     Zone,
 )
+from server.domain.metrics import MetricsRow
 
 __all__ = [
     "AnomalyRepository",
@@ -63,6 +65,26 @@ class EventRepository(Protocol):
         """
         ...
 
+    async def find_open_all(self) -> list[EventSummary]:
+        """종결되지 않은 이벤트 전량. 서버 재시작 시 상태머신 복구에 쓴다.
+
+        복구하지 않으면 그 이벤트들은 어떤 전이도 받지 못하고 시정률 분모에
+        영원히 미해소로 남는다.
+        """
+        ...
+
+    async def metrics_rows(
+        self,
+        from_: datetime | None,
+        to: datetime | None,
+    ) -> list[MetricsRow]:
+        """지표 집계에 필요한 최소 정보. FN-SYS-04 · FN-SYS-05
+
+        무엇이 분자이고 무엇이 분모인지는 저장소가 정하지 않는다 —
+        `server/domain/metrics.py` 하나에만 둔다(§6.7).
+        """
+        ...
+
     async def find_due_clip_jobs(self, now: datetime) -> list[str]:
         """실행 시각이 지난 `clip_status = pending` 이벤트 ID들. FN-REC-03
 
@@ -86,8 +108,16 @@ class EventRepository(Protocol):
 
     async def create(self, event: EventDetail) -> None: ...
 
-    async def update(self, event_id: str, changes: dict[str, Any]) -> None:
+    async def update(self, event_id: str, changes: Mapping[str, Any]) -> None:
         """부분 갱신. 상태 전이·타임스탬프·재결합 이력 반영에 쓴다."""
+        ...
+
+    async def delete(self, event_id: str) -> None:
+        """확정 전에 소멸한 후보를 지운다.
+
+        **확정된 이벤트에는 쓰지 않는다.** 지표에 들어간 적 없는 레코드만 대상이며,
+        남겨두면 병합 키(FN-EVT-01)를 점유해 다음 위반이 이벤트를 못 만든다.
+        """
         ...
 
     async def set_status(

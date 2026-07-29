@@ -165,10 +165,9 @@ CANDIDATE_EXAMPLE: dict[str, Any] = {
     "cam_id": 1,
     "ts": "2026-08-14T05:37:02.183Z",
     "track_id": 3,
-    # **§2.2 산문이 "메시지 하나에 위반 유형 하나"라고 정한다.** 같은 절의 JSON 예시는
-    # 아직 두 개를 담고 있어 서로 어긋나는데, 값의 규칙을 정하는 쪽은 산문이므로 그것을
-    # 따른다(docs/INDEX.md 「명세서 확인 필요」에 올려 두었다).
-    "violations": ["no_helmet"],
+    # §2.2 — **단일 값이다.** 한 트랙에 두 유형이 걸리면 후보 메시지를 유형 수만큼
+    # 각각 보낸다. §5.1 `overlay.objects[].violations` 만 배열이다.
+    "violation_type": "no_helmet",
     "zone_id": "forklift_lane",
     "bbox": [0.197, 0.364, 0.273, 0.764],
     "conf": 0.91,
@@ -194,8 +193,7 @@ CANDIDATE_EXAMPLE: dict[str, Any] = {
 
 def test_candidate_example_parses() -> None:
     msg = CandidateMsg.model_validate(CANDIDATE_EXAMPLE)
-    assert msg.violations == [ViolationType.NO_HELMET]
-    assert msg.violation == ViolationType.NO_HELMET
+    assert msg.violation_type == ViolationType.NO_HELMET
     assert msg.observed_ms == 3200
     assert msg.nearby[0].method == "mask_nearest"
     assert msg.nearby[0].within_danger_radius is True

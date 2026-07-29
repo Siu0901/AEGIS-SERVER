@@ -5,14 +5,16 @@
 붙어 있는 것:
 
 * `GET /api/v1/system/status` (§4.6 · FN-SYS-01)
-* `GET /api/v1/events` · `/events/{id}` (§4.1 · FN-REC-04)
+* `GET /api/v1/events` · `/events/{id}` · `PATCH /events/{id}` (§4.1 · FN-EVT-05)
+* `GET /api/v1/metrics/summary` (§4.2 · FN-SYS-04 · FN-SYS-05)
 * `GET /api/v1/zones` · `/policies` (§4.5) — 오버레이가 읽는 폴리곤과 지연 버퍼
-* `/ws/edge` (§2) — 엣지 메시지 수신 · 검증 · 이벤트 생성 (FN-EVT-01 · FN-SYS-06)
-* `/ws/dashboard` (§5) — `system` 과 `overlay`
+* `/ws/edge` (§2) — 엣지 메시지 수신 · 검증 · 상태머신 입력 (FN-EVT-01 · FN-SYS-06)
+* `/ws/dashboard` (§5) — `system` · `overlay` · `event_created` · `event_updated` · `metric`
+* 이벤트 상태머신 틱 (확정 · 해소 · 쿨다운 · 소실 유예 · 재결합)
 * mediamtx 폴링으로 메인 스트림 상태 관측 (`server/infra/stream`)
 * 기동 시 NTP 오프셋 확인 (FN-SYS-02)
 
-이벤트 상태머신(확정·경고·해소·쿨다운·재결합)은 M3 다.
+경고 발동(wav · MQTT)과 클립 예약 추출은 M4 다.
 
 **여기에 로직을 두지 않는다.** 이 파일은 설정을 읽어 부품을 연결하고 수명주기를
 관리하는 곳이고, 시스템 시계를 읽는 `RealClock` 을 만드는 곳이기도 하다
@@ -32,17 +34,26 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from aegis_contracts import ComponentSystemMsg
+from aegis_contracts import ComponentSystemMsg, Policies
 from aegis_contracts.enums import ComponentState, StreamState
 from aegis_vision.clock import Clock, RealClock
 from server.app.config import ServerSettings, get_server_settings
+from server.app.event_service import (
+    POLICY_REFRESH_SECONDS,
+    TICK_SECONDS,
+    EventService,
+    EventStore,
+    PolicyReader,
+)
 from server.app.routes import events as event_routes
+from server.app.routes import metrics as metric_routes
 from server.app.routes import policies as policy_routes
 from server.app.routes import system as system_routes
 from server.app.routes import zones as zone_routes
 from server.app.ws_dashboard import DashboardHub
-from server.app.ws_edge import EdgeGateway, EventStore
+from server.app.ws_edge import EdgeGateway
 from server.domain.edge_state import EdgeRuntime
+from server.domain.event_machine import EventMachine
 from server.domain.overlay import LiveTracks
 from server.infra.db.repository import (
     DbEventRepository,
@@ -81,7 +92,7 @@ def create_app(
     stream_watcher: StreamObserver | None = None,
     events: EventStore | None = None,
     zones: object | None = None,
-    policies: object | None = None,
+    policies: PolicyReader | None = None,
 ) -> FastAPI:
     """부품을 조립한다. 인자를 주지 않으면 설정에 맞는 실물을 만든다.
 
@@ -100,6 +111,20 @@ def create_app(
     hub = DashboardHub()
     edge = EdgeRuntime()
     tracks = LiveTracks()
+    event_store: EventStore | None = events or (DbEventRepository(engine) if engine else None)
+    policy_reader: PolicyReader | None = policies or (
+        DbPolicyRepository(engine) if engine else None
+    )
+    # 임계값은 기동 직후 DB 에서 덮어쓴다(`EventService.start`). 여기 있는 `Policies()`
+    # 는 계약 기본값이며 DB 시드의 원천이기도 하다(절대규칙 6).
+    event_service = EventService(
+        machine=EventMachine(clock=ticker, policies=Policies()),
+        tracks=tracks,
+        publish=hub.broadcast,
+        clock=ticker,
+        store=event_store,
+        policies=policy_reader,
+    )
     storage: StorageReader = rec_client or RecClient(resolved.recorder_base)
     watcher: StreamObserver = stream_watcher or StreamWatcher(
         client=MediaMtxClient(resolved.mediamtx_api),
@@ -119,9 +144,13 @@ def create_app(
             warn_offset_ms=resolved.ntp_warn_offset_ms,
         )
         await watcher.start()
+        # 재시작 전에 열려 있던 이벤트를 되살린다. 두지 않으면 그 이벤트들이
+        # 영원히 미해소로 남아 시정률 분모를 오염시킨다.
+        await event_service.start()
         storage_task = asyncio.create_task(
             _watch_storage(storage, hub, ticker), name="storage-watch"
         )
+        tick_task = asyncio.create_task(_tick_events(event_service), name="event-tick")
         log.info(
             "서버 기동 — cams=%s mediamtx=%s rec=%s",
             resolved.cam_ids,
@@ -131,9 +160,10 @@ def create_app(
         try:
             yield
         finally:
-            storage_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await storage_task
+            for task in (storage_task, tick_task):
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
             await watcher.stop()
             await storage.aclose()
 
@@ -159,12 +189,14 @@ def create_app(
     application.state.stream_watcher = watcher
     application.state.edge = edge
     application.state.tracks = tracks
-    application.state.events = events or (DbEventRepository(engine) if engine else None)
+    application.state.events = event_store
+    application.state.event_service = event_service
     application.state.zones = zones or (DbZoneRepository(engine) if engine else None)
-    application.state.policies = policies or (DbPolicyRepository(engine) if engine else None)
+    application.state.policies = policy_reader
 
     application.include_router(system_routes.router, prefix=API_PREFIX)
     application.include_router(event_routes.router, prefix=API_PREFIX)
+    application.include_router(metric_routes.router, prefix=API_PREFIX)
     application.include_router(zone_routes.router, prefix=API_PREFIX)
     application.include_router(policy_routes.router, prefix=API_PREFIX)
 
@@ -195,7 +227,7 @@ def create_app(
             tracks=tracks,
             publish=hub.broadcast,
             clock=ticker,
-            events=application.state.events,
+            events=event_service,
         )
         await gateway.serve(websocket)
 
@@ -216,6 +248,29 @@ def create_app(
             await hub.disconnect(websocket)
 
     return application
+
+
+async def _tick_events(service: EventService) -> None:
+    """상태머신에 시간을 흘려보낸다 — 소실 감지 · 유예 만료 · 쿨다운.
+
+    확정과 해소는 프레임이 도착할 때 그 자리에서 판정되므로 이 루프에 걸리지 않는다.
+    여기서 도는 것은 **관측이 끊겼을 때에도 결론이 나야 하는 것들**이다. 이 루프가
+    없으면 엣지가 죽은 순간의 진행 중 이벤트가 영원히 열린 채 남는다.
+
+    예외를 삼키지 않는다(CLAUDE.md 절대규칙 9). 한 번의 실패로 루프를 죽이면 그 뒤
+    모든 이벤트가 종결되지 않으므로 로그를 남기고 계속 돈다.
+    """
+    since_refresh = 0.0
+    while True:
+        await asyncio.sleep(TICK_SECONDS)
+        try:
+            await service.tick()
+        except Exception:
+            log.exception("이벤트 틱이 실패했다 — 다음 주기에 다시 시도한다")
+        since_refresh += TICK_SECONDS
+        if since_refresh >= POLICY_REFRESH_SECONDS:
+            since_refresh = 0.0
+            await service.refresh_policies()
 
 
 async def _watch_storage(client: StorageReader, hub: DashboardHub, clock: Clock) -> None:

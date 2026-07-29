@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
@@ -23,6 +24,7 @@ from aegis_contracts import (
 )
 from aegis_contracts.enums import StreamState
 from server.app.config import ServerSettings
+from server.domain.metrics import MetricsRow
 from server.infra.rec_client import RecUnavailableError
 
 __all__ = [
@@ -35,6 +37,17 @@ __all__ = [
     "make_settings",
     "rec_status_with",
 ]
+
+#: 종결되지 않은 상태. 기능명세서 §4.2 상태 전이표.
+_OPEN_STATUSES = frozenset(
+    {
+        EventStatus.CANDIDATE,
+        EventStatus.ACTIVE,
+        EventStatus.ALERTED,
+        EventStatus.RE_ALERTED,
+        EventStatus.LOST,
+    }
+)
 
 #: API명세서 §4.7 `GET /status` 예시 그대로.
 REC_STATUS = RecStatusResponse(
@@ -155,24 +168,18 @@ class FakeEventStore:
         self.items: list[EventDetail] = list(items or [])
         self.created: list[EventDetail] = []
         self.updates: list[tuple[str, dict[str, Any]]] = []
+        self.deleted: list[str] = []
         self.fail_with: Exception | None = None
 
     async def find_open_events(
         self, cam_id: int, track_id: int
     ) -> dict[ViolationType, EventSummary]:
-        open_statuses = {
-            EventStatus.CANDIDATE,
-            EventStatus.ACTIVE,
-            EventStatus.ALERTED,
-            EventStatus.RE_ALERTED,
-            EventStatus.LOST,
-        }
         return {
             item.violation_type: EventSummary.model_validate(
                 item.model_dump(include=set(EventSummary.model_fields))
             )
             for item in self.items
-            if item.cam_id == cam_id and item.track_id == track_id and item.status in open_statuses
+            if item.cam_id == cam_id and item.track_id == track_id and item.status in _OPEN_STATUSES
         }
 
     async def next_event_id(self, at: datetime) -> str:
@@ -184,11 +191,41 @@ class FakeEventStore:
         self.items.append(event)
         self.created.append(event)
 
-    async def update(self, event_id: str, changes: dict[str, Any]) -> None:
-        self.updates.append((event_id, changes))
+    async def update(self, event_id: str, changes: Mapping[str, Any]) -> None:
+        self.updates.append((event_id, dict(changes)))
+        patch = dict(changes)
+        # 상태머신은 **DB 컬럼 값**으로 말한다(`status` 는 문자열). 실제 저장소는
+        # 읽을 때 열거형으로 되돌리므로 가짜도 같은 일을 해야 한다 — 안 그러면
+        # 응답에 날문자열이 실려도 테스트가 통과한다.
+        if "status" in patch:
+            patch["status"] = EventStatus(patch["status"])
         for index, item in enumerate(self.items):
             if item.event_id == event_id:
-                self.items[index] = item.model_copy(update=changes)
+                self.items[index] = item.model_copy(update=patch)
+
+    async def delete(self, event_id: str) -> None:
+        self.deleted.append(event_id)
+        self.items = [item for item in self.items if item.event_id != event_id]
+
+    async def find_open_all(self) -> list[EventSummary]:
+        return [
+            EventSummary.model_validate(item.model_dump(include=set(EventSummary.model_fields)))
+            for item in self.items
+            if item.status in _OPEN_STATUSES
+        ]
+
+    async def metrics_rows(self, from_: datetime | None, to: datetime | None) -> list[MetricsRow]:
+        return [
+            MetricsRow(
+                violation_type=item.violation_type,
+                status=item.status,
+                resolution_sec=item.resolution_sec,
+                is_false_positive=False,
+            )
+            for item in self.items
+            if (from_ is None or item.detected_at >= from_)
+            and (to is None or item.detected_at <= to)
+        ]
 
     async def list_events(self, query: EventListQuery) -> tuple[list[EventSummary], str | None]:
         if self.fail_with is not None:

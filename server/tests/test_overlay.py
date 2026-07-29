@@ -57,7 +57,7 @@ def candidate(**overrides: Any) -> CandidateMsg:
         "cam_id": 1,
         "ts": TS,
         "track_id": 3,
-        "violations": ["no_helmet"],
+        "violation_type": "no_helmet",
         "zone_id": "forklift_lane",
         "bbox": [0.197, 0.364, 0.273, 0.764],
         "conf": 0.91,

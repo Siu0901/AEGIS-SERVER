@@ -69,7 +69,7 @@ timeline:
     type: candidate
     cam_id: 1
     track_id: 3
-    violations: [no_helmet]
+    violation_type: no_helmet
     zone_id: null
     bbox: [0.646, 0.342, 0.737, 0.723]
     conf: 0.91
@@ -85,7 +85,7 @@ timeline:
     type: candidate
     cam_id: 1
     track_id: 3
-    violations: [no_helmet]
+    violation_type: no_helmet
     zone_id: null
     bbox: [0.603, 0.341, 0.695, 0.726]
     conf: 0.92
@@ -101,7 +101,7 @@ timeline:
     type: candidate
     cam_id: 1
     track_id: 3
-    violations: [no_helmet]
+    violation_type: no_helmet
     zone_id: null
     bbox: [0.560, 0.340, 0.653, 0.730]
     conf: 0.92
@@ -156,7 +156,7 @@ timeline:
     type: candidate
     cam_id: 1
     track_id: 3
-    violations: [no_helmet]
+    violation_type: no_helmet
     zone_id: forklift_lane
     bbox: [0.489, 0.339, 0.583, 0.736]
     conf: 0.93
@@ -172,7 +172,7 @@ timeline:
     type: candidate
     cam_id: 1
     track_id: 3
-    violations: [zone_intrusion]
+    violation_type: zone_intrusion
     zone_id: forklift_lane
     bbox: [0.489, 0.339, 0.583, 0.736]
     conf: 0.93
@@ -188,7 +188,7 @@ timeline:
     type: candidate
     cam_id: 1
     track_id: 3
-    violations: [no_helmet]
+    violation_type: no_helmet
     zone_id: forklift_lane
     bbox: [0.446, 0.338, 0.541, 0.741]
     conf: 0.93
@@ -204,7 +204,7 @@ timeline:
     type: candidate
     cam_id: 1
     track_id: 3
-    violations: [zone_intrusion]
+    violation_type: zone_intrusion
     zone_id: forklift_lane
     bbox: [0.446, 0.338, 0.541, 0.741]
     conf: 0.93
@@ -220,7 +220,7 @@ timeline:
     type: candidate
     cam_id: 1
     track_id: 3
-    violations: [no_helmet]
+    violation_type: no_helmet
     zone_id: forklift_lane
     bbox: [0.388, 0.336, 0.485, 0.746]
     conf: 0.94
@@ -236,7 +236,7 @@ timeline:
     type: candidate
     cam_id: 1
     track_id: 3
-    violations: [zone_intrusion]
+    violation_type: zone_intrusion
     zone_id: forklift_lane
     bbox: [0.388, 0.336, 0.485, 0.746]
     conf: 0.94
@@ -291,7 +291,7 @@ timeline:
     type: candidate
     cam_id: 1
     track_id: 3
-    violations: [no_helmet]
+    violation_type: no_helmet
     zone_id: forklift_lane
     bbox: [0.317, 0.334, 0.416, 0.754]
     conf: 0.94
@@ -309,7 +309,7 @@ timeline:
     type: candidate
     cam_id: 1
     track_id: 3
-    violations: [zone_intrusion]
+    violation_type: zone_intrusion
     zone_id: forklift_lane
     bbox: [0.317, 0.334, 0.416, 0.754]
     conf: 0.94
@@ -338,7 +338,7 @@ timeline:
     type: candidate
     cam_id: 1
     track_id: 3
-    violations: [no_helmet]
+    violation_type: no_helmet
     zone_id: forklift_lane
     bbox: [0.275, 0.333, 0.375, 0.759]
     conf: 0.93
@@ -356,7 +356,7 @@ timeline:
     type: candidate
     cam_id: 1
     track_id: 3
-    violations: [zone_intrusion]
+    violation_type: zone_intrusion
     zone_id: forklift_lane
     bbox: [0.275, 0.333, 0.375, 0.759]
     conf: 0.93
@@ -374,7 +374,7 @@ timeline:
     type: candidate
     cam_id: 1
     track_id: 3
-    violations: [no_helmet]
+    violation_type: no_helmet
     zone_id: forklift_lane
     bbox: [0.233, 0.331, 0.335, 0.763]
     conf: 0.92
@@ -393,7 +393,7 @@ timeline:
     type: candidate
     cam_id: 1
     track_id: 3
-    violations: [zone_intrusion]
+    violation_type: zone_intrusion
     zone_id: forklift_lane
     bbox: [0.233, 0.331, 0.335, 0.763]
     conf: 0.92
@@ -450,7 +450,7 @@ timeline:
     type: candidate
     cam_id: 1
     track_id: 3
-    violations: [no_helmet]
+    violation_type: no_helmet
     zone_id: forklift_lane
     bbox: [0.197, 0.328, 0.300, 0.768]
     conf: 0.91
@@ -469,7 +469,7 @@ timeline:
     type: candidate
     cam_id: 1
     track_id: 3
-    violations: [zone_intrusion]
+    violation_type: zone_intrusion
     zone_id: forklift_lane
     bbox: [0.197, 0.328, 0.300, 0.768]
     conf: 0.91

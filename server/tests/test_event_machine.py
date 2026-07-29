@@ -13,8 +13,9 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from aegis_contracts import CandidateMsg, EventStatus, EventSummary, ViolationType
+from aegis_contracts import CandidateMsg, EventStatus, ViolationType
 from server.domain.event_machine import (
+    OpenEvent,
     build_candidate_event,
     format_event_id,
     merge_changes,
@@ -31,7 +32,7 @@ def candidate(**overrides: Any) -> CandidateMsg:
         "cam_id": 1,
         "ts": TS,
         "track_id": 3,
-        "violations": ["no_helmet"],
+        "violation_type": "no_helmet",
         "zone_id": "forklift_lane",
         "bbox": [0.197, 0.364, 0.273, 0.764],
         "conf": 0.91,
@@ -78,22 +79,26 @@ def test_open_event_is_merged_not_recreated() -> None:
 def test_another_violation_type_on_the_same_track_is_a_separate_event() -> None:
     """안전모 미착용과 구역 침입은 시정 행동도 규정 조항도 다르다. 한 건으로 묶지 않는다."""
     plan = plan_candidate(
-        candidate(violations=["zone_intrusion"]),
+        candidate(violation_type="zone_intrusion"),
         {ViolationType.NO_HELMET: "EV-20260814-0231"},
     )
     assert plan.creates == (ViolationType.ZONE_INTRUSION,)
 
 
 def test_candidate_carries_exactly_one_violation() -> None:
-    """§2.2 — 한 트랙에 두 유형이 걸리면 후보 메시지를 유형 수만큼 각각 보낸다.
+    """§2.2 — `violation_type` 은 단수 문자열이다. 배열을 주면 계약이 막는다.
 
-    한 메시지에 묶여 오면 `observed_ms` 가 어느 유형의 값인지 알 수 없어, 확정
-    판정(FN-EVT-02)의 참고값이 무의미해진다. 계약이 그것을 막는다.
+    한 메시지에 두 유형이 묶여 오면 `observed_ms` 가 어느 유형의 값인지 알 수 없어,
+    확정 판정(FN-EVT-02)의 참고값이 무의미해진다. 한 트랙에 두 유형이 걸리면 후보
+    메시지를 유형 수만큼 각각 보낸다.
+
+    §5.1 `overlay.objects[].violations` 는 배열 그대로다 — 그쪽은 한 트랙에 걸린
+    이벤트를 화면이 합쳐 보여주는 자리이고, 이쪽은 이벤트 하나를 만드는 자리다.
     """
     with pytest.raises(ValidationError):
-        candidate(violations=["no_helmet", "zone_intrusion"])
+        candidate(violation_type=["no_helmet", "zone_intrusion"])
     with pytest.raises(ValidationError):
-        candidate(violations=[])
+        candidate(violations=["no_helmet"])
 
 
 # --------------------------------------------------------------------------
@@ -138,7 +143,7 @@ def test_min_distance_is_null_when_there_was_nothing_to_measure() -> None:
 
 
 def test_min_distance_is_the_closest_vehicle() -> None:
-    near = candidate(violations=["proximity"])
+    near = candidate(violation_type="proximity")
     event = build_candidate_event(near, ViolationType.PROXIMITY, "EV-1")
     assert event.min_distance_m == pytest.approx(3.2)
     assert event.depth_verified is True
@@ -149,27 +154,22 @@ def test_min_distance_is_the_closest_vehicle() -> None:
 # --------------------------------------------------------------------------
 
 
-def existing(**overrides: Any) -> EventSummary:
+def existing(**overrides: Any) -> OpenEvent:
     body: dict[str, Any] = {
         "event_id": "EV-20260814-0231",
         "cam_id": 1,
         "track_id": 3,
-        "violation_type": "no_helmet",
+        "violation_type": ViolationType.NO_HELMET,
         "zone_id": None,
-        "status": "candidate",
+        "status": EventStatus.CANDIDATE,
         "detected_at": TS,
-        "confirmed_at": None,
-        "alerted_at": None,
-        "resolved_at": None,
-        "resolution_sec": None,
-        "alert_count": 0,
+        "last_tick_at": TS,
+        "last_seen_at": TS,
         "min_distance_m": None,
         "posture": "standing",
-        "repeat_count_7d": 0,
-        "thumbnail_url": None,
         **overrides,
     }
-    return EventSummary.model_validate(body)
+    return OpenEvent(**body)
 
 
 def test_unchanged_candidate_produces_no_write() -> None:
@@ -193,7 +193,12 @@ def test_zone_freezes_once_the_event_is_confirmed() -> None:
 
     위반자가 구역을 나간 뒤 이벤트의 구역까지 바뀌면 구역별 집계가 사후에 흔들린다.
     """
-    for status in ("active", "alerted", "re_alerted", "lost"):
+    for status in (
+        EventStatus.ACTIVE,
+        EventStatus.ALERTED,
+        EventStatus.RE_ALERTED,
+        EventStatus.LOST,
+    ):
         event = existing(status=status, zone_id="forklift_lane")
         assert "zone_id" not in merge_changes(event, candidate(zone_id=None))
 
