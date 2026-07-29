@@ -18,8 +18,8 @@ export default defineConfig(({ mode }) => {
     plugins: [react()],
     envDir: '..',
     define: {
-      __MEDIAMTX_WHEP__: JSON.stringify(env.MEDIAMTX_WHEP || 'http://localhost:8889'),
-      __MEDIAMTX_HLS__: JSON.stringify(env.MEDIAMTX_HLS || 'http://localhost:8888'),
+      __MEDIAMTX_WHEP__: JSON.stringify(env.MEDIAMTX_WHEP || 'http://127.0.0.1:8889'),
+      __MEDIAMTX_HLS__: JSON.stringify(env.MEDIAMTX_HLS || 'http://127.0.0.1:8888'),
     },
     server: {
       // 명시하지 않으면 Windows 에서 `localhost` 가 ::1 로만 바인딩되는데, Chrome 은
@@ -28,9 +28,12 @@ export default defineConfig(({ mode }) => {
       host: '127.0.0.1',
       port: 5173,
       // 서버(:8000)를 같은 오리진으로 프록시한다. WebSocket 도 함께 넘긴다.
+      // **타깃도 `localhost` 을 쓰지 않는다.** 프록시가 ::1 로 먼저 붙으려다
+      // 타임아웃(실측 2.6초)을 먹고 IPv4 로 폴백하는데, `/ws/dashboard` 에서는
+      // 그 2.6초가 오버레이 좌표 도착 지연으로 그대로 나타난다.
       proxy: {
-        '/api': { target: 'http://localhost:8000', changeOrigin: true },
-        '/ws': { target: 'ws://localhost:8000', ws: true },
+        '/api': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+        '/ws': { target: 'ws://127.0.0.1:8000', ws: true },
       },
     },
   }

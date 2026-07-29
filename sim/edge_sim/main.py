@@ -2,6 +2,7 @@
 
     uv run python -m sim.edge_sim.main --case no_helmet_resolved
     uv run python -m sim.edge_sim.main --case no_helmet_resolved --speed 4
+    uv run python -m sim.edge_sim.main --mode marker            # 오버레이 정합 검증
     uv run python -m sim.edge_sim.main --mode logreplay --case run-2026-08-14.jsonl
 
 **엣지는 판단하지 않는다.** 여기서 하는 일은 시나리오에 적힌 메시지를 시각에 맞춰
@@ -21,8 +22,9 @@ import websockets
 
 from aegis_vision.clock import Clock, RealClock
 
+from . import marker
 from .logreplay import load_log
-from .scripted import ScheduledMessage, load_case
+from .scripted import ScheduledMessage, load_case, retime
 
 __all__ = ["main", "run"]
 
@@ -33,13 +35,25 @@ __all__ = ["main", "run"]
 if isinstance(sys.stdout, io.TextIOWrapper):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-DEFAULT_URL = "ws://localhost:8000/ws/edge"
+#: **`localhost` 을 쓰지 않는다.** Windows 에서 `localhost` 은 `::1`(IPv6)로 먼저
+#: 풀리는데 서버는 `127.0.0.1` 에만 바인딩하므로, 매 연결이 IPv6 타임아웃(실측 2.6초)을
+#: 먹고 IPv4 로 폴백한다. 그 2.6초가 `ts` 와 실제 송신 시각의 어긋남으로 그대로 남아
+#: 오버레이가 통째로 뒤처졌다. `.env` 규약과 `front/vite.config.ts` 도 같은 이유로
+#: 전부 `127.0.0.1` 을 쓴다.
+DEFAULT_URL = "ws://127.0.0.1:8000/ws/edge"
 
 
 def _build_timeline(mode: str, case: str, speed: float, clock: Clock) -> list[ScheduledMessage]:
+    """파싱·검증까지만 한다. **`ts` 는 재생 직전에 `retime` 이 다시 찍는다.**
+
+    여기서 쓰는 시각은 자리표시자이며, 이 함수가 얼마나 걸리든 정합에 영향을 주지
+    않는다 — 그게 이 단계를 재생 기준점과 분리한 이유다.
+    """
     start = clock.now()
     if mode == "scripted":
         return load_case(case, start, speed)
+    if mode == "marker":
+        return marker.build(start)
     return load_log(case, start)
 
 
@@ -55,7 +69,14 @@ async def run(
     print(f"[edge_sim] {mode}:{case} — 메시지 {len(timeline)}건, 배속 {speed}x → {url}")
 
     async with websockets.connect(url) as socket:
+        # **두 기준점을 연결 직후에 나란히 잡는다.** `ts`(벽시계)와 재생 시각(단조)이
+        # 같은 순간을 가리켜야 좌표가 실제 송신 시각을 말한다. 파싱·연결에 든 시간을
+        # 사이에 끼우면 그만큼이 전 구간 고정 오차로 남는다.
         origin = clock.monotonic()
+        timeline = retime(timeline, clock.now())
+        if mode == "marker":
+            # 좌표는 `ts` 의 함수다. `retime` 이 `ts` 를 고쳤으니 좌표도 다시 계산한다.
+            timeline = marker.reproject(timeline)
         frames = 0
         for item in timeline:
             # `at_s` 는 이미 배속이 반영된 값이다 — `ts` 와 같은 축이어야 한다.
@@ -85,11 +106,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--url", default=DEFAULT_URL, help=f"기본 {DEFAULT_URL}")
     parser.add_argument(
         "--mode",
-        choices=("scripted", "logreplay"),
+        choices=("scripted", "marker", "logreplay"),
         default="scripted",
-        help="scripted=시나리오 yaml / logreplay=JSONL 로그 재생",
+        help=(
+            "scripted=시나리오 yaml / marker=오버레이 정합 검증 궤적 / logreplay=JSONL 로그 재생"
+        ),
     )
-    parser.add_argument("--case", required=True, help="시나리오 이름 또는 파일 경로")
+    parser.add_argument(
+        "--case",
+        default="marker",
+        help="시나리오 이름 또는 파일 경로 (--mode marker 에서는 쓰이지 않는다)",
+    )
     parser.add_argument("--speed", type=float, default=1.0, help="재생 배속 (기본 1.0)")
     args = parser.parse_args(argv)
 

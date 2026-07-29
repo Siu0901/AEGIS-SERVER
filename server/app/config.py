@@ -29,10 +29,10 @@ class ServerSettings(BaseSettings):
     """**서버 노트북**의 영구 보관소 — 이벤트 클립·키프레임.
     7일 원본은 여기가 아니라 REC 쪽에 있다(기능명세서 §4.4)."""
 
-    mediamtx_api: str = "http://localhost:9997"
+    mediamtx_api: str = "http://127.0.0.1:9997"
     """mediamtx 제어 API. 메인 스트림 연결 상태를 여기서 관측한다(FN-SYS-01)."""
 
-    recorder_base: str = "http://localhost:9100"
+    recorder_base: str = "http://127.0.0.1:9100"
     """REC 주소. **녹화 파일에 파일 경로로 접근하지 않는다** — 항상 이 주소로만(§4.7)."""
 
     cam_ids: Annotated[list[int], NoDecode] = Field(

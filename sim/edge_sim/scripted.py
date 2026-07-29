@@ -46,7 +46,7 @@ from pydantic import TypeAdapter
 
 from aegis_contracts import EdgeMessage
 
-__all__ = ["CASES_DIR", "ScheduledMessage", "load_case", "resolve_case_path"]
+__all__ = ["CASES_DIR", "ScheduledMessage", "load_case", "resolve_case_path", "retime"]
 
 #: 시나리오 파일 디렉토리.
 CASES_DIR = Path(__file__).resolve().parent.parent / "cases"
@@ -67,7 +67,9 @@ _LERP_SCALAR: Final[frozenset[str]] = frozenset(
 #: 키프레임 사이를 선형 보간하는 좌표 배열 필드. API명세서 §2.1
 #:
 #: `danger_radius_m` 은 여기 없다 — 설정값이지 관측값이 아니라서 프레임마다 변하지 않는다.
-_LERP_VECTOR: Final[frozenset[str]] = frozenset({"bbox", "foot_point", "foot_point_m", "anchor_m"})
+_LERP_VECTOR: Final[frozenset[str]] = frozenset(
+    {"bbox", "foot_point", "foot_point_m", "anchor", "anchor_m"}
+)
 
 #: 보간 결과 자릿수. 정규화 좌표는 1e-4 면 1920px 에서 0.2px 미만이라 충분하다.
 _ROUND = 4
@@ -151,6 +153,31 @@ def load_case(case: str, start: datetime, speed: float = 1.0) -> list[ScheduledM
         body[_TS_FIELD[str(body["type"])]] = start + timedelta(seconds=played_at)
         scheduled.append(ScheduledMessage(at_s=played_at, message=_ADAPTER.validate_python(body)))
     return scheduled
+
+
+def retime(timeline: list[ScheduledMessage], start: datetime) -> list[ScheduledMessage]:
+    """이미 만든 타임라인의 시각만 `start` 기준으로 다시 찍는다.
+
+    **`load_case` 는 비싸고(YAML 파싱 + 보간 + 225건 스키마 검증) `retime` 은 싸다.**
+    그래서 파싱은 미리 해 두고, 연결이 맺어진 **직후에** 이걸 불러 `ts` 를 실제 재생
+    기준으로 맞춘다.
+
+    이 분리가 없으면 `ts` 기준점과 재생 기준점이 서로 다른 순간에 잡힌다. 그 사이에
+    든 시간(파싱 + WebSocket 연결)이 **전 구간에 걸친 고정 오차**로 남아, 좌표가 실제
+    송신 시각보다 그만큼 과거를 가리킨다. 클라이언트는 그것을 "좌표가 늦게 온다"로
+    보고 박스를 그리지 못한다 — 실측으로 2.8초가 이렇게 생겼다.
+    """
+    return [
+        ScheduledMessage(
+            at_s=item.at_s,
+            message=item.message.model_copy(
+                update={
+                    _TS_FIELD[str(item.message.type)]: start + timedelta(seconds=item.at_s),
+                }
+            ),
+        )
+        for item in timeline
+    ]
 
 
 def _frame_fps(raw: dict[str, Any], path: Path) -> float | None:

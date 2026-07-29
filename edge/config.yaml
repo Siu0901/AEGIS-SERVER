@@ -12,12 +12,12 @@ streams:
   # 두 스트림의 화면비는 반드시 16:9로 같아야 한다(API명세서 §1.2).
   # 다르면 정규화 좌표가 한쪽 축으로 눌려 대시보드 박스가 어긋난다.
   - cam_id: 1
-    rtsp_sub: rtsp://localhost:8554/cam1/sub
+    rtsp_sub: rtsp://127.0.0.1:8554/cam1/sub
     width: 640
     height: 360
     fps: 15
   - cam_id: 2
-    rtsp_sub: rtsp://localhost:8554/cam2/sub
+    rtsp_sub: rtsp://127.0.0.1:8554/cam2/sub
     width: 640
     height: 360
     fps: 15
@@ -65,5 +65,5 @@ track:
   backend: bytetrack
 
 server:
-  ws_url: ws://localhost:8000/ws/edge
+  ws_url: ws://127.0.0.1:8000/ws/edge
   heartbeat_interval_s: 5

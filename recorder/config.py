@@ -29,7 +29,7 @@ class RecSettings(BaseSettings):
         extra="ignore",
     )
 
-    rtsp_base: str = "rtsp://localhost:8554"
+    rtsp_base: str = "rtsp://127.0.0.1:8554"
     """카메라 RTSP 루트. `{rtsp_base}/cam{N}/main` 을 구독한다. **서브는 녹화하지 않는다** —
     서브는 추론 전용이다(API명세서 §4.7 녹화 규격)."""
 

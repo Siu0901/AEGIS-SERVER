@@ -1,7 +1,7 @@
 """가짜 ESP32 — `aegis/alert` 구독, `aegis/device/status` 주기 발행.
 
     uv run python -m sim.mcu_sim.main
-    uv run python -m sim.mcu_sim.main --host localhost --port 1883 --device esp32-01
+    uv run python -m sim.mcu_sim.main --host 127.0.0.1 --port 1883 --device esp32-01
 
 실물 ESP32는 `level` 에 따라 점멸 패턴과 부저를 제어한다(1=주의·부저 없음,
 2=경고, 3=긴급·연속 부저 — **`fall` 은 항상 3**). 여기서는 콘솔에 그대로 찍는다.
@@ -25,7 +25,7 @@ from aegis_vision.clock import Clock, RealClock
 
 __all__ = ["main", "run"]
 
-DEFAULT_HOST = "localhost"
+DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 1883
 DEFAULT_STATUS_INTERVAL_S = 10
 

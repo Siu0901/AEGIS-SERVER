@@ -29,7 +29,7 @@ class DbSettings(BaseSettings):
     )
 
     database_url: str = Field(
-        default="postgresql+psycopg://aegis:aegis@localhost:5432/aegis",
+        default="postgresql+psycopg://aegis:aegis@127.0.0.1:5432/aegis",
         validation_alias=AliasChoices("DATABASE_URL", "AEGIS_DATABASE_URL"),
     )
     """`docker-compose.yml` 의 postgres 서비스와 같은 자격증명을 가리켜야 한다.

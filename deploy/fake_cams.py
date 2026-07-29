@@ -51,6 +51,8 @@ from pathlib import Path
 from types import FrameType
 from typing import NamedTuple
 
+from deploy.marker_path import drawbox_filter
+
 ROOT = Path(__file__).resolve().parent.parent
 PIDFILE_DIR = ROOT / "media" / "run"
 PIDFILE_GLOB = "fake_cams*.json"
@@ -66,7 +68,7 @@ def pidfile_for(cam_ids: Sequence[int]) -> Path:
     return PIDFILE_DIR / f"fake_cams_{'-'.join(str(cam) for cam in cam_ids)}.json"
 
 
-RTSP_BASE = os.environ.get("RTSP_BASE", "rtsp://localhost:8554")
+RTSP_BASE = os.environ.get("RTSP_BASE", "rtsp://127.0.0.1:8554")
 MAIN_SIZE = os.environ.get("MAIN_SIZE", "1920x1080")
 SUB_SIZE = os.environ.get("SUB_SIZE", "640x360")
 FPS = int(os.environ.get("FPS", "15"))
@@ -169,7 +171,7 @@ def drawtext_font() -> str:
     )
 
 
-def timecode_filter(stream: Stream, font: str) -> str:
+def timecode_filter(stream: Stream, font: str, *, marker: bool = False) -> str:
     """벽시계 타임코드를 밀리초까지 소성하는 필터 체인.
 
     지연 측정이 성립하려면 화면에 찍힌 시각이 **프레임이 만들어진 실제 벽시계 시각**
@@ -201,12 +203,16 @@ def timecode_filter(stream: Stream, font: str) -> str:
     ms = r"%{eif\:trunc(mod(t\,1)*1000)\:d\:3}"
     text = rf"{stream.label} {hh}\:{mm}\:{ss}.{ms} UTC"
     fontsize = 32 if stream.kind == "sub" else 56
+    # marker 사각형도 **에포크 pts 구간 안에서** 그려야 시뮬레이터와 위상이 맞는다
+    # (`deploy/marker_path.py` 참조). 마지막 `setpts` 뒤로 밀면 t 가 0부터 다시 세어진다.
+    marker_filter = f",{drawbox_filter()}" if marker else ""
     return (
         "realtime,"
         "setpts=RTCTIME/(TB*1000000),"
         f"drawtext=fontfile={font}:text='{text}'"
         f":fontcolor=white:fontsize={fontsize}:box=1:boxcolor=black@0.6:boxborderw=8"
-        ":x=24:y=24,"
+        ":x=24:y=24"
+        f"{marker_filter},"
         "setpts=PTS-STARTPTS"
     )
 
@@ -224,7 +230,9 @@ def input_args(source: str | None) -> list[str]:
     return ["-f", "lavfi", "-i", f"testsrc2=size={MAIN_SIZE}:rate={FPS}"]
 
 
-def ffmpeg_argv(ffmpeg: str, stream: Stream, source: str | None, font: str) -> list[str]:
+def ffmpeg_argv(
+    ffmpeg: str, stream: Stream, source: str | None, font: str, *, marker: bool = False
+) -> list[str]:
     """경로 하나를 송출하는 ffmpeg 명령."""
     profile = "baseline" if stream.kind == "sub" else "main"
     # 비트레이트를 상한까지 묶어둔다. 평균만 맞추면 순간 피크가 커져 1시간 실측
@@ -237,7 +245,7 @@ def ffmpeg_argv(ffmpeg: str, stream: Stream, source: str | None, font: str) -> l
         "-loglevel", "warning",
         "-nostdin",
         *input_args(source),
-        "-vf", f"scale={stream.size},fps={FPS},{timecode_filter(stream, font)}",
+        "-vf", f"scale={stream.size},fps={FPS},{timecode_filter(stream, font, marker=marker)}",
         "-an",
         "-c:v", "libx264",
         "-preset", "veryfast",
@@ -313,6 +321,15 @@ def build_parser() -> argparse.ArgumentParser:
             "`--cams 1` 과 `--cams 2` 를 따로 띄운다"
         ),
     )
+    parser.add_argument(
+        "--marker",
+        action="store_true",
+        help=(
+            "궤적이 결정적인 사각형을 영상에 태운다 (오버레이 정합 검증용). "
+            "`sim --mode marker` 가 같은 수식으로 좌표를 보내므로, 화면에서 두 박스가 "
+            "겹치면 정합이 맞는 것이고 어긋난 거리가 곧 오차다"
+        ),
+    )
     return parser
 
 
@@ -363,7 +380,9 @@ def main(argv: list[str] | None = None) -> int:
                 f"{stream.bitrate:>6}  ->  {stream.url}"
             )
             processes.append(
-                subprocess.Popen(ffmpeg_argv(ffmpeg, stream, per_cam[stream.cam_id], font))
+                subprocess.Popen(
+                    ffmpeg_argv(ffmpeg, stream, per_cam[stream.cam_id], font, marker=args.marker)
+                )
             )
             labels.append(stream.label)
     except CamsError as exc:
