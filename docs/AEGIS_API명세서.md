@@ -169,7 +169,7 @@ v2.0 · 2026-07-18
   "cam_id": 1,
   "ts": "2026-08-14T05:37:02.183Z",
   "track_id": 3,
-  "violations": ["no_helmet", "zone_intrusion"],
+  "violation_type": "no_helmet",
   "zone_id": "forklift_lane",
   "bbox": [0.197, 0.364, 0.273, 0.764],
   "conf": 0.91,
@@ -198,7 +198,7 @@ v2.0 · 2026-07-18
 | 필드 | 타입 | 필수 | 설명 |
 |---|---|---|---|
 | `track_id` | int | ✔ | 위반 대상 사람의 추적 번호. 서버는 이 값으로 중복 병합과 시정 추적을 수행 |
-| `violations[]` | string[] | ✔ | 동시 발생 가능. `no_helmet` / `zone_intrusion` / `proximity` / `fall` |
+| `violation_type` | string | ✔ | **단일 값이다.** `no_helmet` / `zone_intrusion` / `proximity` / `fall` |
 | `zone_id` | string·null | ✔ | 침입한 구역 ID. **필드는 항상 싣고, 해당 없으면 `null`** (§2.1 `in_zone` 과 동일 규약) |
 | `foot_point_m` | float[2] | ✔ | 위반 발생 지점 실좌표 |
 | `helmet` / `helmet_conf` | string / float | | 2단계 분류 결과. `no_helmet` 위반의 근거 |
@@ -208,7 +208,11 @@ v2.0 · 2026-07-18
 | `posture` | string | | `fall` 위반의 근거 |
 | `observed_ms` | int | ✔ | 엣지가 **이 메시지의 `violation_type` 조건을** 연속 관측한 시간(ms). 서버 확정 판정의 참고값 |
 
-**후보 메시지 하나에는 위반 유형이 하나만 담긴다.** 한 트랙에 두 유형(예: `no_helmet` + `zone_intrusion`)이 동시에 걸리면 **`candidate` 메시지를 유형 수만큼 각각 보낸다.** 유형마다 조건 충족 시작 시각이 다르므로 `observed_ms` 도 각각의 값을 갖는다.
+**`violation_type` 이 단수인 이유**
+
+이벤트 병합 키가 `cam_id + track_id + violation_type`(FN-EVT-01)이고, 유형마다 확정 타이머와 해소 조건이 독립적으로 돈다. 배열로 받으면 서버가 어차피 유형별로 쪼개야 하며, `observed_ms` 도 유형마다 값이 달라 하나로 담을 수 없다. 따라서 **후보 1건 = 이벤트 1건 = 위반 유형 1개**로 1:1 대응시킨다. REST(§4.1)와 대시보드(§5.2)의 `violation_type` 과도 이름이 일치한다.
+
+한 트랙에 두 유형(예: `no_helmet` + `zone_intrusion`)이 동시에 걸리면 **`candidate` 메시지를 유형 수만큼 각각 보낸다.** 유형마다 조건 충족 시작 시각이 다르므로 `observed_ms` 도 각각의 값을 갖는다.
 | `nearby[]` | array | | **주변 위험 지게차 목록** — 아래 상세 |
 
 **`nearby[]` 상세**
@@ -1065,7 +1069,7 @@ FN-UI-02 표시 규칙(위반자 적색·근접 거리선·거리 라벨)을 채
 1. 수신한 `overlay`를 `ts` 키로 지연 버퍼에 적재
 2. 현재 재생 중인 영상 프레임의 표시 시각 `t_video`를 구한다
 3. 버퍼에서 `ts ≈ t_video`인 항목을 꺼내 렌더링. 정확히 일치하는 프레임이 없으면 앞뒤 두 프레임을 선형 보간
-4. 재생 경로에 맞는 버퍼(`overlay_buffer_webrtc_ms` 기본 400ms / `overlay_buffer_hls_ms` 기본 2800ms)를 적용해 좌표가 항상 먼저 도착하도록 여유를 둔다. **경로에 따라 지연이 한 자릿수 배 차이나므로 단일 값을 쓰지 않는다**(기능명세서 §4.6 실측표)
+4. 재생 경로에 맞는 버퍼(`overlay_buffer_webrtc_ms` 기본 300ms / `overlay_buffer_hls_ms` 기본 2800ms)를 적용해 좌표가 항상 먼저 도착하도록 여유를 둔다. **경로에 따라 지연이 한 자릿수 배 차이나므로 단일 값을 쓰지 않는다**(기능명세서 §4.6 실측표)
 5. `overlay_stale_ms`(기본 1000ms) 이상 갱신이 없으면 박스를 흐리게 처리
 
 정합 오차 목표는 **±100ms**이며, 시연 시 화면 품질에 직결되는 항목이다.
