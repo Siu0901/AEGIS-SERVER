@@ -211,7 +211,11 @@
 
 > `expired` 는 **시정률 분모·분자 모두에서 제외**하고 `undetermined_rate` 로 따로 집계한다.
 > 두 숫자는 **항상 병기**한다 — `방송 후 시정률 87% (판정 불가 5%)`.
-> `fall` 과 `is_false_positive` 도 시정률에서 전량 제외한다.
+> `fall` · `is_false_positive` · `dropped` 도 시정률에서 전량 제외한다.
+>
+> **분모가 0이면 두 비율은 `null` 이다**(§6.7). `0.00` 은 "시정률 0%"라는 주장이고
+> 실제로는 "판정 가능한 이벤트가 없다"이므로 화면은 `–` 로 그린다.
+> 늦은 시정(`resolve_window_s` 초과 해소)은 `resolved_late` 로 분리해 분모에만 넣는다.
 >
 > **FN-SYS-04 가 🟡 인 이유**: `GET /metrics/summary`(시정률 · 판정 불가율 · 평균 시정
 > 시간)는 M3 에서 동작한다. 같은 §4.2 의 `timeseries` · `distribution` · `repeat` 는
@@ -399,25 +403,41 @@ FN-ID가 붙지 않는 기반 작업이다. 전부 완료되었고 `uv run tasks
 | 집행 계층 (저장 · §5.2 발행 · 틱 · 재시작 복구) | `server/app/event_service.py` | §5.2 · §5.3 | ✅ |
 | `GET /metrics/summary` | `server/app/routes/metrics.py` | §4.2 | ✅ |
 | `PATCH /events/{id}` (오탐 · 강제 종결) | `server/app/routes/events.py` | §4.1 · FN-EVT-05 | ✅ |
-| 저장소 확장 (`find_open_all` · `delete` · `metrics_rows` · 타임라인) | `server/infra/db/repository.py` | §4.1 · §6 | ✅ |
+| 저장소 확장 (`find_open_all` · `metrics_rows` · 타임라인) | `server/infra/db/repository.py` | §4.1 · §6 | ✅ |
 | `candidate.violation_type` 단수화 (계약·시나리오·서버) | `packages/contracts/.../edge.py` · `sim/cases/` | §2.2 | ✅ |
-| 시나리오 8종 + **기대값 자동 대조** | `sim/cases/*.yaml` · `sim/case_check.py` · `sim/tests/test_cases.py` | — | ✅ |
+| **`dropped` 종결 상태** (확정 전 소멸 · 레코드 보존) | `packages/contracts/.../enums.py` · `event_machine.py` | §4.2 | ✅ |
+| **`resolved_late` 버킷 · 분모 0 → `null`** | `server/domain/metrics.py` · `.../rest.py` | §4.2 · §6.7 | ✅ |
+| **`last_alerted_at` · `note` 컬럼** (마이그레이션 `0003`) | `server/infra/db/` · `event_service.py` | §6 · §5.2 | ✅ |
+| **`track_miss_timeout_ms`** 로 소실 판정 (표시용 키와 분리) | `.../policies.py` · `event_machine.py` | §4.5 | ✅ |
+| 시나리오 9종 + **기대값 자동 대조** | `sim/cases/*.yaml` · `sim/case_check.py` · `sim/tests/test_cases.py` | — | ✅ |
 | 전이 → 오버레이 · 재시작 복구 검증 | `server/tests/test_event_service.py` | §5.1 · FN-UI-02 | ✅ |
 | `uv run tasks.py cases` (지표를 표로 확인) | `tasks.py` | — | ✅ |
 | 오버레이 라벨에 재경고 표시 | `front/src/live/OverlayCanvas.tsx` | FN-EVT-04 | ✅ |
 
-**시나리오 8종 — 기대값과 실행 결과** (`uv run tasks.py cases`)
+**시나리오 9종 — 기대값과 실행 결과** (`uv run tasks.py cases`)
 
-| 시나리오 | 무엇을 잠그는가 | 시정률 | 판정 불가율 | 해소 | 미시정 | 판정 불가 | 쓰러짐 |
-|---|---|---|---|---|---|---|---|
-| `normal_resolve` | 확정 3초 · 해소 10초 기본 경로 | 1.00 | 0.00 | 1 | 0 | 0 | 0 |
-| `no_resolve` | 쿨다운 30초 → 재경고, 미시정은 분모에 남는다 | 0.00 | 0.00 | 0 | 1 | 0 | 0 |
-| `reassoc_success` | 시간 비례 반경으로 되살아나 시정까지 간다 | 1.00 | 0.00 | 1 | 0 | 0 | 0 |
-| `reassoc_fail` | 유예 15초 만료 → `expired` 는 **미시정이 아니다** | 0.00 | 1.00 | 0 | 0 | 1 | 0 |
-| `id_switch_guard` | 재결합 후 해소 타이머를 **0부터** 다시 채운다 | 1.00 | 0.00 | 1 | 0 | 0 | 0 |
-| `gating_freeze` | `helmet` 생략 구간에서 타이머 **동결**(초기화 아님) | 0.00 | 0.00 | 0 | 1 | 0 | 0 |
-| `fall_excluded` | 쓰러짐이 분모에 섞이면 1.00 이 0.50 이 된다 | 1.00 | 0.00 | 1 | 0 | 0 | 1 |
-| `false_positive` | 오탐이 분모에 남으면 1.00 이 0.50 이 된다 | 1.00 | 0.00 | 1 | 0 | 0 | 0 |
+| 시나리오 | 무엇을 잠그는가 | 시정률 | 판정 불가율 | 해소 | 늦은 시정 | 미시정 | 판정 불가 | 쓰러짐 |
+|---|---|---|---|---|---|---|---|---|
+| `normal_resolve` | 확정 3초 · 해소 10초 기본 경로 | 1.00 | 0.00 | 1 | 0 | 0 | 0 | 0 |
+| `no_resolve` | 쿨다운 30초 → 재경고, 미시정은 분모에 남는다 | 0.00 | 0.00 | 0 | 0 | 1 | 0 | 0 |
+| `reassoc_success` | 시간 비례 반경으로 되살아나 시정까지 간다 | 1.00 | 0.00 | 1 | 0 | 0 | 0 | 0 |
+| `reassoc_fail` | 유예 15초 만료 → `expired` 는 **미시정이 아니다** | **`null`** | 1.00 | 0 | 0 | 0 | 1 | 0 |
+| `id_switch_guard` | 재결합 후 해소 타이머를 **0부터** 다시 채운다 | 1.00 | 0.00 | 1 | 0 | 0 | 0 | 0 |
+| `gating_freeze` | `helmet` 생략 구간에서 타이머 **동결**(초기화 아님) | 0.00 | 0.00 | 0 | 0 | 1 | 0 | 0 |
+| `fall_excluded` | 쓰러짐이 분모에 섞이면 1.00 이 0.50 이 된다 | 1.00 | 0.00 | 1 | 0 | 0 | 0 | 1 |
+| `false_positive` | 오탐이 분모에 남으면 1.00 이 0.50 이 된다 | 1.00 | 0.00 | 1 | 0 | 0 | 0 | 0 |
+| `dropped` | 확정 전 소멸이 **레코드로 남고** 어느 비율에도 안 든다 | **`null`** | **`null`** | 0 | 0 | 0 | 0 | 0 |
+
+> **`reassoc_fail` 의 시정률이 `0.00` 이 아니라 `null` 인 이유**(§6.7). 해소 0 · 늦은
+> 시정 0 · 미시정 0 이면 분모가 0 이다. `0.00` 은 "시정률 0%"라는 주장인데 실제로는
+> "판정 가능한 이벤트가 없다"이며, 판정 불가만 있는 구간에서 0% 가 표시되면 시스템이
+> 전혀 작동하지 않은 것처럼 보인다. 대시보드는 `null` 을 `–` 로 그린다
+> (`front/src/types/system.ts` 의 `formatRate`).
+>
+> **`dropped` 시나리오가 잠그는 것**: 후보가 2초만 관측되고 사라진다(확정에 1초
+> 모자란다). 레코드는 `dropped` 로 남고, 병합 키는 풀리며, 두 비율은 모두 `null` 이다.
+> 미시정으로 새면 시정률이 `0.00`, 판정 불가로 새면 판정 불가율이 `1.00` 으로 나온다 —
+> 셋이 모두 구분된다.
 
 기대값은 각 yaml 의 `expect:` 블록에 있고, 대조는 `sim/case_check.py` 가 한다.
 **눈으로 보고 판단하는 경로를 남기지 않았다** — 같은 검사가 `pytest`(따라서
@@ -438,8 +458,8 @@ FN-ID가 붙지 않는 기반 작업이다. 전부 완료되었고 `uv run tasks
 |---|---|
 | **타이머는 관측이 있을 때만 흐른다** | 사람이 보이지 않는 구간에서 해소 타이머가 차오르면 그냥 사라진 사람이 "시정했다"로 집계된다. 확정·해소 타이머는 `tick` 이 아니라 `frame` · `candidate` 도착 시점에만 전진한다 |
 | 확정 판정에 `observed_ms`(엣지 값)를 쓰지 않는다 | §2.2 가 "참고값"이라고 했다. 그대로 믿으면 엣지 규칙이 바뀔 때 서버 확정 기준까지 함께 흔들린다. 서버는 자기 관측으로 3초를 잰다 |
-| **확정 전 소멸한 후보는 레코드를 지운다** | 전이표의 종결 상태는 `resolved` · `expired` 뿐이고 둘 다 "확정된 위반"을 전제한다. `expired` 로 보내면 판정 불가율이 "위반이었는지도 모르는 것들"로 부풀고, `candidate` 로 두면 병합 키(FN-EVT-01)를 점유해 같은 트랙의 다음 위반이 이벤트를 못 만든다. 지표에 들어간 적 없는 레코드만 대상이다 |
-| DB `alerted_at` 은 **최초** 경고 시각으로 고정 | §5.2 는 `re_alerted` 메시지에 "최근"을 실으라 하고 §4.1 은 `resolution_sec = alerted_at → resolved_at` 이라 한다. 최근으로 덮으면 재경고가 많을수록 소요 시간이 짧아져 **시정률이 부풀려진다.** 메시지에는 최근 시각을, 컬럼에는 최초 시각을 둔다 (A절에 올림) |
+| **확정 전 소멸한 후보는 `dropped` 로 종결한다** (M3 갱신) | 처음에는 남길 상태가 없어 레코드를 지웠으나, 명세서가 `dropped` 를 신설해 되돌렸다. 지우면 `dropped / (dropped + 확정)` 을 셀 수 없어 `confirm_duration_s` 튜닝 근거가 사라지고, `expired` 로 보내면 판정 불가율이 오염되며, `candidate` 로 두면 병합 키(FN-EVT-01)를 점유한다. 종결 상태이므로 병합 키는 풀린다 |
+| DB `alerted_at` 은 **최초**, `last_alerted_at` 이 **최근** (M3 갱신) | 처음에는 컬럼 하나로 버텼다. 명세서가 컬럼과 메시지를 분리해 이제 둘 다 저장한다. 최근 시각으로 `alerted_at` 을 덮으면 `resolution_sec`(= `alerted_at → resolved_at`)이 마지막 방송 기준으로 줄어 **시정률이 부풀려진다** |
 | 해소 판정을 **`frame`** 으로 한다 | 후보는 규칙이 걸릴 때만 온다(§2.2). "후보가 끊겼다"만으로는 위반이 사라진 것과 대상이 사라진 것을 구분할 수 없다. 프레임에는 둘이 다르게 나타난다 |
 | `proximity` 해소 거리는 접지점↔`anchor` 로 재되 `min_distance_m` 에는 쓰지 않는다 | 그 컬럼의 원천은 후보의 `nearby[].dist_m`(마스크 최근접 · §6.5)이다. 두 방식의 값을 같은 칸에 섞으면 어느 방식으로 잰 숫자인지 사후에 알 수 없다 |
 | 게이팅 동결은 **`no_helmet` 과 `fall`** 에만 적용 | §6.3 의 동결은 분류 결과를 채택하지 못한 상황을 말한다. `zone_intrusion` · `proximity` 는 좌표로 판정하므로 `helmet` 과 무관하다. `fall` 은 `posture: unknown` 이 같은 뜻이라 동결한다 |
@@ -447,7 +467,10 @@ FN-ID가 붙지 않는 기반 작업이다. 전부 완료되었고 `uv run tasks
 | 재결합해도 DB `lost_at` 을 지우지 않는다 | "이 이벤트는 한 번 끊겼다"는 사실 자체가 추적 품질의 근거다. `reassoc_count` 와 함께 남긴다 |
 | 엣지가 끊겨도 이벤트를 종결하지 않는다 | 오버레이 표시만 내리고, 진행 중 이벤트는 미관측으로 보아 `lost` → `expired`(판정 불가)로 간다. 관측 주체가 사라졌다는 사실을 "시정했다"로도 "미시정"으로도 바꾸지 않는다 |
 | 기동 시 진행 중 이벤트를 복구하되 **타이머는 0부터** | 복구하지 않으면 재시작 한 번이 그 이벤트들을 영원히 미해소로 남긴다. 반대로 재시작 전 관측량을 추정해 채우면 관측 없이 확정·해소가 일어난다. `lost` 유예도 기동 시각부터 다시 센다(늦게 종결되는 쪽이 안전하다) |
-| `GET /metrics/summary` 의 `resolved` 는 **분자** | §4.2 가 `correction_rate = resolved / (resolved + unresolved)` 라고 적었으므로 응답만 보고 식이 성립해야 한다. 늦은 시정(창 초과 해소)은 §6.7 표대로 분자에서 빠져 `unresolved` 쪽에 남는다 (A절에 올림) |
+| `resolved` · `resolved_late` · `unresolved` 는 **배타적** (M3 갱신) | 처음에는 늦은 시정이 `unresolved` 에 섞였다. 명세서가 `resolved_late` 를 신설해 셋으로 갈랐고, 셋의 합이 분모다 — 응답만 보고 `correction_rate = resolved / (resolved + resolved_late + unresolved)` 가 성립한다. "시정은 했으나 늦었다"와 "아직 안 했다"는 현장 대응이 다르다 |
+| **분모가 0이면 비율은 `null`** (M3 갱신) | `0.0` 은 "시정률 0%"라는 주장이고 실제로는 "판정 가능한 이벤트가 없다"이다. 둘을 같은 값으로 내보내면 판정 불가만 있던 구간이 "아무도 시정하지 않았다"로 읽힌다 — 대응이 정반대인 두 상황이다 |
+| `resolved` 인데 `resolution_sec` 이 없으면 **`resolved_late`** | 깨진 레코드다. 창 안에 시정됐다고 주장할 근거가 없으므로 분자에서 빼되, `unresolved`(아직 안 했다)도 사실이 아니다. 분모에만 들어가는 자리가 늦은 시정 쪽이다 |
+| 소실 판정에 **`track_miss_timeout_ms`** 를 쓴다 (M3 갱신) | 전용 정책 키가 없어 `overlay_stale_ms`(표시용)를 빌려 쓰던 것을, 명세서가 신설한 키로 바꿨다. 박스를 흐리게 그릴 시점(1000ms)과 이벤트를 `lost` 로 보낼 시점(1500ms)은 튜닝 이유가 다르므로 **혼용하지 않는다** |
 | 지표 기간의 기본값은 **UTC 오늘** | 저장이 UTC 다(§1.2). 집계 경계를 로컬로 옮기면 같은 이벤트가 어느 날에 속하는지가 서버 시간대 설정에 따라 달라진다 |
 
 **M3 이 쓰는 정책값** — 전부 `GET /policies`(DB)에서 읽는다. 코드에 값이 없다.
@@ -459,9 +482,9 @@ FN-ID가 붙지 않는 기반 작업이다. 전부 완료되었고 `uv run tasks
 | `cooldown_s` | 30.0 | 재경고 |
 | `track_lost_grace_s` | 15.0 | 유예 만료 → `expired` |
 | `reassoc_window_s` · `reassoc_max_speed_ms` · `reassoc_radius_cap_m` | 10.0 · 1.5 · 5.0 | 재결합 |
-| `resolve_window_s` | 300.0 | 시정률 **분자** 조건 |
+| `resolve_window_s` | 300.0 | 시정률 **분자** 조건 (`resolved` / `resolved_late` 를 가른다) |
 | `proximity_threshold_m` | 2.0 | `proximity` 해소 판정 |
-| `overlay_stale_ms` | 1000.0 | **관측 끊김 판정**(아래 A절 참조) |
+| `track_miss_timeout_ms` | 1500.0 | **소실 판정**과 타이머 적산 상한. 표시용 `overlay_stale_ms` 와 혼용하지 않는다 |
 
 ---
 
@@ -525,19 +548,31 @@ FN-ID가 붙지 않는 기반 작업이다. 전부 완료되었고 `uv run tasks
 | §5 오버레이 정합 4번 | `400` → **`300`** 으로 §4.5 와 일치 | 문서만. 코드는 원래 DB 값을 읽었다 |
 | §4.6 `cloud.quota_used` | **nullable 확정** | 이미 그렇게 구현되어 있었다 — 변경 없음 |
 
+**v9 (직전에 보고한 A 6건 전량 + 사람이 찾은 1건)** — 전부 코드에 반영했다.
+
+| 항목 | 확정된 내용 | 반영 |
+|---|---|---|
+| **분모가 0일 때의 시정률** ★ | §4.8 · §6.7 이 **`null`** 로 확정. `0.00` 은 "시정률 0%"라는 주장이지만 실제로는 "판정 가능한 이벤트가 없다"이다. 대시보드는 `–` 로 그리고 0% 와 다르게 표시한다 | `MetricsSummary` · `MetricMsg` 의 두 비율을 nullable 로. `_ratio` 가 `None` 을 낸다. `reassoc_fail` 기대값을 `null` 로 바꿨고, 프론트에 `formatRate`(→ `–`)를 두었다 |
+| `alerted_at` 이 최초인가 최근인가 | **컬럼과 메시지를 분리.** `events.last_alerted_at` 신설, `alerted_at` 은 최초로 고정. `resolution_sec` 은 `alerted_at`(최초) 기준 유지 | 마이그레이션 `0003` · `_STATUS_STAMP` · `EventUpdatedMsg.last_alerted_at` · `_to_re_alerted` 가 `alerted_at` 을 건드리지 않는다 |
+| §4.2 `resolved` · `unresolved` 의 정의 | **`resolved_late` 버킷 신설.** 셋이 서로 배타적이고 합이 분모다. `correction_rate = resolved / (resolved + resolved_late + unresolved)` | `summarize` 가 세 버킷을 따로 센다. `GET /metrics/summary` 응답에 `resolved_late` 추가 |
+| `frame` 연속 미관측의 기준 시간 | **`track_miss_timeout_ms`(1500ms) 신설.** 표시용 `overlay_stale_ms` 와 혼용 금지 | `Policies` · `PolicyPatch` · DB 시드 · `EventMachine._miss_s` |
+| §5.2 `event_created.keyframe_url` | **nullable 로 확정** | 계약을 넓히고, M3 은 `null` 을 보낸다 — 404 가 될 URL(`KEYFRAME_URL_TEMPLATE`)을 지웠다. M4(FN-REC-03)가 채운다 |
+| `events.note` 컬럼 | **신설** | 마이그레이션 `0003` · `PATCH /events/{id}` 가 저장한다 |
+| 확정 전 소멸한 후보의 상태 값 | **`dropped` 신설.** 지표 전량 제외, 병합 키 미점유, `dropped / (dropped + 확정)` 은 진단용으로 보존 | `EventStatus.DROPPED` · `_to_dropped` · `Effect` 에서 `delete` 액션 제거 · 저장소 `delete` 제거 · 시나리오 `dropped` 추가 |
+
 ### A. 남아 있는 확인 필요
 
-M3 상태머신을 만들며 새로 드러난 것들이다. 전부 **명세서에 근거가 없어 코드가
-정해야 했던** 자리이며, 판단의 이유와 함께 적는다(CLAUDE.md 절대규칙 8).
+이번 반영 중에 드러난 **명세서 내부의 불일치**다. 코드는 더 구체적인 절(§6.7 정의)을
+따랐고, 그 선택을 여기 적는다(CLAUDE.md 절대규칙 8).
 
 | 내용 | 상세 |
 |---|---|
-| **`frame` 연속 미관측의 기준 시간이 없다** | FN-EVT-07 ①은 "`track_lost` 수신 **또는** `frame` 에서 연속 미관측"이라 하는데, 그 "연속"의 길이에 대응하는 정책 키가 §4.5 에 없다. 상수를 지어내지 않고 같은 뜻을 이미 가진 `overlay_stale_ms`(기본 1000ms · "이 시간 이상 좌표 갱신이 없으면")를 썼다. **이 값 하나가 두 곳에 쓰인다** — 관측 끊김 판정과 타이머 적산 상한. 전용 키(`track_miss_ms` 등)를 둘지 판단해 달라 |
-| **DB `alerted_at` 이 최초인가 최근인가** | §4.1 은 `resolution_sec = alerted_at → resolved_at` 이라 하고, §5.2 는 `re_alerted` 전이에 "`alerted_at`(최근)"을 실으라 한다. 둘을 그대로 따르면 재경고가 많을수록 소요 시간이 짧아져 **시정률이 부풀려진다.** 「지표의 신뢰성을 지키는 쪽」을 택해 **컬럼은 최초 경고 시각으로 고정**하고 §5.2 메시지에만 최근 시각을 실었다. `first_alerted_at` 을 따로 둘지, 이 해석을 명세서에 명시할지 정해 달라 |
-| **§4.2 `resolved` · `unresolved` 의 정의** | §4.2 는 `correction_rate = resolved / (resolved + unresolved)` 라 하고 §6.7 은 늦은 시정(`resolve_window_s` 초과)을 분자에서만 뺀다. 응답만 보고 식이 성립하려면 `resolved` = 분자, `unresolved` = 분모−분자여야 하므로 그렇게 했고, 그 결과 **늦은 시정이 `unresolved` 에 섞인다.** `resolved_late` 를 필드로 둘지 판단해 달라 |
-| **§5.2 `event_created.keyframe_url` 이 필수 `str` 이다** | 확정 시점에 키프레임이 없을 수 있다(추출은 M4, REC 미가용·보존 경과도 있다). 지금은 추출되면 파일이 놓일 자리(`/media/kf/{event_id}_0.jpg`)를 가리키므로 **그때까지 404 인 URL** 이 나간다. nullable 로 넓혀 달라 |
-| **`events` 테이블에 `note` 컬럼이 없다** | §4.1 `PATCH /events/{id}` 는 `note` 를 받는데 §6 에 저장할 자리가 없다. 명세서에 없는 컬럼을 만들지 않았으므로 지금은 **로그와 §5.2 메시지에만** 남고 다시 조회하면 사라진다. 오탐 판단의 근거가 남지 않는다는 뜻이라 컬럼 추가 여부를 정해 달라 |
-| **확정 전 소멸한 후보를 남길 상태 값이 없다** | 전이표(§4.2)의 `candidate` 는 "`active` / **소멸**"로 갈리는데 그 소멸에 해당하는 종결 상태가 없다. `expired` 로 보내면 판정 불가율이 오염되고 `candidate` 로 두면 병합 키를 점유하므로 **레코드를 지웠다.** 지표에 들어간 적 없는 건만 대상이지만, 감사 추적을 남기려면 `dismissed` 같은 상태가 필요하다 |
+| **§4.8 의 시정률 식이 `resolved_late` 를 빠뜨렸다** | 기능명세서 §4.8 은 여전히 `correction_rate = resolved / (resolved + unresolved)` 다. API §4.2 · §6.7 은 `resolved / (resolved + resolved_late + unresolved)` 다. §4.8 표에 `dropped` 행은 추가됐으나 식은 갱신되지 않았다. **코드는 §6.7 을 따랐다.** 두 절의 식을 맞춰 달라 |
+| **§4.2 와 §6.7 의 판정 불가율 식이 다르다** | §4.2 는 `expired / (resolved + unresolved + expired)`, §6.7 은 `expired / (resolved + resolved_late + unresolved + expired)` 다. 늦은 시정이 판정 불가율 분모에 드는지가 갈린다. **코드는 §6.7 을 따랐다** — `resolved_late` 는 모집단이지 판정 불가가 아니므로 분모에 있어야 일관된다 |
+| **§4.2 예시의 `total_violations` 가 버킷 합과 안 맞는다** | 예시가 `total_violations: 23` 인데 `resolved(20) + resolved_late(1) + unresolved(2) + undetermined(1) = 24` 다. `resolved_late` 를 넣으면서 합계를 갱신하지 않은 것으로 보인다. **코드는 네 버킷의 합을 `total_violations` 로 낸다** — 응답 안에서 산술이 성립해야 하기 때문이다 |
+| **§5.3 `metric` 에 `resolved_late` 가 없고 nullable 여부도 없다** | §5.3 예시는 `resolved` · `unresolved` 만 싣고 비율은 숫자다. 그러나 같은 값이므로 분모가 0이면 `null` 을 실을 수밖에 없다. **코드는 두 비율을 nullable 로 넓히고 `resolved_late` 는 넣지 않았다**(§5.3 예시 그대로). 화면이 늦은 시정 건수를 알려면 `GET /metrics/summary` 를 읽어야 한다 |
+| **`dropped` 의 종결 시각 컬럼이 없다** | §6 `events` 에 `resolved_at` · `expired_at` 은 있으나 `dropped_at` 이 없다. 그래서 §4.1 `timeline` 에 `dropped` 가 나오지 않고, `dropped / (dropped + 확정)` 진단도 `detected_at` 기준으로만 기간을 끊을 수 있다. 없는 컬럼을 만들지 않았다 |
+| **`last_alerted_at` · `note` 를 다시 읽을 경로가 없다** | 두 컬럼은 §6 에 생겼는데 §4.1 `GET /events/{id}` 응답 필드 목록에는 없다. 그래서 **저장은 되지만 REST 로 다시 조회할 수 없다** — 오탐 사유를 화면에서 보려면 응답에 `note` 가 있어야 한다(FN-UI-03 · M5 가 이것을 필요로 한다). 응답 스키마에 추가할지 정해 달라 |
 
 ### B. 판단이 필요했던 타입
 
