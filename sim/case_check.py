@@ -30,6 +30,7 @@ expect:
       alerted_at_s: 3.5     # 선택
       resolved_at_s: 16.0   # 선택
       resolution_sec: 12    # 선택 (±1 허용)
+      clip_status: ready      # 선택 — FN-REC-03. null 이면 "예약조차 걸리지 않았다"
   metrics:
     correction_rate: 1.0    # 분모가 0이면 `null` 이다 (0.0 이 아니다 · §6.7)
     undetermined_rate: 0.0
@@ -39,45 +40,86 @@ expect:
     unresolved: 0
     undetermined: 0
     fall_events: 0
+  alerts:                   # 선택 — FN-ALM-01·02. **전량 목록**이다(더 나가도 실패)
+    - at_s: 3.5
+      violation_type: no_helmet
+      level: 2              # 1|2|3 · fall 은 항상 3
+      repeat: false         # 재경고면 true
+      sound: no_helmet.wav  # 실제로 튼 파일
 
 manual:                     # 선택 — FN-EVT-05 수동 정정
   - at: 30.0
     match: {track_id: 3, violation_type: fall}
     patch: {is_false_positive: true}
+
+mute:                       # 선택 — FN-ALM-05 경고 일시중지
+  - at: 1.0
+    cam_id: 1
+    minutes: 15
+    reason: 정비 작업
+
+restart_at: [12.0]          # 선택 — 이 시각에 서버를 내렸다 올린다 (저장소만 남는다)
+
+rec:                        # 선택 — REC 응답을 바꿔 실패 경로를 본다 (§4.7)
+  status: not_found         # ready(기본) | partial | not_found
+  available: true           # false 면 REC 이 죽은 상황 (잡은 pending 으로 남아야 한다)
 ```
 """
 
 from __future__ import annotations
 
 import asyncio
+import tempfile
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import yaml
 
 from aegis_contracts import (
+    AlertCommand,
     CandidateMsg,
+    ClipRequest,
+    ClipResponse,
     EventDetail,
     EventPatchRequest,
     EventStatus,
     EventSummary,
     FrameMsg,
     MetricsSummary,
+    MuteAlertRequest,
     Policies,
     SpecModel,
     TrackLostMsg,
     ViolationType,
 )
+from aegis_contracts.enums import ClipExtractStatus
 from aegis_vision.clock import FakeClock
-from server.app.event_service import EventService
+from scripts.seed_sounds import AUDIO_DIR, DEFAULT_SOUNDS
+from server.app.alert_service import AlertService
+from server.app.event_service import EventService, Publisher
 from server.domain.event_machine import EventMachine, format_event_id
+from server.domain.mcu_state import McuRuntime
 from server.domain.metrics import MetricsRow
 from server.domain.overlay import LiveTracks
+from server.infra.audio import SoundLibrary
+from server.infra.clip import ClipService
+from server.infra.rec_client import RecUnavailableError
 
 from .edge_sim.scripted import CASES_DIR, ScheduledMessage, load_case, resolve_case_path
+
+#: 종결되지 않은 상태. 재시작 복구(`find_open_all`)가 되살릴 집합이다(§4.2).
+_OPEN_STATUSES = frozenset(
+    {
+        EventStatus.CANDIDATE,
+        EventStatus.ACTIVE,
+        EventStatus.ALERTED,
+        EventStatus.RE_ALERTED,
+        EventStatus.LOST,
+    }
+)
 
 __all__ = [
     "DEFAULT_TAIL_S",
@@ -109,17 +151,40 @@ RATE_TOLERANCE = 1e-6
 
 
 class CaseStore:
-    """메모리 이벤트 저장소. `EventService` 가 요구하는 것만 구현한다."""
+    """메모리 이벤트 저장소. `EventService` 와 `ClipService` 가 요구하는 것만 구현한다.
+
+    **재시작을 흉내 낼 수 있어야 한다.** `clip_recovery` 시나리오가 서버를 내렸다
+    올리는데, 그때 살아남는 것은 이 저장소뿐이다 — 상태머신도 예약 큐도 새로 만들어진다.
+    실제 DB 가 하는 일이 정확히 그것이다.
+    """
 
     def __init__(self) -> None:
         self.events: dict[str, EventDetail] = {}
         self.false_positive: set[str] = set()
         self.notes: dict[str, str] = {}
+        self.clip_status: dict[str, str] = {}
+        """§6 `events.clip_status`. `EventDetail`(§4.1 응답)에 없는 컬럼이라 따로 든다."""
+        self.clip_paths: dict[str, str] = {}
+        self.keyframe_paths: dict[str, list[str]] = {}
         self._sequence = 0
 
     async def find_open_all(self) -> list[EventSummary]:
-        # 시나리오는 항상 빈 상태에서 시작한다. 재시작 복구는 여기서 볼 것이 없다.
-        return []
+        """종결되지 않은 이벤트 전량. **재시작 복구의 입력이다.**"""
+        return [
+            EventSummary.model_validate(event.model_dump(include=set(EventSummary.model_fields)))
+            for event in self.events.values()
+            if event.status in _OPEN_STATUSES
+        ]
+
+    async def find_due_clip_jobs(self, now: datetime, delay_s: float) -> list[str]:
+        """FN-REC-03 — 실행 시각이 지난 `pending` 예약. DB 질의와 같은 조건이다."""
+        return sorted(
+            event_id
+            for event_id, status in self.clip_status.items()
+            if status == "pending"
+            and (confirmed := self.events[event_id].confirmed_at) is not None
+            and confirmed + timedelta(seconds=delay_s) <= now
+        )
 
     async def next_event_id(self, at: datetime) -> str:
         self._sequence += 1
@@ -141,12 +206,19 @@ class CaseStore:
             # `EventDetail`(§4.1 응답)에는 이 필드가 없다. DB `events` 컬럼이므로
             # 저장소 쪽에서 기억하고 지표 집계에만 쓴다.
             self.false_positive.add(event_id)
-        note = patch.pop("note", None)
-        if note is not None:
-            # `note` 도 §4.1 응답에 없는 DB 컬럼이다(§6). 실제 저장소가 기억하는지를
-            # 여기서도 같은 방식으로 흉내 낸다.
+        if (note := patch.get("note")) is not None:
             self.notes[event_id] = note
-        for key in ("prev_track_ids", "reassoc_count", "lost_at", "expired_at", "last_alerted_at"):
+        if (status := patch.pop("clip_status", None)) is not None:
+            self.clip_status[event_id] = str(status)
+        if (clip_path := patch.pop("clip_path", None)) is not None:
+            self.clip_paths[event_id] = str(clip_path)
+            # 실제 저장소는 `clip_path` 를 `clip_url` 로 바꿔 내려준다(§5 경로 규약).
+            patch["clip_url"] = f"/media/clips/{PurePosixPath(str(clip_path)).name}"
+        if (keyframes := patch.pop("keyframe_paths", None)) is not None:
+            self.keyframe_paths[event_id] = list(keyframes)
+        # §6 컬럼이지만 §4.1 응답 모델에 자리가 없는 것들. `last_alerted_at` · `note` 는
+        # 명세서가 §4.1 에 추가하면서 여기서 빠져나갔다 — 이제 모델 필드다.
+        for key in ("prev_track_ids", "reassoc_count", "lost_at", "expired_at", "dropped_at"):
             patch.pop(key, None)
         self.events[event_id] = event.model_copy(update=patch)
 
@@ -167,6 +239,103 @@ class CaseStore:
         ]
 
 
+# --------------------------------------------------------------------------
+# 가짜 장치 (FN-ALM-01 · 02 · FN-REC-03)
+# --------------------------------------------------------------------------
+# **시나리오는 소리를 내지도 브로커에 붙지도 REC 을 부르지도 않는다.** 대신 "무엇을
+# 틀었고 무엇을 발행했고 무엇을 요청했는가"를 기록한다. 검증 대상은 장치가 아니라
+# **서버가 그것들을 부르기로 판단했는가**이기 때문이다.
+
+
+@dataclass(slots=True)
+class PlayedSound:
+    """재생된 음원 하나. 시각까지 잠가야 "확정과 같은 순간인가"를 볼 수 있다."""
+
+    at: datetime
+    filename: str
+
+
+class CasePlayer:
+    """`SoundPlayer` 대역. `clock` 을 들고 있어 재생 시각을 남긴다."""
+
+    name = "case"
+
+    def __init__(self, clock: FakeClock) -> None:
+        self._clock = clock
+        self.played: list[PlayedSound] = []
+
+    def play(self, path: Path) -> None:
+        self.played.append(PlayedSound(at=self._clock.now(), filename=path.name))
+
+
+class CaseMqtt:
+    """`MqttSender` 대역. 발행된 §3 `AlertCommand` 를 시각과 함께 기억한다."""
+
+    def __init__(self, clock: FakeClock) -> None:
+        self._clock = clock
+        self.published: list[tuple[datetime, AlertCommand]] = []
+
+    async def publish_alert(self, command: AlertCommand) -> None:
+        self.published.append((self._clock.now(), command))
+
+
+class CaseSounds:
+    """`SoundReader` 대역 — `alert_sounds` 테이블 대신 기본 매핑 하나."""
+
+    async def load_sounds(self) -> dict[str, str]:
+        return dict(DEFAULT_SOUNDS)
+
+
+class CaseRec:
+    """`ClipExtractor` 대역 (§4.7).
+
+    `status` 를 바꾸면 `partial` · `not_found` 를 흉내 낼 수 있고, `available=False` 면
+    REC 이 죽은 상황이 된다 — 그때 잡은 `failed` 가 아니라 `pending` 으로 남아야 한다.
+    """
+
+    def __init__(
+        self,
+        *,
+        status: ClipExtractStatus = "ready",
+        available: bool = True,
+        reason: str | None = None,
+    ) -> None:
+        self.status = status
+        self.available = available
+        self.reason = reason
+        self.keyframes: list[tuple[int, datetime]] = []
+        self.clips: list[ClipRequest] = []
+
+    async def keyframe(self, cam_id: int, at: datetime) -> bytes:
+        if not self.available:
+            msg = "REC 에 닿지 못했다 (시나리오)"
+            raise RecUnavailableError(msg)
+        self.keyframes.append((cam_id, at))
+        return b"\xff\xd8\xff\xd9"  # 최소 JPEG (SOI + EOI)
+
+    async def create_clip(self, request: ClipRequest) -> ClipResponse:
+        if not self.available:
+            msg = "REC 에 닿지 못했다 (시나리오)"
+            raise RecUnavailableError(msg)
+        self.clips.append(request)
+        if self.status != "ready":
+            return ClipResponse(
+                status=self.status,
+                reason=self.reason or f"{self.status} (시나리오)",
+            )
+        return ClipResponse(
+            status="ready",
+            size_bytes=4,
+            download_url=f"/clips/{request.event_id}.mp4",
+            actual_from=request.from_,
+            actual_to=request.to,
+        )
+
+    async def download(self, url: str) -> bytes:
+        del url
+        return b"mp4."
+
+
 @dataclass(frozen=True, slots=True)
 class CaseResult:
     """시나리오 한 편을 끝까지 돌린 결과."""
@@ -177,6 +346,13 @@ class CaseResult:
     published: list[SpecModel]
     start: datetime
     machine: EventMachine = field(repr=False)
+    played: list[PlayedSound] = field(default_factory=list)
+    """FN-ALM-01 — 실제로 튼 wav 들."""
+    alerts: list[tuple[datetime, AlertCommand]] = field(default_factory=list)
+    """FN-ALM-02 — `aegis/alert` 로 나간 것들."""
+    clip_status: dict[str, str] = field(default_factory=dict)
+    """FN-REC-03 — 이벤트별 `clip_status` 최종값."""
+    restarts: int = 0
 
     def offset_s(self, at: datetime | None) -> float | None:
         return None if at is None else (at - self.start).total_seconds()
@@ -201,6 +377,52 @@ def _spec(case: str) -> dict[str, Any]:
     return raw
 
 
+def _build(
+    store: CaseStore,
+    clock: FakeClock,
+    publish: Publisher,
+    player: CasePlayer,
+    mqtt: CaseMqtt,
+    rec: CaseRec,
+    media_root: Path,
+) -> tuple[EventService, ClipService, EventMachine, AlertService]:
+    """서버 한 벌을 조립한다. **재시작은 이 함수를 다시 부르는 것이다.**
+
+    저장소(`store`)와 장치들만 살아남고 상태머신·예약 큐는 새로 만들어진다 — 실제
+    프로세스 재시작에서 남는 것이 정확히 DB 뿐이기 때문이다.
+
+    DB 를 띄우지 않으므로 계약 기본값(`Policies()`)을 쓴다. 그 값이 곧
+    `scripts/seed_policies.py` 가 DB 에 넣는 값이라 실서버와 같은 임계값으로 판정된다.
+    """
+    alerts = AlertService(
+        library=SoundLibrary(AUDIO_DIR, CaseSounds()),
+        player=player,
+        clock=clock,
+        mcu=McuRuntime(),
+        mqtt=mqtt,
+        publish=publish,
+    )
+    clips = ClipService(
+        rec=rec,
+        store=store,
+        clock=clock,
+        media_root=media_root,
+        publish=publish,
+    )
+    machine = EventMachine(clock=clock, policies=Policies())
+    service = EventService(
+        machine=machine,
+        tracks=LiveTracks(),
+        publish=publish,
+        clock=clock,
+        store=store,
+        policies=None,
+        alerts=alerts,
+        clips=clips,
+    )
+    return service, clips, machine, alerts
+
+
 async def run_case(case: str) -> CaseResult:
     """시나리오를 상태머신에 태우고 결과를 돌려준다."""
     raw = _spec(case)
@@ -217,39 +439,74 @@ async def run_case(case: str) -> CaseResult:
     async def publish(message: SpecModel) -> None:
         published.append(message)
 
-    # DB 를 띄우지 않으므로 계약 기본값을 쓴다. 그 값이 곧 `scripts/seed_policies.py`
-    # 가 DB 에 넣는 값이므로 실서버와 같은 임계값으로 판정된다(절대규칙 6).
-    machine = EventMachine(clock=clock, policies=Policies())
-    service = EventService(
-        machine=machine,
-        tracks=LiveTracks(),
-        publish=publish,
-        clock=clock,
-        store=store,
-        policies=None,
+    player = CasePlayer(clock)
+    mqtt = CaseMqtt(clock)
+    rec = CaseRec(
+        status=str((raw.get("rec") or {}).get("status", "ready")),  # type: ignore[arg-type]
+        available=bool((raw.get("rec") or {}).get("available", True)),
     )
 
     manual = list(raw.get("manual") or [])
-    last_at = max((item.at_s for item in timeline), default=0.0)
-    manual_end = max((float(item.get("at", 0.0)) for item in manual), default=0.0)
-    end_s = max(last_at, manual_end) + tail_s
+    mutes = list(raw.get("mute") or [])
+    restarts = [float(value) for value in (raw.get("restart_at") or [])]
 
-    for at_s in _grid(timeline, manual, end_s):
-        clock.set(start + timedelta(seconds=at_s))
-        for item in _due(timeline, at_s):
-            await _dispatch(service, item)
-        for entry in _due_manual(manual, at_s):
-            await _apply_manual(service, store, entry)
-        await service.tick()
+    with tempfile.TemporaryDirectory(prefix="aegis-case-") as tmp:
+        media_root = Path(tmp)
+        service, clips, machine, alerts = _build(
+            store, clock, publish, player, mqtt, rec, media_root
+        )
+        # 음원 매핑을 읽는다(서버의 `AlertService.start`). 이것 없이 확정이 나면
+        # "등록된 음원이 없다"로 방송이 실패한다 — 실서버에서도 같은 순서다.
+        await alerts.start()
+        await service.start()
 
-    return CaseResult(
-        name=str(raw.get("name", case)),
-        events=sorted(store.events.values(), key=lambda event: event.event_id),
-        metrics=await service.summary(),
-        published=published,
-        start=start,
-        machine=machine,
-    )
+        last_at = max((item.at_s for item in timeline), default=0.0)
+        scripted = [*manual, *mutes]
+        scripted_end = max((float(item.get("at", 0.0)) for item in scripted), default=0.0)
+        end_s = (
+            max(last_at, scripted_end, *restarts) + tail_s
+            if restarts
+            else (max(last_at, scripted_end) + tail_s)
+        )
+
+        done: list[float] = []
+        for at_s in _grid(timeline, scripted, end_s, restarts):
+            clock.set(start + timedelta(seconds=at_s))
+            for moment in restarts:
+                if abs(moment - at_s) < 1e-9 and moment not in done:
+                    # ★ 서버를 내렸다 올린다. 남는 것은 저장소뿐이다.
+                    done.append(moment)
+                    service, clips, machine, alerts = _build(
+                        store, clock, publish, player, mqtt, rec, media_root
+                    )
+                    await alerts.start()
+                    await service.start()
+            for item in _due(timeline, at_s):
+                await _dispatch(service, item)
+            for entry in _due_manual(manual, at_s):
+                await _apply_manual(service, store, entry)
+            for entry in _due_manual(mutes, at_s):
+                await _apply_mute(alerts, entry)
+            await service.tick()
+            # 서버의 클립 루프(`_run_clips`)와 같은 일을 한다 — 실행 시각이 지난
+            # 예약을 집어 든다. 재시작 뒤에도 같은 조회가 그대로 돌아 복구가 된다.
+            await clips.run_due()
+            # 뒤로 넘긴 키프레임 추출을 이 격자 안에서 마무리시킨다. 실서버에서는
+            # 그대로 두지만, 시나리오는 결과가 격자마다 확정되어야 재현된다.
+            await clips.wait_idle()
+
+        return CaseResult(
+            name=str(raw.get("name", case)),
+            events=sorted(store.events.values(), key=lambda event: event.event_id),
+            metrics=await service.summary(),
+            published=published,
+            start=start,
+            machine=machine,
+            played=player.played,
+            alerts=mqtt.published,
+            clip_status=dict(store.clip_status),
+            restarts=len(done),
+        )
 
 
 def check_case(case: str, result: CaseResult) -> list[str]:
@@ -258,6 +515,12 @@ def check_case(case: str, result: CaseResult) -> list[str]:
     problems: list[str] = []
     problems += _check_events(expect.get("events") or [], result)
     problems += _check_metrics(expect.get("metrics") or {}, result.metrics)
+    if "alerts" in expect:
+        problems += _check_alerts(expect.get("alerts") or [], result)
+    if "restarts" in expect and result.restarts != expect["restarts"]:
+        # 재시작이 실제로 일어났는지 잠근다. `restart_at` 오타 하나로 이 시나리오가
+        # 평범한 시나리오가 되어 조용히 통과하는 것을 막는다.
+        problems.append(f"재시작 횟수: 기대 {expect['restarts']} · 실제 {result.restarts}")
     return problems
 
 
@@ -268,12 +531,14 @@ def check_case(case: str, result: CaseResult) -> list[str]:
 
 def _grid(
     timeline: Sequence[ScheduledMessage],
-    manual: Sequence[Mapping[str, Any]],
+    scripted: Sequence[Mapping[str, Any]],
     end_s: float,
+    restarts: Sequence[float] = (),
 ) -> Iterator[float]:
     """메시지 시각과 틱 격자를 시각 순으로 합친다."""
     moments = {round(item.at_s, 6) for item in timeline}
-    moments |= {round(float(entry.get("at", 0.0)), 6) for entry in manual}
+    moments |= {round(float(entry.get("at", 0.0)), 6) for entry in scripted}
+    moments |= {round(float(value), 6) for value in restarts}
     step = 0
     while step * TICK_S <= end_s:
         moments.add(round(step * TICK_S, 6))
@@ -321,6 +586,20 @@ async def _apply_manual(
     del store  # 오탐 표시는 저장소가 `update` 에서 받아 기억한다.
     request = EventPatchRequest.model_validate(dict(entry.get("patch") or {}))
     await service.patch(target.event_id, request)
+
+
+async def _apply_mute(alerts: AlertService | None, entry: Mapping[str, Any]) -> None:
+    """FN-ALM-05 — 관리자가 `POST /alerts/mute` 를 누른 것을 그대로 흉내 낸다."""
+    if alerts is None:
+        msg = "경고 집행자가 없어 일시중지를 적용할 수 없다"
+        raise ValueError(msg)
+    await alerts.mute(
+        MuteAlertRequest(
+            cam_id=int(entry.get("cam_id", 1)),
+            minutes=int(entry.get("minutes", 0)),
+            reason=str(entry.get("reason", "")),
+        )
+    )
 
 
 def _matches(event: EventDetail, key: str, value: Any) -> bool:
@@ -371,6 +650,15 @@ def _check_event(want: Mapping[str, Any], got: EventDetail, result: CaseResult) 
         if key in want and getattr(got, key) != want[key]:
             problems.append(f"{label} {key}: 기대 {want[key]} · 실제 {getattr(got, key)}")
 
+    if "clip_status" in want:
+        # FN-REC-03 — `pending → ready` 로 갔는지. `null` 은 "예약조차 걸리지 않았다"이며,
+        # 확정된 적이 없는 이벤트(`dropped`)에서는 그것이 정답이다.
+        stored = result.clip_status.get(got.event_id)
+        if stored != want["clip_status"]:
+            problems.append(
+                f"{label} clip_status: 기대 {_shown(want['clip_status'])} · 실제 {_shown(stored)}"
+            )
+
     if "resolution_sec" in want:
         actual = got.resolution_sec
         wanted = want["resolution_sec"]
@@ -393,6 +681,51 @@ def _check_event(want: Mapping[str, Any], got: EventDetail, result: CaseResult) 
                 f"{label} {field_name}: 기대 +{wanted_s:.2f}s±{TIME_TOLERANCE_S} · "
                 f"실제 {'없음' if actual_s is None else f'+{actual_s:.2f}s'}"
             )
+    return problems
+
+
+def _check_alerts(expected: list[Any], result: CaseResult) -> list[str]:
+    """FN-ALM-01 · 02 — 경고가 **실제로 나갔는가**를 잠근다.
+
+    두 경로를 한 표에서 함께 본다. `alerted` 로 전이했다는 기록만으로는 소리가 났는지
+    경광등이 켜졌는지 알 수 없고, 그 둘이 이 마일스톤이 추가한 전부다.
+
+    `expect.alerts` 는 **전량 목록**이다. 기대보다 많이 나갔으면 실패다 — 중복 경고는
+    누락만큼이나 현장에서 문제가 된다(FN-EVT-04 쿨다운이 막아야 하는 것이다).
+    """
+    problems: list[str] = []
+    fired = result.alerts
+    if len(fired) != len(expected):
+        problems.append(
+            f"경고 발행 건수: 기대 {len(expected)} · 실제 {len(fired)} "
+            f"({[command.event_id for _, command in fired]})"
+        )
+    for index, want in enumerate(expected):
+        if index >= len(fired):
+            break
+        at, command = fired[index]
+        label = f"경고[{index}]"
+        for key in ("violation_type", "level", "repeat", "zone_id"):
+            if key not in want:
+                continue
+            actual = command.type.value if key == "violation_type" else getattr(command, key)
+            if actual != want[key]:
+                problems.append(f"{label} {key}: 기대 {want[key]} · 실제 {actual}")
+        if "at_s" in want:
+            actual_s = result.offset_s(at)
+            wanted_s = float(want["at_s"])
+            if actual_s is None or abs(actual_s - wanted_s) > TIME_TOLERANCE_S:
+                problems.append(
+                    f"{label} 시각: 기대 +{wanted_s:.2f}s±{TIME_TOLERANCE_S} · 실제 {actual_s}"
+                )
+        if "sound" in want:
+            played = result.played[index].filename if index < len(result.played) else None
+            if played != want["sound"]:
+                problems.append(f"{label} 음원: 기대 {want['sound']} · 실제 {played}")
+    # 방송과 경광등은 서로 독립이지만(한쪽 실패가 다른 쪽을 막지 않는다), 정상 경로에서는
+    # 같은 횟수여야 한다. 어긋나면 한쪽 경로가 조용히 죽은 것이다.
+    if not any("일시중지" in problem for problem in problems) and len(result.played) != len(fired):
+        problems.append(f"방송 {len(result.played)}건 · 경광등 {len(fired)}건 — 두 경로가 어긋났다")
     return problems
 
 

@@ -111,6 +111,10 @@ expect:
       status: dropped
       # 확정에 닿은 적이 없으므로 경고도 없다.
       alert_count: 0
+      # ★ 클립 예약도 걸리지 않는다. 확정 시각이 없으니 뽑을 구간도 없다.
+      clip_status: null
+  # 방송도 경광등도 나가지 않는다.
+  alerts: []
   metrics:
     # ★ 셋 다 0 이므로 분모가 0 이고, 두 비율은 null 이다.
     correction_rate: null

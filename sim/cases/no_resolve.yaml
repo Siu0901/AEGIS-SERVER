@@ -91,6 +91,20 @@ expect:
       status: re_alerted
       alert_count: 2
       alerted_at_s: 3.5
+      clip_status: ready
+  alerts:
+    # ★ 재경고는 `repeat: true` 로 나간다 — ESP32 가 점멸 패턴을 달리해 상습 상황을
+    #   구분한다(§3). 쿨다운(30초)이 없으면 이 목록이 훨씬 길어진다.
+    - at_s: 3.5
+      violation_type: no_helmet
+      level: 2
+      repeat: false
+      sound: no_helmet.wav
+    - at_s: 33.5
+      violation_type: no_helmet
+      level: 2
+      repeat: true
+      sound: no_helmet.wav
   metrics:
     correction_rate: 0.0
     undetermined_rate: 0.0

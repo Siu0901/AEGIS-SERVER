@@ -1,15 +1,24 @@
-# normal_resolve — 확정 → 경고 → 안전모 착용 → 시정 완료
+# clip_recovery — pending 상태에서 서버를 재시작해도 클립 잡이 살아남는다
 #
-# 서버가 이렇게 판정하기를 기대한다:
-#   +3.5s   확정·경고   · confirm_duration_s = 3 (후보 +0.5s 부터 관측 3초)
-#   +6.0s   위반 소멸 관측 시작 (helmet: on)
-#   +16.0s  해소(resolved) · resolve_duration_s = 10
+# FN-REC-03 (기능명세서 §4.4) — "서버 재시작 시 `pending` 상태 잡은 DB에서 복구해
+# 재실행한다".
 #
-# 시뮬레이터는 위 판정을 하지 않는다. 관측된 사실만 올린다(엣지는 판단하지 않는다).
-# `ts` 는 적지 않는다 — 시작 시각 + `at` 으로 주입된다.
+# 이 시나리오가 잠그는 것: **예약이 메모리에 있으면 안 된다.**
+#
+#   +3.5s   확정 → 키프레임 즉시 · clip_status = pending · 예약 등록
+#           예약 실행 시각 = confirmed_at + clip_post_roll_s(10) + margin(2) = +15.5s
+#   +8.0s   ★ 서버를 내렸다 올린다. 상태머신도 예약 큐도 새로 만들어지고,
+#           남는 것은 저장소(DB)뿐이다.
+#   +15.5s  새로 뜬 서버가 DB 에서 pending 잡을 집어 실행 → ready
+#
+# 메모리 타이머로 예약했다면 재시작 순간 잡이 사라지고 clip_status 가 영원히
+# pending 으로 남는다. 그 이벤트는 증거 영상 없이 시정률에만 계상된다.
+#
+# 재시작 뒤 해소 타이머는 0부터 다시 찬다(FN-EVT-02 복구 규칙). 그래서 이 시나리오의
+# 이벤트는 resolved 까지 가지 않고 alerted 로 남는다 — 그것이 정확한 동작이다.
 
-name: normal_resolve
-description: 안전모 미착용이 확정·경고 후 착용으로 시정된 기본 경로
+name: clip_recovery
+description: 확정 후 재시작해도 예약된 클립 추출이 복구되어 ready 로 끝나는지
 cam_id: 1
 frame_fps: 8
 
@@ -89,31 +98,34 @@ timeline:
         in_zone: forklift_lane
 
 expect:
+  # 예약 실행 시각(+15.5s)은 마지막 프레임(+17.0s) 안쪽이라 tail 을 늘릴 필요가 없다.
+  # 늘리면 관측이 끊긴 뒤 트랙이 `lost` 로 가서 이 시나리오가 보려는 것이 흐려진다.
+  restarts: 1
   events:
     - track_id: 3
       violation_type: no_helmet
-      status: resolved
-      zone_id: forklift_lane
+      # 재시작 복구는 타이머를 0부터 다시 채운다. 마지막 프레임(+17.0s)까지
+      # 위반 소멸이 10초를 채우지 못하므로 해소되지 않는다 — 의도한 결과다.
+      status: alerted
       alert_count: 1
-      confirmed_at_s: 3.5
       alerted_at_s: 3.5
-      resolved_at_s: 16.0
-      resolution_sec: 12
-      # FN-REC-03 — 확정 +12초(사후 10 + 여유 2)에 예약이 실행되고 ready 로 간다.
+      # ★ 이것이 이 시나리오의 전부다. 재시작을 넘어 pending → ready 로 갔는가.
       clip_status: ready
   alerts:
-    # FN-ALM-01·02 — 확정과 같은 순간에 방송과 경광등이 나간다. 1건뿐이다.
     - at_s: 3.5
       violation_type: no_helmet
       level: 2
       repeat: false
       sound: no_helmet.wav
   metrics:
-    correction_rate: 1.0
+    correction_rate: 0.0
     undetermined_rate: 0.0
     total_violations: 1
-    resolved: 1
+    resolved: 0
     resolved_late: 0
-    unresolved: 0
+    unresolved: 1
     undetermined: 0
     fall_events: 0
+
+# ★ 확정(+3.5s)과 예약 실행(+15.5s) 사이. 잡이 아직 pending 인 시점이다.
+restart_at: [8.0]

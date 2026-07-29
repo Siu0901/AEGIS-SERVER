@@ -158,6 +158,19 @@ expect:
       alert_count: 1
       alerted_at_s: 3.5
       resolved_at_s: 16.0
+  alerts:
+    # ★ `fall` 은 항상 level 3(긴급 · 연속 부저)이다(§3). 안전모는 2 다.
+    #   두 이벤트가 같은 순간에 확정되므로 순서는 트랙 번호 순이다.
+    - at_s: 3.5
+      violation_type: fall
+      level: 3
+      repeat: false
+      sound: fall.wav
+    - at_s: 3.5
+      violation_type: no_helmet
+      level: 2
+      repeat: false
+      sound: no_helmet.wav
   metrics:
     # 쓰러짐이 분모에 섞였다면 0.5 가 나왔을 자리다.
     correction_rate: 1.0

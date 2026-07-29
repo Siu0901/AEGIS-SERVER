@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import pytest
 
@@ -18,7 +19,9 @@ from sim.case_check import cases_with_expectations, check_case, run_case
 
 CASES = cases_with_expectations()
 
-#: M3 에서 만든 시나리오 9종. 이름이 바뀌거나 사라지면 여기서 드러난다.
+#: 시나리오 11종. 이름이 바뀌거나 사라지면 여기서 드러난다.
+#:
+#: 앞의 아홉은 M3(상태머신·지표), 뒤의 둘은 M4(경고·클립)에서 추가됐다.
 REQUIRED = {
     "normal_resolve",
     "no_resolve",
@@ -29,7 +32,23 @@ REQUIRED = {
     "fall_excluded",
     "false_positive",
     "dropped",
+    "clip_recovery",
+    "alert_muted",
 }
+
+
+def _transitions(published: list[Any]) -> list[EventUpdatedMsg]:
+    """상태 **전이** 메시지만 고른다.
+
+    §5.2 는 클립 준비 완료도 `event_updated` 로 알린다(`clip_status` · `clip_url`).
+    그 메시지의 `status` 는 그때의 상태를 그대로 실어 나를 뿐 전이가 아니므로,
+    전이 사슬을 볼 때는 빼야 한다 — 섞으면 같은 상태가 두 번 나온 것처럼 보인다.
+    """
+    return [
+        message
+        for message in published
+        if isinstance(message, EventUpdatedMsg) and message.clip_status is None
+    ]
 
 
 def test_every_required_scenario_exists() -> None:
@@ -52,7 +71,7 @@ def test_dashboard_sees_the_whole_transition_chain() -> None:
     """
     result = asyncio.run(run_case("normal_resolve"))
     created = [m for m in result.published if isinstance(m, EventCreatedMsg)]
-    updated = [m for m in result.published if isinstance(m, EventUpdatedMsg)]
+    updated = _transitions(result.published)
 
     assert len(created) == 1
     assert created[0].status is EventStatus.ALERTED
@@ -72,7 +91,7 @@ def test_dashboard_sees_the_whole_transition_chain() -> None:
 def test_expired_is_broadcast_as_undetermined_not_as_a_failure_to_correct() -> None:
     """재결합 실패는 미시정이 아니라 판정 불가다. 지표 메시지에도 그렇게 나가야 한다."""
     result = asyncio.run(run_case("reassoc_fail"))
-    updated = [m for m in result.published if isinstance(m, EventUpdatedMsg)]
+    updated = _transitions(result.published)
     assert [m.status for m in updated] == [EventStatus.LOST, EventStatus.EXPIRED]
 
     metrics = [m for m in result.published if isinstance(m, MetricMsg)]
@@ -90,7 +109,7 @@ def test_dropped_leaves_a_record_and_touches_neither_rate() -> None:
     result = asyncio.run(run_case("dropped"))
     assert [event.status for event in result.events] == [EventStatus.DROPPED]
 
-    updated = [m for m in result.published if isinstance(m, EventUpdatedMsg)]
+    updated = _transitions(result.published)
     assert [m.status for m in updated] == [EventStatus.DROPPED]
     # 확정에 닿은 적이 없으므로 `event_created` 도 경고도 없다.
     assert not [m for m in result.published if isinstance(m, EventCreatedMsg)]
