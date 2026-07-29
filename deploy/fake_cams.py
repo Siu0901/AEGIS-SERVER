@@ -51,7 +51,7 @@ from pathlib import Path
 from types import FrameType
 from typing import NamedTuple
 
-from deploy.marker_path import drawbox_filter
+from deploy.marker_path import overlay_filter, source_input
 
 ROOT = Path(__file__).resolve().parent.parent
 PIDFILE_DIR = ROOT / "media" / "run"
@@ -171,7 +171,7 @@ def drawtext_font() -> str:
     )
 
 
-def timecode_filter(stream: Stream, font: str, *, marker: bool = False) -> str:
+def timecode_chain(stream: Stream, font: str) -> str:
     """벽시계 타임코드를 밀리초까지 소성하는 필터 체인.
 
     지연 측정이 성립하려면 화면에 찍힌 시각이 **프레임이 만들어진 실제 벽시계 시각**
@@ -203,18 +203,21 @@ def timecode_filter(stream: Stream, font: str, *, marker: bool = False) -> str:
     ms = r"%{eif\:trunc(mod(t\,1)*1000)\:d\:3}"
     text = rf"{stream.label} {hh}\:{mm}\:{ss}.{ms} UTC"
     fontsize = 32 if stream.kind == "sub" else 56
-    # marker 사각형도 **에포크 pts 구간 안에서** 그려야 시뮬레이터와 위상이 맞는다
-    # (`deploy/marker_path.py` 참조). 마지막 `setpts` 뒤로 밀면 t 가 0부터 다시 세어진다.
-    marker_filter = f",{drawbox_filter()}" if marker else ""
+    # **마지막 `setpts=PTS-STARTPTS` 는 여기 없다.** marker 를 얹을 때 그 사이에
+    # 끼워 넣어야 하기 때문이다 — 되돌린 뒤에 얹으면 `t` 가 0부터 다시 세어져
+    # 시뮬레이터의 에포크 기준과 위상이 어긋난다. 호출자가 마무리한다.
     return (
         "realtime,"
         "setpts=RTCTIME/(TB*1000000),"
         f"drawtext=fontfile={font}:text='{text}'"
         f":fontcolor=white:fontsize={fontsize}:box=1:boxcolor=black@0.6:boxborderw=8"
         ":x=24:y=24"
-        f"{marker_filter},"
-        "setpts=PTS-STARTPTS"
     )
+
+
+def timecode_filter(stream: Stream, font: str) -> str:
+    """marker 없이 쓰는 완성된 `-vf` 체인."""
+    return f"{timecode_chain(stream, font)},setpts=PTS-STARTPTS"
 
 
 def input_args(source: str | None) -> list[str]:
@@ -239,13 +242,27 @@ def ffmpeg_argv(
     # 용량이 §4.4 산정(2채널 2.2GB/시간)에서 벗어난다.
     maxrate = stream.bitrate
     bufsize = f"{int(stream.bitrate.rstrip('k')) * 2}k"
+    width, height = require_16_9(stream.label, stream.size)
+    # marker 를 얹으려면 입력이 둘이라 `-vf` 로는 표현할 수 없다. **`overlay` 는 에포크
+    # pts 구간 안에**, 즉 타임코드 뒤 · `setpts=PTS-STARTPTS` 앞에 들어가야 한다.
+    if marker:
+        graph = (
+            f"[0:v]scale={stream.size},fps={FPS},{timecode_chain(stream, font)}[bg];"
+            f"[bg][1:v]{overlay_filter()}[mk];"
+            f"[mk]setpts=PTS-STARTPTS[out]"
+        )
+        video_args = ["-filter_complex", graph, "-map", "[out]"]
+    else:
+        video_args = ["-vf", f"scale={stream.size},fps={FPS},{timecode_filter(stream, font)}"]
+
     return [
         ffmpeg,
         "-hide_banner",
         "-loglevel", "warning",
         "-nostdin",
         *input_args(source),
-        "-vf", f"scale={stream.size},fps={FPS},{timecode_filter(stream, font, marker=marker)}",
+        *(source_input(width, height) if marker else []),
+        *video_args,
         "-an",
         "-c:v", "libx264",
         "-preset", "veryfast",

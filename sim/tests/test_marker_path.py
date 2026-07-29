@@ -15,7 +15,17 @@ import re
 
 import pytest
 
-from deploy.marker_path import BOX_H, BOX_W, drawbox_filter, escape, expr_x, expr_y, position
+from deploy.marker_path import (
+    BOX_H,
+    BOX_W,
+    box_size_px,
+    escape,
+    expr_x,
+    expr_y,
+    overlay_filter,
+    position,
+    source_input,
+)
 from sim.edge_sim import marker
 
 #: 한 주기를 촘촘히 훑는 표본. 삼각파의 꺾이는 지점(4초·6.5초)이 포함되도록 잡았다.
@@ -51,20 +61,46 @@ def test_commas_are_escaped_for_the_filter_graph() -> None:
     `No option name near '((0.58+...'` 로 죽는다(ffmpeg 8.1 확인).
     """
     assert escape("mod(t,8.0)") == r"mod(t\,8.0)"
-    filter_string = drawbox_filter()
+    filter_string = overlay_filter()
     # 옵션 구분자로 남아야 할 `,` 는 없다 — 표현식 안의 쉼표는 전부 이스케이프된다.
     assert "," not in filter_string.replace(r"\,", "")
 
 
-def test_frame_size_is_referenced_as_iw_ih() -> None:
-    """`drawbox` 안에서 `w`·`h` 는 **박스** 크기다.
+def test_overlay_is_evaluated_per_frame() -> None:
+    """**`drawbox` 를 쓰지 않는 이유가 여기 있다.**
 
-    그것으로 정규화 좌표를 곱하면 순환 참조가 되어 표현식 평가가 실패한다.
-    프레임 크기는 `iw`·`ih` 로 참조해야 한다.
+    ffmpeg 8.1.2 의 `drawbox` 는 `x`·`y` 표현식을 초기화 때 한 번만 계산하고(그 빌드에는
+    `eval` 옵션조차 없다) 그 값을 계속 쓴다. 사각형이 시각과 무관한 자리에 붙박여
+    있는데 화면에는 멀쩡히 보이므로, 정합을 재려던 도구가 가짜 측정값을 내놓는다.
+    `overlay` 는 `eval` 기본값이 `frame` 이지만 명시해 의도를 남긴다.
     """
-    filter_string = drawbox_filter()
-    assert "*iw" in filter_string and "*ih" in filter_string
-    assert "*w:" not in filter_string and "*h:" not in filter_string
+    assert "eval=frame" in overlay_filter()
+
+
+def test_overlay_uses_background_size_not_box_size() -> None:
+    """`overlay` 에서 `W`·`H` 는 배경, `w`·`h` 는 얹을 사각형이다.
+
+    둘을 바꾸면 사각형 크기에 비례한 엉뚱한 자리에 붙는다.
+    """
+    filter_string = overlay_filter()
+    assert "*W-w/2" in filter_string
+    assert "*H-h/2" in filter_string
+
+
+def test_marker_source_is_a_single_finite_frame() -> None:
+    """무한 소스를 주면 필터 그래프가 막혀 송출이 시작되지 않는다.
+
+    ffmpeg 프로세스는 살아 있는데 mediamtx 경로가 계속 `ready=false` 로 남는다 —
+    실측으로 밟은 함정이다. `overlay` 의 `repeatlast`(기본 1)가 한 장을 재사용한다.
+    """
+    argv = source_input(640, 360)
+    assert argv[-1].endswith(":d=1:r=1")
+    assert "shortest" not in overlay_filter()
+
+
+def test_box_size_matches_the_normalised_size() -> None:
+    assert box_size_px(1920, 1080) == (round(BOX_W * 1920), round(BOX_H * 1080))
+    assert box_size_px(640, 360) == (round(BOX_W * 640), round(BOX_H * 360))
 
 
 def test_trajectory_is_deterministic() -> None:

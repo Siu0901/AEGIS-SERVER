@@ -1,7 +1,7 @@
 """marker 궤적 — **영상과 좌표가 공유하는 유일한 정의.**
 
 오버레이 정합(±100ms · FN-UI-02)을 눈이 아니라 화면으로 확인하기 위한 장치다.
-`deploy/fake_cams.py --marker` 가 영상에 사각형을 태우고, `sim/edge_sim/marker.py`
+`deploy/fake_cams.py --marker` 가 영상에 사각형을 얹고, `sim/edge_sim/marker.py`
 가 **같은 수식으로** person 좌표를 만들어 `/ws/edge` 로 보낸다. 화면에서 오버레이
 박스가 영상 속 사각형과 겹치면 정합이 맞는 것이고, 어긋난 거리가 곧 오차다.
 
@@ -31,11 +31,13 @@ __all__ = [
     "X_SWING",
     "Y_CENTER",
     "Y_SWING",
-    "drawbox_filter",
+    "box_size_px",
     "escape",
     "expr_x",
     "expr_y",
+    "overlay_filter",
     "position",
+    "source_input",
 ]
 
 #: 가로 왕복 주기(초). 짧을수록 시간 오차가 위치 오차로 크게 드러난다.
@@ -99,20 +101,42 @@ def escape(expression: str) -> str:
     return expression.replace(",", r"\,")
 
 
-def drawbox_filter() -> str:
-    """`drawbox` 필터 한 조각.
+def box_size_px(width: int, height: int) -> tuple[int, int]:
+    """이 해상도에서 사각형의 픽셀 크기. overlay 입력 소스를 만들 때 쓴다."""
+    return max(2, round(BOX_W * width)), max(2, round(BOX_H * height))
 
-    프레임 크기는 **`iw`·`ih`** 로 참조한다. `drawbox` 안에서 `w`·`h` 는 지금 계산 중인
-    **박스**의 크기라, 그것으로 정규화 좌표를 곱하면 순환 참조가 되어
-    `Error when evaluating the expression` 으로 죽는다(ffmpeg 8.1 확인).
 
-    해상도를 인자로 받지 않는 이유: 메인(1920×1080)과 서브(640×360)에 같은 문자열을
-    그대로 쓸 수 있고, 정규화 좌표가 두 해상도에서 같은 위치를 가리킨다는 사실이
-    필터 자체로 보장된다.
+def overlay_filter() -> str:
+    """사각형을 궤적 위치에 얹는 `overlay` 필터 한 조각.
 
-    **`setpts=RTCTIME/...` 뒤에 놓아야 한다.** 그 앞에 두면 `t` 가 스트림 시작
-    기준이라 시뮬레이터의 에포크 기준과 위상이 어긋난다.
+    **`drawbox` 를 쓰지 않는다.** ffmpeg 8.1.2 의 `drawbox` 는 `x`·`y` 표현식을 필터
+    초기화 때 한 번만 계산하고(그 빌드에는 `eval` 옵션조차 없다) 그 값을 계속 쓴다.
+    화면에는 사각형이 멀쩡히 보이는데 **시각과 무관한 자리에 붙박여 있어서**, 정합을
+    재려던 도구가 오히려 "0.26 만큼 어긋났다"는 가짜 측정값을 내놓는다.
+    6초에 걸친 6프레임이 픽셀까지 동일한 것으로 확인했다.
+
+    `overlay` 는 `eval` 기본값이 `frame` 이라 매 프레임 다시 계산한다.
+
+    `W`·`H` 는 배경 크기, `w`·`h` 는 얹을 사각형 크기다. 중심 좌표에서 절반을 빼
+    좌상단을 구한다.
+
+    **`setpts=RTCTIME/...` 뒤, `setpts=PTS-STARTPTS` 앞에 놓아야 한다.** 그 밖에 두면
+    `t` 가 스트림 시작 기준이라 시뮬레이터의 에포크 기준과 위상이 어긋난다.
     """
-    x = escape(f"({expr_x()}-{BOX_W}/2)*iw")
-    y = escape(f"({expr_y()}-{BOX_H}/2)*ih")
-    return f"drawbox=x={x}:y={y}:w={BOX_W}*iw:h={BOX_H}*ih:color=magenta@0.9:t=6"
+    x = escape(f"{expr_x()}*W-w/2")
+    y = escape(f"{expr_y()}*H-h/2")
+    # `repeatlast`(기본 1)로 사각형 입력의 마지막 프레임을 계속 재사용한다.
+    # `shortest` 를 켜면 1프레임짜리 입력이 끝나는 순간 송출이 멈춘다.
+    return f"overlay=eval=frame:x={x}:y={y}"
+
+
+def source_input(width: int, height: int) -> list[str]:
+    """overlay 로 얹을 자홍색 사각형 입력. `ffmpeg` 인자 조각이다.
+
+    **프레임 하나짜리 유한 입력**이다. 무한 소스를 주면 그쪽이 실시간 제약 없이
+    최대 속도로 프레임을 뽑아 필터 그래프가 막히고, ffmpeg 프로세스는 살아 있는데
+    송출이 시작되지 않는다(실측: 경로가 계속 `ready=false`).
+    `overlay` 의 `repeatlast` 기본값이 1이라 이 한 장을 계속 재사용한다.
+    """
+    box_w, box_h = box_size_px(width, height)
+    return ["-f", "lavfi", "-i", f"color=magenta:size={box_w}x{box_h}:d=1:r=1"]
