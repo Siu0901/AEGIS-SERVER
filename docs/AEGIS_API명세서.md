@@ -324,7 +324,7 @@ v2.0 · 2026-07-18
 | 필드 | 타입 | 설명 |
 |---|---|---|
 | `type` | string | 위반 유형. ESP32는 이 값으로 점멸 패턴 결정 |
-| `level` | int | 위험 등급. 1=주의(부저 없음), 2=경고, **3=긴급(연속 부저) — `fall`은 항상 3** |
+| `level` | int (**`1` \| `2` \| `3` 만**) | 위험 등급. 1=주의(부저 없음), 2=경고, **3=긴급(연속 부저) — `fall`은 항상 3**. §5.2 `severity` 와 **동일한 값을 쓴다**(같은 열거형을 공유한다) |
 | `duration_s` | int | 경광등·부저 지속 시간 |
 | `repeat` | bool | 재경고 여부. `true`면 패턴을 달리해 상습 상황 구분 |
 
@@ -558,7 +558,7 @@ v2.0 · 2026-07-18
 |---|---|
 | `clip` | `event_id`, `clip_url`, `thumbnail_url`, `label` |
 | `image` | `image_url`, `label` |
-| `table` | `columns[]`, `rows[][]`, `label` — SQL 집계 결과 표시용 |
+| `table` | `columns[]`(string[]), `rows[][]`, `label` — SQL 집계 결과 표시용. **셀 타입은 `string` / `number` / `null` 만 허용**한다. 중첩 객체나 배열을 넣지 않는다 |
 | `event_ref` | `event_id`, `label` — 상세 화면으로 이동하는 링크 |
 
 모든 첨부는 **URL 규약**을 따른다. 서버 파일 경로를 싣지 않는다.
