@@ -1,18 +1,24 @@
 """`GET /system/status` (API명세서 §4.6 · FN-SYS-01).
 
-M2 까지 실제로 관측되는 값:
+관측 주체가 절마다 다르다.
 
-* `cameras[].main_state` — mediamtx 폴링으로 서버가 직접 본다(`server/infra/stream`)
-* `cameras[].recording` 과 `storage` — **REC 의 `GET /status`(§4.7)를 그대로 전달한다**
-* `edge` 절과 `cameras[].sub_state` · `fps` — 엣지 `heartbeat`(§2.4)에서 온다
-  (`server/domain/edge_state.py`)
-* `edge.msg_rejected_total` — 서버가 직접 센다(FN-SYS-06)
+| 절 | 관측 주체 |
+|---|---|
+| `cameras[].main_state` | 서버 — mediamtx 폴링(`server/infra/stream`) |
+| `cameras[].recording` · `storage` | REC — `GET /status`(§4.7)를 **그대로 전달**한다 |
+| `edge` · `cameras[].sub_state` · `fps` | 엣지 — `heartbeat`(§2.4) (`edge_state.py`) |
+| `edge.msg_rejected_total` | 서버가 직접 센다 (FN-SYS-06) |
+| `mcu` | ESP32 — `aegis/device/status`(§3) (`server/domain/mcu_state.py`) |
+| `cloud` | 클라우드 호출의 마지막 결과 (`server/domain/cloud_state.py` · FN-SYS-03) |
 
-나머지(MCU·클라우드·엣지 시각 오프셋)는 해당 마일스톤에서 붙는다. 그때까지
-**관측한 적 없는 값을 그럴듯한 숫자로 채우지 않는다**(§4.6 null 규약).
-`fps: 0.0` 은 "엣지가 도는데 처리량이 0", `edge_offset_ms: 0` 은 "완벽히 동기화됨"이라는
-**다른 주장**이라 실제 장애와 구분되지 않는다. 전부 `null` 로 둔다. 예외는 서버가 직접
-세는 `edge.msg_rejected_total`(0 시작)과, "모름"이라는 값이 없는 `sub_state`(`"down"`)뿐이다.
+**관측한 적 없는 값을 그럴듯한 숫자로 채우지 않는다**(§4.6 null 규약). `fps: 0.0` 은
+"엣지가 도는데 처리량이 0", `edge_offset_ms: 0` 은 "완벽히 동기화됨"이라는 **다른 주장**
+이라 실제 장애와 구분되지 않는다. 예외는 서버가 직접 세는 `edge.msg_rejected_total`
+(0 시작)과, "모름"이라는 값이 없는 `sub_state`(`"down"`)뿐이다.
+
+**FN-SYS-03 — `cloud` 가 어떤 값이어도 안전 기능은 이 응답을 읽지 않는다.** 감지 →
+확정 → 경고 → 시정 판정 어디에도 클라우드 호출이 없으므로, 여기 `available: false` 가
+찍히는 것은 **분석 기능만 멈췄다는 표시**다.
 """
 
 from __future__ import annotations
@@ -22,15 +28,15 @@ import logging
 from fastapi import APIRouter, Request
 
 from aegis_contracts import (
-    CloudStatus,
-    McuStatus,
     RecStatusResponse,
     StorageStatus,
     SystemStatus,
     TimeSyncStatus,
 )
 from aegis_vision.clock import Clock
+from server.domain.cloud_state import CloudRuntime
 from server.domain.edge_state import EdgeRuntime
+from server.domain.mcu_state import McuRuntime
 from server.infra.rec_client import RecUnavailableError, StorageReader
 
 __all__ = ["router"]
@@ -57,6 +63,8 @@ async def system_status(request: Request) -> SystemStatus:
     rec = await _rec_status(state)
 
     edge: EdgeRuntime = state.edge
+    mcu: McuRuntime = state.mcu
+    cloud: CloudRuntime = state.cloud
     clock: Clock = state.clock
     now = clock.now()
 
@@ -78,8 +86,12 @@ async def system_status(request: Request) -> SystemStatus:
             )
             for cam_id in sorted(main_states)
         ],
-        mcu=McuStatus(online=False, last_seen=None),
-        cloud=CloudStatus(available=False, quota_used=None),
+        # FN-ALM-02 · FN-SYS-01 — `aegis/device/status`(§3)의 신선도로 판정한다.
+        # 브로커에 서버가 붙어 있다는 사실은 장치가 살아 있다는 뜻이 아니다.
+        mcu=mcu.status(now),
+        # FN-SYS-03 — 클라우드 호출의 마지막 결과. 아직 불러본 적이 없으면
+        # `available: false` · `quota_used: null` 이다("쓸 수 있다"로 낙관하지 않는다).
+        cloud=cloud.status(),
         storage=_storage(rec),
         # 엣지 시각 오프셋(FN-SYS-02)은 `heartbeat` 에 실리지 않는다(§2.4). 관측 수단이
         # 생기기 전까지 `null` 이다 — 0 은 "완벽히 동기화됨"이라는 다른 주장이다.
