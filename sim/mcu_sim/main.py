@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import sys
 import time
 from typing import Any
@@ -105,6 +106,15 @@ def run(
 
 
 def main(argv: list[str] | None = None) -> int:
+    # 출력이 파이프로 넘어가면 파이썬은 콘솔 코드페이지가 아니라 로케일 인코딩
+    # (한글 Windows 는 cp949)을 쓴다. 그러면 '—' 한 글자에 UnicodeEncodeError 로
+    # **기동 문구를 찍다가 죽는다** — 브로커에 붙기도 전에 프로세스가 사라지므로
+    # "경고를 못 받았다"로 보인다. tasks.py · sim/case_check.py 와 같은 처리다.
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if isinstance(sys.stderr, io.TextIOWrapper):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
     parser = argparse.ArgumentParser(description="가짜 ESP32 — MQTT 경고 구독 · 상태 발행")
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)

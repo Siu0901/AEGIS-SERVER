@@ -35,6 +35,7 @@ __all__ = [
     "EventRepository",
     "PolicyRepository",
     "Repository",
+    "SoundRepository",
     "VehicleClassRepository",
     "ZoneRepository",
 ]
@@ -85,10 +86,14 @@ class EventRepository(Protocol):
         """
         ...
 
-    async def find_due_clip_jobs(self, now: datetime) -> list[str]:
+    async def find_due_clip_jobs(self, now: datetime, delay_s: float) -> list[str]:
         """실행 시각이 지난 `clip_status = pending` 이벤트 ID들. FN-REC-03
 
-        서버 재시작 시 예약 잡을 DB에서 복구해 재실행하기 위한 조회다.
+        `delay_s` 는 `clip_post_roll_s + margin` 이다. 확정 시각에 이 시간을 더한 때가
+        잡의 실행 시각이며, **그 전에 부르면 사후 구간이 아직 녹화되지 않았다.**
+
+        큐를 따로 두지 않고 이 조회가 큐 역할을 한다. 서버가 죽어도 예약은 DB 에 남아
+        있으므로, 재시작 뒤 이 질의 한 번이 곧 복구다(기능명세서 §4.4).
         """
         ...
 
@@ -161,6 +166,22 @@ class PolicyRepository(Protocol):
     async def patch(self, changes: dict[str, Any]) -> Policies: ...
 
 
+class SoundRepository(Protocol):
+    """위반 유형·수동 방송 이름 → 음원 파일명. FN-ALM-01 · FN-ALM-04 · FN-CFG-03
+
+    ⚠ 대응 테이블(`alert_sounds`)이 **기능명세서 §6 에 없다.** FN-CFG-03(P0)이 요구하는
+    매핑을 둘 자리가 데이터 모델에 정의되지 않아 서버가 만들었다.
+    `docs/INDEX.md` 「명세서 확인 필요」 참조.
+
+    **코드에 파일명을 박지 않기 위한 경계다**(절대규칙 6). 음원 교체가 배포가 아니라
+    설정 변경이어야 설치 현장마다 다른 안내 문구를 쓸 수 있다.
+    """
+
+    async def load_sounds(self) -> dict[str, str]:
+        """`{key: filename}`. **꺼진(`active = false`) 항목은 빼고** 돌려준다."""
+        ...
+
+
 class VehicleClassRepository(Protocol):
     """클래스별 위험 반경. 기능명세서 §6 `vehicle_classes` · API명세서 §4.5"""
 
@@ -215,6 +236,9 @@ class Repository(Protocol):
 
     @property
     def policies(self) -> PolicyRepository: ...
+
+    @property
+    def sounds(self) -> SoundRepository: ...
 
     @property
     def vehicle_classes(self) -> VehicleClassRepository: ...

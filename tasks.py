@@ -286,6 +286,10 @@ def task_migrate() -> int:
     run(uv("python", "-m", "scripts.seed_policies"))
     say("[migrate] zones 개발용 기본값 시드")
     run(uv("python", "-m", "scripts.seed_zones"))
+    # FN-ALM-01 · FN-CFG-03 — 음원 매핑은 코드가 아니라 DB 에서 읽는다. 파일이 없으면
+    # 무음 wav 를 깔아 경로를 맞춘다(실제 녹음은 사람이 나중에 덮어쓴다).
+    say("[migrate] alert_sounds 시드 + 무음 wav 확인")
+    run(uv("python", "-m", "scripts.seed_sounds"))
     return 0
 
 
