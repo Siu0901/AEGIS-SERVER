@@ -585,8 +585,8 @@ confirmed_at + post_roll : 사후 세그먼트 기록 완료
 **FN-SYS-04/05 · 지표 산출 정의**
 
 ```
-시정률(correction_rate)     = resolved / (resolved + unresolved)
-판정 불가율(undetermined)   = expired / (resolved + unresolved + expired)
+시정률(correction_rate)     = resolved / (resolved + resolved_late + unresolved)
+판정 불가율(undetermined)   = expired / (resolved + resolved_late + unresolved + expired)
 ```
 
 | 대상 | 처리 |
@@ -664,7 +664,7 @@ stride 32에 맞춘 `640×384` 로 rect 추론하면 패딩이 12px씩으로 줄
 | `detected_at` / `confirmed_at` / `alerted_at` / `resolved_at` | timestamptz | 단계별 시각 |
 | `resolution_sec` | int | 경고→시정 소요 |
 | `alert_count` | int | 재경고 포함 횟수 |
-| `lost_at` / `expired_at` | timestamptz | 트랙 소실·판정 불가 종결 시각 |
+| `lost_at` / `expired_at` / `dropped_at` | timestamptz | 트랙 소실 · 판정 불가 종결 · 확정 전 소멸 시각 |
 | `last_alerted_at` | timestamptz | **최근** 경고 시각. `alerted_at`(최초)은 변경하지 않는다 |
 | `note` | text | 관리자 메모. 수동 정정(`is_false_positive`) 사유 등 |
 | `reassoc_count` | int | 재결합 횟수 |

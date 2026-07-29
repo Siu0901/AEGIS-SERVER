@@ -356,6 +356,8 @@ v2.0 · 2026-07-18
       "detected_at": "2026-08-14T05:37:02.183Z",
       "confirmed_at": "2026-08-14T05:37:03.005Z",
       "alerted_at": "2026-08-14T05:37:03.010Z",
+      "last_alerted_at": "2026-08-14T05:37:03.010Z",
+      "note": null,
       "resolved_at": null,
       "resolution_sec": null,
       "alert_count": 1,
@@ -373,7 +375,9 @@ v2.0 · 2026-07-18
 |---|---|
 | `violation_type` | `no_helmet` / `zone_intrusion` / `proximity` / `fall` |
 | `status` | 상태머신 값 (기능명세서 §4.2) |
-| `detected_at` / `confirmed_at` / `alerted_at` | 최초 후보 관측 · 확정 · 경고 발동 시각 |
+| `detected_at` / `confirmed_at` / `alerted_at` | 최초 후보 관측 · 확정 · **최초** 경고 발동 시각 |
+| `last_alerted_at` | **최근** 경고 시각. 재경고 시 갱신된다. `alerted_at` 은 변경되지 않는다 |
+| `note` | 관리자 메모. 수동 정정 사유 등. 이벤트 상세 화면(FN-UI-03)에서 표시한다 |
 | `resolution_sec` | `alerted_at`→`resolved_at` 소요 초. **시정률 지표의 원천** |
 | `posture` | 확정 시점 자세. `fall` 이벤트의 근거 |
 | `repeat_count_7d` | 동일 트랙·구역의 최근 7일 유사 이벤트 수 |
@@ -431,7 +435,7 @@ v2.0 · 2026-07-18
   "period": "today",
   "correction_rate": 0.87,
   "undetermined_rate": 0.05,
-  "total_violations": 23,
+  "total_violations": 24,
   "resolved": 20,
   "resolved_late": 1,
   "unresolved": 2,
@@ -447,7 +451,7 @@ v2.0 · 2026-07-18
 | `correction_rate` | `resolved / (resolved + resolved_late + unresolved)`. **`fall`과 `expired`는 제외.** 분모가 0이면 `null` |
 | `resolved_late` | 해소됐으나 `resolve_window_s` 초과. 분모에만 들어간다. `unresolved` 와 섞지 않는다 |
 | `undetermined` | 재결합 실패로 종결된 `expired` 건수. **시정률 분모·분자 모두에서 제외** |
-| `undetermined_rate` | `expired / (resolved + unresolved + expired)`. 시정률과 **항상 병기**한다 |
+| `undetermined_rate` | `expired / (resolved + resolved_late + unresolved + expired)`. 시정률과 **항상 병기**한다. 분모가 0이면 `null`. 늦은 시정은 **모집단이지 판정 불가가 아니므로** 분모에 포함된다 |
 | `fall_events` | 쓰러짐 이벤트 수. 별도 집계 |
 | `avg_resolution_sec` | `resolution_sec` 평균 |
 
@@ -986,7 +990,8 @@ FN-UI-02 표시 규칙(위반자 적색·근접 거리선·거리 라벨)을 채
 
 ```json
 { "type":"metric","period":"today","correction_rate":0.87,
-  "undetermined_rate":0.05,"total_violations":23,"resolved":20,
+  "undetermined_rate":0.04,"total_violations":24,"resolved":20,
+  "resolved_late":1,
   "unresolved":2,"undetermined":1,"avg_resolution_sec":41,
   "fall_events":0,"anomaly_flags":1 }
 ```
