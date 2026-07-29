@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from aegis_contracts import CandidateMsg, EventStatus, EventSummary, ViolationType
 from server.domain.event_machine import (
@@ -30,7 +31,7 @@ def candidate(**overrides: Any) -> CandidateMsg:
         "cam_id": 1,
         "ts": TS,
         "track_id": 3,
-        "violations": ["no_helmet", "zone_intrusion"],
+        "violations": ["no_helmet"],
         "zone_id": "forklift_lane",
         "bbox": [0.197, 0.364, 0.273, 0.764],
         "conf": 0.91,
@@ -61,28 +62,38 @@ def candidate(**overrides: Any) -> CandidateMsg:
 # --------------------------------------------------------------------------
 
 
-def test_all_violations_are_new_when_nothing_is_open() -> None:
+def test_new_violation_creates_an_event() -> None:
     plan = plan_candidate(candidate(), {})
-    assert plan.creates == (ViolationType.NO_HELMET, ViolationType.ZONE_INTRUSION)
+    assert plan.creates == (ViolationType.NO_HELMET,)
     assert plan.updates == ()
 
 
 def test_open_event_is_merged_not_recreated() -> None:
     """FN-EVT-01 의 핵심. 같은 유형이 열려 있으면 갱신으로 간다."""
     plan = plan_candidate(candidate(), {ViolationType.NO_HELMET: "EV-20260814-0231"})
-    assert plan.creates == (ViolationType.ZONE_INTRUSION,)
+    assert plan.creates == ()
     assert plan.updates == ((ViolationType.NO_HELMET, "EV-20260814-0231"),)
 
 
-def test_violations_split_into_separate_events() -> None:
+def test_another_violation_type_on_the_same_track_is_a_separate_event() -> None:
     """안전모 미착용과 구역 침입은 시정 행동도 규정 조항도 다르다. 한 건으로 묶지 않는다."""
-    plan = plan_candidate(candidate(), {})
-    assert len(plan.creates) == 2
+    plan = plan_candidate(
+        candidate(violations=["zone_intrusion"]),
+        {ViolationType.NO_HELMET: "EV-20260814-0231"},
+    )
+    assert plan.creates == (ViolationType.ZONE_INTRUSION,)
 
 
-def test_violation_order_follows_the_edge() -> None:
-    plan = plan_candidate(candidate(violations=["zone_intrusion", "no_helmet"]), {})
-    assert plan.creates == (ViolationType.ZONE_INTRUSION, ViolationType.NO_HELMET)
+def test_candidate_carries_exactly_one_violation() -> None:
+    """§2.2 — 한 트랙에 두 유형이 걸리면 후보 메시지를 유형 수만큼 각각 보낸다.
+
+    한 메시지에 묶여 오면 `observed_ms` 가 어느 유형의 값인지 알 수 없어, 확정
+    판정(FN-EVT-02)의 참고값이 무의미해진다. 계약이 그것을 막는다.
+    """
+    with pytest.raises(ValidationError):
+        candidate(violations=["no_helmet", "zone_intrusion"])
+    with pytest.raises(ValidationError):
+        candidate(violations=[])
 
 
 # --------------------------------------------------------------------------
@@ -127,7 +138,8 @@ def test_min_distance_is_null_when_there_was_nothing_to_measure() -> None:
 
 
 def test_min_distance_is_the_closest_vehicle() -> None:
-    event = build_candidate_event(candidate(), ViolationType.PROXIMITY, "EV-1")
+    near = candidate(violations=["proximity"])
+    event = build_candidate_event(near, ViolationType.PROXIMITY, "EV-1")
     assert event.min_distance_m == pytest.approx(3.2)
     assert event.depth_verified is True
 
@@ -170,10 +182,20 @@ def test_zone_is_filled_in_when_the_worker_walks_into_it() -> None:
     assert merge_changes(existing(), candidate())["zone_id"] == "forklift_lane"
 
 
-def test_known_zone_is_not_erased_by_a_candidate_without_one() -> None:
-    """이벤트가 어디서 시작했는지가 기록이다. `null` 후보가 그것을 지우면 안 된다."""
+def test_zone_follows_the_latest_observation_while_still_a_candidate() -> None:
+    """확정 전에는 최신 관측값으로 따라간다 (기능명세서 §4.2)."""
     event = existing(zone_id="forklift_lane")
-    assert "zone_id" not in merge_changes(event, candidate(zone_id=None))
+    assert merge_changes(event, candidate(zone_id=None))["zone_id"] is None
+
+
+def test_zone_freezes_once_the_event_is_confirmed() -> None:
+    """§4.2 — `events.zone_id` 는 **확정 시점의 구역을 기록하고 이후 바꾸지 않는다.**
+
+    위반자가 구역을 나간 뒤 이벤트의 구역까지 바뀌면 구역별 집계가 사후에 흔들린다.
+    """
+    for status in ("active", "alerted", "re_alerted", "lost"):
+        event = existing(status=status, zone_id="forklift_lane")
+        assert "zone_id" not in merge_changes(event, candidate(zone_id=None))
 
 
 def test_min_distance_only_moves_closer() -> None:

@@ -44,12 +44,13 @@ FRAME: dict[str, Any] = {
     ],
 }
 
+#: §2.2 — 후보 메시지 하나에는 위반 유형이 **하나만** 담긴다.
 CANDIDATE: dict[str, Any] = {
     "type": "candidate",
     "cam_id": 1,
     "ts": TS,
     "track_id": 3,
-    "violations": ["no_helmet", "zone_intrusion"],
+    "violations": ["no_helmet"],
     "zone_id": "forklift_lane",
     "bbox": [0.197, 0.364, 0.273, 0.764],
     "conf": 0.91,
@@ -61,6 +62,9 @@ CANDIDATE: dict[str, Any] = {
     "observed_ms": 3200,
     "nearby": [],
 }
+
+#: 같은 트랙의 **다른** 유형. 후보가 유형 수만큼 따로 오는 것을 재현한다(§2.2).
+ZONE_CANDIDATE: dict[str, Any] = {**CANDIDATE, "violations": ["zone_intrusion"], "observed_ms": 500}
 
 HEARTBEAT: dict[str, Any] = {
     "type": "heartbeat",
@@ -164,7 +168,7 @@ def test_a_rejection_does_not_kill_the_socket() -> None:
         status = SystemStatus.model_validate(client.get("/api/v1/system/status").json())
 
     assert status.edge.msg_rejected_total == 1
-    assert len(events.created) == 2
+    assert len(events.created) == 1
 
 
 # --------------------------------------------------------------------------
@@ -256,13 +260,15 @@ def test_overlay_shows_violations_after_a_candidate() -> None:
     ):
         drain(dashboard, 1)
         edge.send_json(CANDIDATE)
+        edge.send_json(ZONE_CANDIDATE)
         edge.send_json(FRAME)
         payload = dashboard.receive_json()
 
     person = payload["objects"][0]
     assert person["violations"] == ["no_helmet", "zone_intrusion"]
     assert len(person["event_ids"]) == 2
-    assert person["alert_state"] is None
+    # §5.1 — 확정 전은 `candidate` 다. `null`("이벤트 없음")과 구분되어야 한다.
+    assert person["alert_state"] == "candidate"
 
 
 def test_track_lost_takes_the_box_state_down() -> None:
@@ -297,10 +303,12 @@ def test_track_lost_does_not_transition_the_event() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_one_candidate_creates_one_event_per_violation() -> None:
+def test_each_candidate_message_creates_one_event() -> None:
+    """§2.2 — 후보 메시지 하나에 위반 유형 하나. 유형이 다르면 이벤트도 갈린다."""
     client, events = build()
     with client, client.websocket_connect("/ws/edge") as edge:
         edge.send_json(CANDIDATE)
+        edge.send_json(ZONE_CANDIDATE)
 
     assert [e.violation_type for e in events.created] == ["no_helmet", "zone_intrusion"]
     assert {e.status for e in events.created} == {"candidate"}
@@ -312,6 +320,7 @@ def test_repeated_candidates_do_not_duplicate_events() -> None:
     with client, client.websocket_connect("/ws/edge") as edge:
         for _ in range(5):
             edge.send_json(CANDIDATE)
+            edge.send_json(ZONE_CANDIDATE)
 
     assert len(events.created) == 2
 
@@ -322,7 +331,7 @@ def test_a_different_track_gets_its_own_events() -> None:
         edge.send_json(CANDIDATE)
         edge.send_json({**CANDIDATE, "track_id": 9})
 
-    assert len(events.created) == 4
+    assert len(events.created) == 2
     assert {e.track_id for e in events.created} == {3, 9}
 
 
@@ -333,4 +342,4 @@ def test_the_same_track_on_another_camera_is_a_different_event() -> None:
         edge.send_json(CANDIDATE)
         edge.send_json({**CANDIDATE, "cam_id": 2})
 
-    assert len(events.created) == 4
+    assert len(events.created) == 2

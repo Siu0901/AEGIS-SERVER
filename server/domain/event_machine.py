@@ -8,9 +8,10 @@
 갱신할지"라는 판단이고, 실제 저장은 `server/infra/db/repository.py` 가 한다.
 
 FN-EVT-01 의 병합 키는 **`cam_id` + `track_id` + 위반 유형** 셋이다(기능명세서 §4.2).
-`candidate.violations[]` 는 동시 발생이 가능하므로(§2.2) 후보 한 건이 이벤트 여러 건에
-대응할 수 있다 — 안전모 미착용과 구역 침입은 시정 행동도 다르고 규정 조항도 달라서
-한 건으로 묶으면 시정률의 의미가 무너진다.
+후보 메시지 하나에는 위반 유형이 하나만 담기므로(§2.2) 후보 한 건은 이벤트 한 건에
+대응한다. 한 트랙에 유형이 여럿 걸리면 후보가 유형 수만큼 따로 오고, 이벤트도 그만큼
+갈린다 — 안전모 미착용과 구역 침입은 시정 행동도 규정 조항도 달라서 한 건으로 묶으면
+시정률의 의미가 무너진다.
 """
 
 from __future__ import annotations
@@ -53,23 +54,19 @@ def plan_candidate(
     """FN-EVT-01 — 후보를 진행 중 이벤트에 병합하거나 새로 만든다.
 
     Args:
-        candidate: 엣지가 올린 후보(§2.2).
+        candidate: 엣지가 올린 후보(§2.2). **위반 유형 하나를 나른다.**
         open_events: 같은 `cam_id` · `track_id` 에 대해 이미 진행 중인
             {위반 유형: `event_id`}. 조회는 호출자(저장소)가 한다.
 
-    `violations[]` 의 순서를 그대로 지킨다 — 엣지가 적은 순서가 곧 화면 라벨 순서이고
-    (§5.1 `violations` 가 박스 색을 정한다), 정렬을 바꾸면 같은 상황에서 이벤트 ID
-    번호가 실행마다 달라진다.
+    한 트랙에 유형이 여럿 걸리면 후보 메시지가 유형 수만큼 따로 온다(§2.2). 그래도
+    이벤트는 유형별로 갈린다 — 안전모 미착용과 구역 침입은 시정 행동도 규정 조항도
+    달라서 한 건으로 묶으면 시정률의 의미가 무너진다.
     """
-    creates: list[ViolationType] = []
-    updates: list[tuple[ViolationType, str]] = []
-    for violation in candidate.violations:
-        existing = open_events.get(violation)
-        if existing is None:
-            creates.append(violation)
-        else:
-            updates.append((violation, existing))
-    return CandidatePlan(creates=tuple(creates), updates=tuple(updates))
+    violation = candidate.violation
+    existing = open_events.get(violation)
+    if existing is None:
+        return CandidatePlan(creates=(violation,), updates=())
+    return CandidatePlan(creates=(), updates=((violation, existing),))
 
 
 def format_event_id(at: datetime, sequence: int) -> str:
@@ -135,12 +132,18 @@ def merge_changes(existing: EventSummary, candidate: CandidateMsg) -> dict[str, 
     `min_distance_m` 은 덮어쓰지 않고 **더 작은 값으로만** 내린다 — 이벤트가 살아 있는
     동안 얼마나 가까웠는지가 위험도의 근거이고(§4.1), 마지막 값으로 덮으면 지게차가
     멀어진 뒤에는 위험했던 사실이 사라진다.
+
+    `zone_id` 는 반대로 **확정되면 얼어붙는다**(§4.2). 두 필드가 다르게 동작하는 이유는
+    묻는 질문이 다르기 때문이다 — "얼마나 위험했나"는 구간 전체의 최댓값이고,
+    "어디서 확정됐나"는 한 순간의 사실이다.
     """
     changes: dict[str, Any] = {}
 
-    # 구역은 나중에 알게 될 수 있다(구역 밖에서 시작해 들어온 경우). 반대로 이미 알던
-    # 구역을 `null` 로 지우지는 않는다 — 이벤트가 어디서 시작했는지가 기록이다.
-    if candidate.zone_id is not None and existing.zone_id != candidate.zone_id:
+    # `events.zone_id` 는 **확정 시점의 구역을 기록하고 이후 바꾸지 않는다**(기능명세서 §4.2).
+    # 확정 전(`candidate`)에는 최신 관측값으로 따라가되, 확정 이후에는 "어디서 확정됐는가"를
+    # 고정된 사실로 남긴다 — 위반자가 구역을 나간 뒤 그 이벤트의 구역까지 바뀌면
+    # 구역별 집계(§4.2 분포)가 사후에 흔들린다.
+    if existing.status == EventStatus.CANDIDATE and existing.zone_id != candidate.zone_id:
         changes["zone_id"] = candidate.zone_id
 
     distance = _min_distance(candidate)

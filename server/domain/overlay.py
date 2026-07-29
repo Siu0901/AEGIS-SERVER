@@ -8,9 +8,9 @@ FN-UI-02 표시 규칙(위반자 적색 · 근접 거리선 · 거리 라벨)을
 
 M2 의 범위에서 유의할 것:
 
-* `alert_state` 는 **`null`** 이다. `AlertState`(§5.1)는 `active`/`alerted`/
-  `re_alerted`/`lost` 넷뿐이고 `candidate` 가 없는데, M2 의 이벤트는 전부
-  `candidate` 에 머문다. 없는 값을 열거형에 끼워 넣지 않는다(절대규칙 8).
+* `alert_state` 는 M2 에서 대부분 **`candidate`** 다. 확정 판정이 M3 이기 때문이다.
+  `candidate` 와 `null` 은 다르다 — 전자는 위반 조건이 관측됐으나 확정 전, 후자는
+  이 트랙에 진행 중 이벤트가 아예 없다는 뜻이다(§5.1).
 * 위반 표시는 후보가 들어온 순간부터 켜지고 **꺼지지 않는다.** 해소 판정
   (FN-EVT-03)이 M3 이기 때문이다. 지금 임의의 시간으로 끄면 그 값이 곧 가짜
   시정률이 된다 — 트랙이 사라질 때만 지운다.
@@ -21,7 +21,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from aegis_contracts import (
-    Bbox,
     CandidateMsg,
     DetectedPerson,
     DetectedVehicle,
@@ -36,17 +35,31 @@ from aegis_contracts import (
 )
 from aegis_contracts.enums import AlertState, EventStatus, ViolationType
 
-__all__ = ["LiveTracks", "TrackState", "compose_overlay", "ground_anchor"]
+__all__ = ["LiveTracks", "TrackState", "compose_overlay"]
 
 #: `EventStatus` → `AlertState`. 오버레이에는 **진행 중**인 값만 실린다(§5.1).
 #:
-#: `candidate` 가 빠져 있는 것은 누락이 아니다 — §5.1 이 네 값만 열거한다.
-#: 종결 상태(`resolved` · `expired`)도 오버레이에 올 일이 없다.
+#: 종결 상태(`resolved` · `expired`)는 여기 없다 — 그 트랙에는 진행 중 이벤트가
+#: 없으므로 `alert_state` 가 `null` 이 된다.
 _ALERT_STATE: dict[EventStatus, AlertState] = {
+    EventStatus.CANDIDATE: "candidate",
     EventStatus.ACTIVE: "active",
     EventStatus.ALERTED: "alerted",
     EventStatus.RE_ALERTED: "re_alerted",
     EventStatus.LOST: "lost",
+}
+
+#: `alert_state` 우선순위. 한 트랙에 유형이 여럿이면 **가장 앞선 단계**를 싣는다.
+#:
+#: 박스는 트랙당 하나뿐이라 상태도 하나여야 하는데, dict 순회 순서(= 위반이 걸린
+#: 순서)로 고르면 같은 상황에서 실행마다 다른 값이 나온다. 경고까지 간 위반이 있으면
+#: 그것이 이긴다 — 확정 전 후보 때문에 경고 표시가 내려가면 안 된다.
+_ALERT_RANK: dict[AlertState, int] = {
+    "candidate": 0,
+    "active": 1,
+    "lost": 2,
+    "alerted": 3,
+    "re_alerted": 4,
 }
 
 
@@ -72,12 +85,17 @@ class TrackState:
 
     @property
     def alert_state(self) -> AlertState | None:
-        """가장 앞선 경고 단계 하나. 박스는 트랙당 하나뿐이라 상태도 하나여야 한다."""
-        for status in self.statuses.values():
-            mapped = _ALERT_STATE.get(status)
-            if mapped is not None:
-                return mapped
-        return None
+        """가장 앞선 경고 단계 하나. 진행 중 이벤트가 없으면 `null`(§5.1)."""
+        states = [
+            _ALERT_STATE[status] for status in self.statuses.values() if status in _ALERT_STATE
+        ]
+        if not states:
+            return None
+        best: AlertState = states[0]
+        for state in states[1:]:
+            if _ALERT_RANK[state] > _ALERT_RANK[best]:
+                best = state
+        return best
 
 
 class LiveTracks:
@@ -109,25 +127,14 @@ class LiveTracks:
         self._tracks.clear()
 
 
-def ground_anchor(bbox: Bbox) -> PointPx:
-    """지게차의 **정규화 접지 좌표**(§5.1 `anchor`). 박스 아래변 중앙이다.
-
-    §2.1 의 `frame` 은 지게차에 `anchor_m`(지면 실좌표)만 싣고 화면 좌표는 싣지 않는다.
-    거리선의 반대편 끝점을 찍으려면 정규화 좌표가 필요한데, 미터에서 되돌리려면
-    역호모그래피가 있어야 하고 그건 캘리브레이션(FN-CFG-01 · M6) 이후의 일이다.
-    지게차는 지면 주행 장비라 박스 아래변이 곧 접지선이므로 여기서 뽑는다.
-    (사람의 `foot_point` 는 §6.1 대로 엣지가 마스크에서 계산해 보내준다.)
-    """
-    x1, _, x2, y2 = bbox
-    return ((x1 + x2) / 2.0, y2)
-
-
 def compose_overlay(frame: FrameMsg, tracks: LiveTracks) -> OverlayMsg:
-    """`frame` 한 장에 이벤트 상태를 합쳐 `overlay` 를 만든다. API명세서 §5.1"""
+    """`frame` 한 장에 이벤트 상태를 합쳐 `overlay` 를 만든다. API명세서 §5.1
+
+    지게차의 접지 좌표는 **엣지가 보낸 `anchor` 를 그대로 쓴다**(§2.1). 마스크 하단에서
+    산출한 값이라 `bbox` 아래변 중앙과 다르다 — 포크가 뻗었거나 적재물이 있으면 어긋난다.
+    """
     anchors = {
-        obj.track_id: ground_anchor(obj.bbox)
-        for obj in frame.objects
-        if isinstance(obj, DetectedVehicle)
+        obj.track_id: obj.anchor for obj in frame.objects if isinstance(obj, DetectedVehicle)
     }
     objects: list[OverlayObject] = []
     for obj in frame.objects:
@@ -174,7 +181,7 @@ def _vehicle(obj: DetectedVehicle, state: TrackState | None) -> OverlayVehicle:
             "class": "vehicle",
             "track_id": obj.track_id,
             "bbox": obj.bbox,
-            "anchor": ground_anchor(obj.bbox),
+            "anchor": obj.anchor,
             "moving": obj.moving,
             "danger_radius_m": obj.danger_radius_m,
             "violations": [],

@@ -143,7 +143,7 @@ def test_policies_carry_the_overlay_buffer_keys() -> None:
         payload = client.get("/api/v1/policies").json()
 
     policies = Policies.model_validate(payload)
-    assert policies.overlay_buffer_webrtc_ms == 400.0
+    assert policies.overlay_buffer_webrtc_ms == 300.0
     assert policies.overlay_buffer_hls_ms == 2800.0
     assert policies.overlay_stale_ms == 1000.0
 

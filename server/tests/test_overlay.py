@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 from aegis_contracts import CandidateMsg, EventStatus, FrameMsg, ViolationType
-from server.domain.overlay import LiveTracks, compose_overlay, ground_anchor
+from server.domain.overlay import LiveTracks, compose_overlay
 
 TS = datetime(2026, 8, 14, 5, 37, 12, 480000, tzinfo=UTC)
 
@@ -39,6 +39,7 @@ VEHICLE: dict[str, Any] = {
     "track_id": 11,
     "conf": 0.87,
     "bbox": [0.591, 0.389, 0.838, 0.756],
+    "anchor": [0.702, 0.771],
     "anchor_m": [7.02, 8.90],
     "moving": True,
     "danger_radius_m": 3.0,
@@ -114,11 +115,30 @@ def test_violations_come_from_the_server_not_from_the_helmet_field() -> None:
     assert person.event_ids == ["EV-20260814-0231"]
 
 
-def test_alert_state_is_null_while_the_event_is_only_a_candidate() -> None:
-    """`AlertState`(§5.1)에는 `candidate` 가 없다. 없는 값을 열거형에 끼워 넣지 않는다."""
+def test_candidate_and_null_are_different_states() -> None:
+    """§5.1 — `candidate` 는 "관측됐으나 확정 전", `null` 은 "이벤트가 없다"다.
+
+    둘을 같은 값으로 내보내면 대시보드가 확정 진행 중인 트랙과 아무 일도 없는 트랙을
+    구분할 수 없다.
+    """
     tracks = LiveTracks()
-    tracks.record_candidate(candidate(), {ViolationType.NO_HELMET: ("EV-1", EventStatus.CANDIDATE)})
     assert compose_overlay(frame(PERSON), tracks).objects[0].alert_state is None
+
+    tracks.record_candidate(candidate(), {ViolationType.NO_HELMET: ("EV-1", EventStatus.CANDIDATE)})
+    assert compose_overlay(frame(PERSON), tracks).objects[0].alert_state == "candidate"
+
+
+def test_alert_state_takes_the_most_advanced_stage() -> None:
+    """박스는 트랙당 하나다. 확정 전 후보 때문에 경고 표시가 내려가면 안 된다."""
+    tracks = LiveTracks()
+    tracks.record_candidate(
+        candidate(),
+        {
+            ViolationType.NO_HELMET: ("EV-1", EventStatus.CANDIDATE),
+            ViolationType.PROXIMITY: ("EV-2", EventStatus.ALERTED),
+        },
+    )
+    assert compose_overlay(frame(PERSON), tracks).objects[0].alert_state == "alerted"
 
 
 def test_alert_state_maps_from_the_event_status() -> None:
@@ -127,9 +147,14 @@ def test_alert_state_maps_from_the_event_status() -> None:
     assert compose_overlay(frame(PERSON), tracks).objects[0].alert_state == "alerted"
 
 
-def test_vehicle_anchor_is_the_bottom_centre_of_its_box() -> None:
-    """거리선의 반대편 끝점. §2.1 의 `frame` 은 지게차에 화면 좌표를 싣지 않는다."""
-    assert ground_anchor((0.591, 0.389, 0.838, 0.756)) == pytest.approx((0.7145, 0.756))
+def test_vehicle_anchor_comes_from_the_edge_not_from_the_box() -> None:
+    """§2.1 — `anchor` 는 마스크 하단에서 산출한 값이라 **bbox 아래변 중앙이 아니다.**
+
+    서버가 박스로 추정하면 포크가 뻗었거나 적재물이 있을 때 거리선이 엉뚱한 곳에 붙는다.
+    이 픽스처의 `anchor`(0.702, 0.771)는 아래변 중앙(0.7145, 0.756)과 일부러 다르다.
+    """
+    vehicle = compose_overlay(frame(VEHICLE), LiveTracks()).objects[0]
+    assert vehicle.model_dump()["anchor"] == pytest.approx((0.702, 0.771))
 
 
 def test_nearby_carries_the_distance_and_the_other_end_of_the_line() -> None:
@@ -138,7 +163,7 @@ def test_nearby_carries_the_distance_and_the_other_end_of_the_line() -> None:
     person = compose_overlay(frame(PERSON, VEHICLE), tracks).objects[0]
     assert len(person.nearby) == 1
     assert person.nearby[0].dist_m == pytest.approx(3.2)
-    assert person.nearby[0].anchor == pytest.approx((0.7145, 0.756))
+    assert person.nearby[0].anchor == pytest.approx((0.702, 0.771))
     assert person.nearby[0].in_danger_zone is False
 
 
