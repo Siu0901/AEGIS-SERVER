@@ -40,6 +40,7 @@ from aegis_contracts import (
 )
 from server.domain.event_machine import format_event_id
 from server.domain.metrics import MetricsRow
+from server.infra.db.models import AlertSound as SoundRow
 from server.infra.db.models import Event as EventRow
 from server.infra.db.models import Policy as PolicyRow
 from server.infra.db.models import Zone as ZoneRow
@@ -50,6 +51,7 @@ __all__ = [
     "OPEN_STATUSES",
     "DbEventRepository",
     "DbPolicyRepository",
+    "DbSoundRepository",
     "DbZoneRepository",
 ]
 
@@ -79,7 +81,6 @@ MEDIA_URL_PREFIX = "/media"
 #:
 #: **`re_alerted` 는 `alerted_at` 을 건드리지 않는다**(§5.2). 최초 경고 시각을 덮으면
 #: `resolution_sec` 이 마지막 방송 기준으로 줄어 시정률이 부풀려진다.
-#: `dropped` 는 §6 에 대응 시각 컬럼이 없어 상태만 바뀐다.
 _STATUS_STAMP: dict[EventStatus, Callable[[datetime], dict[str, Any]]] = {
     EventStatus.ACTIVE: lambda at: {"confirmed_at": at},
     EventStatus.ALERTED: lambda at: {"alerted_at": at, "last_alerted_at": at},
@@ -87,6 +88,7 @@ _STATUS_STAMP: dict[EventStatus, Callable[[datetime], dict[str, Any]]] = {
     EventStatus.LOST: lambda at: {"lost_at": at},
     EventStatus.RESOLVED: lambda at: {"resolved_at": at},
     EventStatus.EXPIRED: lambda at: {"expired_at": at},
+    EventStatus.DROPPED: lambda at: {"dropped_at": at},
 }
 
 
@@ -313,16 +315,24 @@ class DbEventRepository:
             )
         return int(session.exec(statement).one())
 
-    async def find_due_clip_jobs(self, now: datetime) -> list[str]:
-        """실행 시각이 지난 `clip_status = pending` 이벤트 ID들. FN-REC-03 — M3."""
-        return await asyncio.to_thread(self._find_due_clip_jobs, now)
+    async def find_due_clip_jobs(self, now: datetime, delay_s: float) -> list[str]:
+        """실행 시각이 지난 `clip_status = pending` 이벤트 ID들. FN-REC-03
 
-    def _find_due_clip_jobs(self, now: datetime) -> list[str]:
+        **이 질의가 곧 예약 큐다.** 메모리 큐를 두지 않으므로 서버가 죽어도 예약이
+        남고, 재시작 뒤 첫 호출이 그대로 복구가 된다(기능명세서 §4.4).
+
+        `delay_s` = `clip_post_roll_s + margin`. `confirmed_at + delay_s <= now` 인
+        것만 고른다 — 더 일찍 부르면 사후 구간이 아직 디스크에 없어 앞부분만 담긴 클립이
+        나오고, 그 실패는 `partial` 로 기록되어 되돌릴 수 없다.
+        """
+        return await asyncio.to_thread(self._find_due_clip_jobs, now, delay_s)
+
+    def _find_due_clip_jobs(self, now: datetime, delay_s: float) -> list[str]:
         statement = (
             select(EventRow)
             .where(col(EventRow.clip_status) == "pending")
             .where(col(EventRow.confirmed_at).is_not(None))
-            .where(col(EventRow.confirmed_at) <= now)
+            .where(col(EventRow.confirmed_at) <= now - timedelta(seconds=delay_s))
             .order_by(col(EventRow.confirmed_at))
         )
         with Session(self._engine) as session:
@@ -425,6 +435,25 @@ class DbZoneRepository:
             session.commit()
 
 
+class DbSoundRepository:
+    """`server.domain.repository.SoundRepository` 구현. `alert_sounds` 테이블.
+
+    ⚠ 이 테이블은 **기능명세서 §6 에 없다**(FN-CFG-03 이 요구하는 매핑을 둘 자리가
+    정의되지 않았다). `docs/INDEX.md` 「명세서 확인 필요」 참조.
+    """
+
+    def __init__(self, engine: Engine) -> None:
+        self._engine = engine
+
+    async def load_sounds(self) -> dict[str, str]:
+        return await asyncio.to_thread(self._load_sounds)
+
+    def _load_sounds(self) -> dict[str, str]:
+        statement = select(SoundRow).where(col(SoundRow.active).is_(True))
+        with Session(self._engine) as session:
+            return {row.key: row.filename for row in session.exec(statement)}
+
+
 class DbPolicyRepository:
     """`server.domain.repository.PolicyRepository` 구현. 기능명세서 §6 `policies`
 
@@ -484,6 +513,9 @@ def _summary(row: EventRow, repeat_count_7d: int) -> EventSummary:
         detected_at=_detected_at(row),
         confirmed_at=row.confirmed_at,
         alerted_at=row.alerted_at,
+        # §4.1 이 응답에 추가한 두 칸. 컬럼만 있고 읽을 경로가 없던 시기가 끝났다.
+        last_alerted_at=row.last_alerted_at,
+        note=row.note,
         resolved_at=row.resolved_at,
         resolution_sec=row.resolution_sec,
         alert_count=row.alert_count,
@@ -520,7 +552,9 @@ def _timeline(row: EventRow) -> list[TimelineEntry]:
 
     `re_alerted` 는 **마지막 재경고 하나만** 나온다(`last_alerted_at`). 중간 재경고
     시각을 담는 자리는 없고 `alert_count` 만 남으므로, 없는 시각을 지어내지 않는다.
-    `dropped` 는 §6 에 대응 시각 컬럼이 아예 없어 타임라인에 나오지 않는다.
+
+    종결 셋(`resolved` · `expired` · `dropped`)이 모두 나온다 — §6 이 `dropped_at` 을
+    신설하면서 확정 전 소멸도 타임라인에서 끝을 갖게 됐다.
     """
     stamps: list[tuple[datetime | None, EventStatus]] = [
         (row.detected_at, EventStatus.CANDIDATE),
@@ -530,6 +564,7 @@ def _timeline(row: EventRow) -> list[TimelineEntry]:
         (row.lost_at, EventStatus.LOST),
         (row.resolved_at, EventStatus.RESOLVED),
         (row.expired_at, EventStatus.EXPIRED),
+        (row.dropped_at, EventStatus.DROPPED),
     ]
     entries = [TimelineEntry(at=at, state=state) for at, state in stamps if at is not None]
     return sorted(entries, key=lambda entry: entry.at)
@@ -546,6 +581,8 @@ def _row(event: EventDetail) -> EventRow:
         detected_at=event.detected_at,
         confirmed_at=event.confirmed_at,
         alerted_at=event.alerted_at,
+        last_alerted_at=event.last_alerted_at,
+        note=event.note,
         resolved_at=event.resolved_at,
         resolution_sec=event.resolution_sec,
         alert_count=event.alert_count,

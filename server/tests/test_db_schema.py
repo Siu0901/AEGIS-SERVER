@@ -19,6 +19,16 @@ SPEC_TABLES = {
     "anomalies",
 }
 
+#: ⚠ **§6 에 없는데 서버가 만든 테이블.** 명세서가 요구하는 기능(FN-CFG-03 경고 음원
+#: 매핑 · P0)을 담을 자리가 데이터 모델에 정의되지 않아 추가한 것들이다.
+#:
+#: 이 집합을 비워 두는 것이 목표다. 명세서 §6 에 반영되면 위 `SPEC_TABLES` 로 옮긴다.
+#: 여기 적지 않고 `SPEC_TABLES` 에 슬쩍 넣으면 "명세서에 있다"는 거짓이 된다
+#: (`docs/INDEX.md` 「명세서 확인 필요」 참조).
+EXTRA_TABLES = {
+    "alert_sounds",
+}
+
 #: 기능명세서 §6 `events` 컬럼 전량.
 SPEC_EVENT_COLUMNS = {
     "event_id",
@@ -36,6 +46,7 @@ SPEC_EVENT_COLUMNS = {
     "alert_count",
     "lost_at",
     "expired_at",
+    "dropped_at",
     "reassoc_count",
     "prev_track_ids",
     "min_distance_m",
@@ -61,7 +72,7 @@ SPEC_ZONE_COLUMNS = {"zone_id", "cam_id", "name", "polygon_m", "buffer_m", "acti
 
 
 def test_all_spec_tables_exist() -> None:
-    assert set(SQLModel.metadata.tables) == SPEC_TABLES
+    assert set(SQLModel.metadata.tables) == SPEC_TABLES | EXTRA_TABLES
 
 
 def test_events_columns_match_spec_exactly() -> None:
@@ -113,6 +124,7 @@ def test_timestamps_are_timezone_aware() -> None:
         "resolved_at",
         "lost_at",
         "expired_at",
+        "dropped_at",
     )
     for name in stamped:
         assert events.columns[name].type.timezone is True, name  # type: ignore[attr-defined]
@@ -120,4 +132,4 @@ def test_timestamps_are_timezone_aware() -> None:
 
 def test_models_module_exports_every_table() -> None:
     exported = {name for name in db_models.__all__ if name != "EMBEDDING_DIM"}
-    assert len(exported) == len(SPEC_TABLES)
+    assert len(exported) == len(SPEC_TABLES) + len(EXTRA_TABLES)

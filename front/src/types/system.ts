@@ -133,8 +133,8 @@ export interface EventCreatedMsg {
  * "시정률 0%"라는 주장이 되는데, 실제로는 "판정 가능한 이벤트가 없다"는 뜻이다.
  * 화면은 `formatRate` 로 `–` 를 찍고 **0% 와 다르게** 그린다.
  *
- * 늦은 시정 건수(`resolved_late`)는 이 페이로드에 없다 — 필요하면
- * `GET /metrics/summary`(§4.2)를 읽는다.
+ * `resolved` · `resolved_late` · `unresolved` 는 서로 배타적이고, 셋에 `undetermined`
+ * 를 더하면 `total_violations` 다. 화면은 이 검산이 성립하는지 볼 수 있다.
  */
 export interface MetricMsg {
   type: 'metric'
@@ -143,6 +143,8 @@ export interface MetricMsg {
   undetermined_rate: number | null
   total_violations: number
   resolved: number
+  /** 해소됐으나 `resolve_window_s` 초과. **분모에만** 들어간다 (§6.7). */
+  resolved_late: number
   unresolved: number
   undetermined: number
   avg_resolution_sec: number

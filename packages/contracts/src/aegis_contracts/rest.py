@@ -148,7 +148,20 @@ class EventSummary(SpecModel):
     confirmed_at: AwareDatetime | None
     """확정 시각. 확정 전이면 `null`."""
     alerted_at: AwareDatetime | None
-    """경고 발동 시각."""
+    """**최초** 경고 발동 시각. 재경고로 갱신하지 않는다."""
+    last_alerted_at: AwareDatetime | None
+    """**최근** 경고 시각. 재경고 시 갱신된다(§4.1 · §6).
+
+    `alerted_at` 과 분리한 이유: `resolution_sec` 이 `alerted_at → resolved_at` 으로
+    정의되어 있어, 재경고마다 `alerted_at` 을 덮으면 재경고가 많을수록 시정 소요
+    시간이 짧아져 **시정률이 부풀려진다**.
+    """
+    note: str | None
+    """관리자 메모. 수동 정정 사유 등. 이벤트 상세 화면(FN-UI-03)에서 표시한다(§4.1).
+
+    **저장만 되고 다시 읽을 수 없던 필드다.** 명세서가 §4.1 응답에 추가하면서
+    오탐 사유가 화면까지 도달하게 됐다.
+    """
     resolved_at: AwareDatetime | None
     resolution_sec: int | None
     """`alerted_at` → `resolved_at` 소요 초. **시정률 지표의 원천**."""

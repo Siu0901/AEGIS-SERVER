@@ -352,6 +352,8 @@ def test_event_summary_carries_confirmed_at() -> None:
         "detected_at": "2026-08-14T05:37:02.183Z",
         "confirmed_at": "2026-08-14T05:37:03.005Z",
         "alerted_at": "2026-08-14T05:37:03.010Z",
+        "last_alerted_at": "2026-08-14T05:37:03.010Z",
+        "note": None,
         "resolved_at": None,
         "resolution_sec": None,
         "alert_count": 1,
@@ -363,6 +365,25 @@ def test_event_summary_carries_confirmed_at() -> None:
     summary = EventSummary.model_validate(payload)
     assert summary.confirmed_at is not None
     assert summary.detected_at < summary.confirmed_at < summary.alerted_at  # type: ignore[operator]
+    # §4.1 목록 예시 그대로 — 최초와 최근이 같은 값으로 시작한다.
+    assert summary.last_alerted_at == summary.alerted_at
+    assert summary.note is None
+
+
+def test_event_summary_field_set_matches_spec() -> None:
+    """§4.1 목록 예시에 있는 칸이 전부 있고, 없는 칸을 만들지 않았다.
+
+    `last_alerted_at` · `note` 는 §6 컬럼으로 먼저 생겼고 응답에는 없어서 **저장은
+    되지만 다시 읽을 수 없던** 시기가 있었다. 명세서가 §4.1 에 추가하면서 해소됐고,
+    이 테스트가 다시 벌어지는 것을 막는다.
+    """
+    listed = {
+        "event_id", "cam_id", "track_id", "violation_type", "zone_id", "status",
+        "detected_at", "confirmed_at", "alerted_at", "last_alerted_at", "note",
+        "resolved_at", "resolution_sec", "alert_count", "min_distance_m", "posture",
+        "repeat_count_7d", "thumbnail_url",
+    }  # fmt: skip
+    assert set(EventSummary.model_fields) == listed
 
 
 #: API명세서 §4.2 `GET /metrics/summary` 응답 예시 전량.
@@ -370,7 +391,7 @@ METRICS_SUMMARY_EXAMPLE: dict[str, Any] = {
     "period": "today",
     "correction_rate": 0.87,
     "undetermined_rate": 0.05,
-    "total_violations": 23,
+    "total_violations": 24,
     "resolved": 20,
     "resolved_late": 1,
     "unresolved": 2,
@@ -385,6 +406,23 @@ def test_metrics_summary_example_parses() -> None:
     summary = MetricsSummary.model_validate(METRICS_SUMMARY_EXAMPLE)
     assert summary.resolved_late == 1
     assert summary.correction_rate == 0.87
+
+
+def test_metrics_summary_example_is_internally_consistent() -> None:
+    """§4.2 예시 안에서 산술이 성립한다 — 네 버킷의 합이 `total_violations` 다.
+
+    예시가 `23` 이던 시절에는 응답만 보고 검산하면 한 건이 사라졌다. 지표를 외부에서
+    검증할 수 있어야 한다는 것이 §6.7 의 전제이므로, 예시부터 그 검산을 통과해야 한다.
+    """
+    summary = MetricsSummary.model_validate(METRICS_SUMMARY_EXAMPLE)
+    denominator = summary.resolved + summary.resolved_late + summary.unresolved
+    assert denominator + summary.undetermined == summary.total_violations
+    assert summary.correction_rate == pytest.approx(summary.resolved / denominator, abs=0.005)
+    # `undetermined_rate` 는 예시가 `0.05`(1/24 = 0.042)로 어림한 값이라 정확히 맞지
+    # 않는다. 건수는 잠그되 비율까지 소수점으로 잠그지는 않는다 — 예시의 반올림을
+    # 계약으로 굳히면 명세서 표기를 다듬을 때마다 테스트가 깨진다.
+    assert summary.undetermined_rate is not None
+    assert 0.0 < summary.undetermined_rate < 0.1
 
 
 def test_metrics_summary_field_set_matches_spec() -> None:
@@ -860,8 +898,9 @@ METRIC_EXAMPLE: dict[str, Any] = {
     "period": "today",
     "correction_rate": 0.87,
     "undetermined_rate": 0.05,
-    "total_violations": 23,
+    "total_violations": 24,
     "resolved": 20,
+    "resolved_late": 1,
     "unresolved": 2,
     "undetermined": 1,
     "avg_resolution_sec": 41,

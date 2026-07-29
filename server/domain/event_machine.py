@@ -62,6 +62,7 @@ from aegis_contracts import (
 )
 from aegis_contracts.enums import AlertLevel, Posture
 from aegis_vision.clock import Clock
+from server.domain.alerts import AlertIntent
 from server.domain.reassociation import LostTrack, match_lost_track
 
 __all__ = [
@@ -168,6 +169,8 @@ def build_candidate_event(
         detected_at=candidate.ts,
         confirmed_at=None,
         alerted_at=None,
+        last_alerted_at=None,
+        note=None,
         resolved_at=None,
         resolution_sec=None,
         alert_count=0,
@@ -211,6 +214,13 @@ class Effect:
     """`update` 일 때 DB 에 쓸 컬럼들."""
     message: SpecModel | None = None
     """대시보드에 내보낼 §5.2 메시지. 없으면 알릴 것이 없는 갱신이다."""
+    alert: AlertIntent | None = None
+    """지금 소리를 내고 경광등을 켜라는 지시(FN-ALM-01 · 02). 확정·재경고에만 실린다.
+
+    **이 자리를 상태 문자열로 대신하지 않는다.** 집행 계층이 `changes["status"]` 를 보고
+    "alerted 니까 경고겠지"라고 되짚으면, 재시작 복구처럼 상태만 다시 쓰는 경로에서도
+    방송이 나간다 — 이미 지나간 위반에 뒤늦게 스피커가 울리는 것이 그 결과다.
+    """
     note: str = ""
     """사람이 읽을 한 줄. 로그로 나간다."""
 
@@ -317,10 +327,11 @@ class EventMachine:
         모르는 값을 추정해 채우면 확정·해소가 관측 없이 일어난다. `lost` 의 유예도
         `at` 부터 다시 센다(더 늦게 종결되는 쪽이 안전하다).
 
-        쿨다운 기준(`last_alerted_at`)은 `alerted_at` 으로 채운다 — §4.1 응답에는
-        `last_alerted_at` 이 없어 여기까지 오지 않기 때문이다. 최초 시각이 최근
-        시각보다 이르므로 **재경고가 늦어지는 쪽**으로만 틀리며, 반대 방향(관측
-        없이 즉시 재경고)으로는 틀리지 않는다.
+        쿨다운 기준(`last_alerted_at`)은 **저장된 값 그대로** 쓴다. §4.1 응답에 그 칸이
+        생기기 전에는 `alerted_at`(최초)으로 대신 채웠는데, 그러면 재경고를 여러 번 한
+        이벤트가 재시작 직후 쿨다운을 이미 넘긴 것으로 보여 **복구하자마자 재경고가
+        나갔다.** 값이 비어 있을 때만(경고 전이었거나 구버전 행) `alerted_at` 으로
+        떨어진다 — 그쪽은 재경고가 늦어지는 방향으로만 틀린다.
         """
         for summary in events:
             if summary.status not in _OPEN_STATUSES:
@@ -336,7 +347,7 @@ class EventMachine:
                 last_tick_at=at,
                 last_seen_at=at,
                 alerted_at=summary.alerted_at,
-                last_alerted_at=summary.alerted_at,
+                last_alerted_at=summary.last_alerted_at or summary.alerted_at,
                 lost_at=at if summary.status is EventStatus.LOST else None,
                 status_before_lost=(
                     EventStatus.ALERTED if summary.status is EventStatus.LOST else None
@@ -634,7 +645,7 @@ class EventMachine:
                 if event.observed_s >= policies.confirm_duration_s:
                     return self._to_alerted(event, at)
                 if event.cleared_s >= policies.confirm_duration_s:
-                    return self._to_dropped(event, "확정 전 위반 소멸")
+                    return self._to_dropped(event, at, "확정 전 위반 소멸")
                 return []
             case EventStatus.ACTIVE:
                 # 확정과 경고 발동은 같은 순간이지만(§4.2 "즉시"), 재시작 복구처럼
@@ -656,9 +667,9 @@ class EventMachine:
     def _to_alerted(self, event: OpenEvent, at: datetime) -> list[Effect]:
         """FN-EVT-02 — 확정과 동시에 경고를 발동한다(요구: 1초 이내).
 
-        **M3 에서는 소리를 내지 않는다.** wav 재생과 MQTT 발행은 M4(FN-ALM-01·02)이고,
-        여기서는 "경고를 발동했다"는 사실만 기록한다 — `alerted_at` 과 `alert_count`가
-        시정률의 기준점이므로 그 기록이 먼저다.
+        `alerted_at` · `alert_count` 를 기록하고, 같은 `Effect` 에 **경고 의도**를 싣는다.
+        기록이 먼저인 것은 시정률의 기준점이 그 시각이기 때문이고, 소리와 경광등은
+        집행 계층(`server/app/alert_service.py`)이 그 의도를 보고 낸다.
         """
         confirmed = event.status is EventStatus.CANDIDATE
         event.status = EventStatus.ALERTED
@@ -701,9 +712,30 @@ class EventMachine:
                 track_id=event.track_id,
                 changes=changes,
                 message=message,
+                alert=self._intent(event, at),
                 note=f"확정·경고 발동 {event.event_id} — {event.violation_type.value}",
             )
         ]
+
+    def _intent(self, event: OpenEvent, at: datetime) -> AlertIntent:
+        """FN-ALM-01 · 02 — 이 전이가 내보낼 경고 한 번. **`alert_count` 증가 뒤에 부른다.**
+
+        `at` 은 **관측 시각**이다(`frame.ts` · `candidate.ts`). 서버 수신 시각을 쓰면
+        확정 → 방송 1초 이내(FN-ALM-01)를 재는 기준점에 네트워크 지연이 섞인다.
+
+        `repeat` 은 상태가 아니라 **횟수**로 정한다. 재시작 직후 `active` 로 복구된
+        이벤트가 첫 경고를 내보내는 경로가 있는데, 상태로 판별하면 그 첫 경고가
+        재경고로 나가 ESP32 가 상습 패턴을 점멸한다.
+        """
+        return AlertIntent(
+            event_id=event.event_id,
+            cam_id=event.cam_id,
+            violation_type=event.violation_type,
+            level=SEVERITY[event.violation_type],
+            zone_id=event.zone_id,
+            repeat=event.alert_count > 1,
+            at=at,
+        )
 
     def _to_re_alerted(self, event: OpenEvent, at: datetime) -> list[Effect]:
         """FN-EVT-04 — 미해소 상태로 쿨다운이 지났다. 재경고하고 횟수를 센다."""
@@ -729,6 +761,7 @@ class EventMachine:
                     last_alerted_at=at,
                     alert_count=event.alert_count,
                 ),
+                alert=self._intent(event, at),
                 note=f"재경고 {event.event_id} — {event.alert_count}회",
             )
         ]
@@ -764,7 +797,7 @@ class EventMachine:
         if event.status is EventStatus.CANDIDATE:
             # 확정 전 후보는 `dropped` 로 종결한다. `expired` 로 보내면 판정 불가율이
             # "위반이었는지도 모르는 것들"로 부풀어 지표의 뜻이 흐려진다(§4.2).
-            return self._to_dropped(event, "확정 전 트랙 소실")
+            return self._to_dropped(event, at, "확정 전 트랙 소실")
         if event.status is EventStatus.LOST:
             return []
         event.status_before_lost = (
@@ -811,7 +844,7 @@ class EventMachine:
             )
         ]
 
-    def _to_dropped(self, event: OpenEvent, why: str) -> list[Effect]:
+    def _to_dropped(self, event: OpenEvent, at: datetime, why: str) -> list[Effect]:
         """§4.2 — 확정 전(`candidate`)에 조건이 사라졌다. **레코드를 남기고 종결한다.**
 
         후보가 `confirm_duration_s` 를 채우지 못하고 사라지는 일은 정상적으로 흔하다.
@@ -825,6 +858,10 @@ class EventMachine:
 
         `dropped` 는 종결 상태이므로 `_close` 로 상태머신에서 내린다 — 병합 키가
         풀리고, 지표에는 어느 쪽으로도 들어가지 않는다.
+
+        `dropped_at` 은 §6 이 신설한 종결 시각이다(`resolved_at` · `expired_at` 과 짝).
+        `detected_at` 만으로는 후보가 **얼마나 버티다** 사라졌는지 알 수 없어
+        `confirm_duration_s` 튜닝에 쓸 수 없다.
         """
         event.status = EventStatus.DROPPED
         self._close(event)
@@ -834,7 +871,7 @@ class EventMachine:
                 event_id=event.event_id,
                 cam_id=event.cam_id,
                 track_id=event.track_id,
-                changes={"status": EventStatus.DROPPED.value},
+                changes={"status": EventStatus.DROPPED.value, "dropped_at": at},
                 message=EventUpdatedMsg(
                     event_id=event.event_id,
                     status=EventStatus.DROPPED,

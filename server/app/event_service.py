@@ -11,9 +11,13 @@
 | 종결 전이마다 §5.3 `metric` 재발행 | FN-SYS-04 |
 | 기동 시 열려 있던 이벤트 복구 | 재시작이 지표를 왜곡하지 않게 |
 | 수동 정정 (FN-EVT-05) | API명세서 §4.1 `PATCH` |
+| 경고 집행 지시 (`AlertIntent` → wav · MQTT) | FN-ALM-01 · 02 |
+| 확정 시 클립 예약 · 키프레임 (FN-REC-03) | 기능명세서 §4.4 |
 
-**경고 발동(wav · MQTT)은 여기 없다.** M4(FN-ALM-01·02)이며, M3 은 "경고를 발동했다"는
-사실(`alerted_at` · `alert_count`)만 기록한다 — 시정률의 기준점이 그 기록이기 때문이다.
+**소리를 내는 것도 클립을 뽑는 것도 여기가 직접 하지 않는다.** 이 층은 상태머신의
+판단을 해당 부품(`alert_service` · `infra/clip`)으로 넘길 뿐이다. 순서는 정해져 있다 —
+**저장 · 발행 · 경고가 먼저이고 클립 예약이 나중**이다. 클립은 20초 뒤에 뽑히는 것이라
+1초 예산과 무관하지만, 그 앞에 두면 DB 왕복 한 번이 방송 앞을 막는다.
 """
 
 from __future__ import annotations
@@ -38,6 +42,7 @@ from aegis_contracts import (
     TrackLostMsg,
 )
 from aegis_vision.clock import Clock
+from server.app.alert_service import AlertSink
 from server.domain.event_machine import Effect, EventMachine
 from server.domain.metrics import MetricsRow, summarize
 from server.domain.overlay import LiveTracks
@@ -45,6 +50,7 @@ from server.domain.overlay import LiveTracks
 __all__ = [
     "POLICY_REFRESH_SECONDS",
     "TICK_SECONDS",
+    "ClipScheduler",
     "EventService",
     "EventStore",
     "PolicyReader",
@@ -91,6 +97,12 @@ class Publisher(Protocol):
     async def __call__(self, message: SpecModel) -> None: ...
 
 
+class ClipScheduler(Protocol):
+    """확정 시 클립을 예약하는 부품. 구현은 `server/infra/clip/service.py`. FN-REC-03"""
+
+    async def on_confirmed(self, event_id: str, cam_id: int, confirmed_at: datetime) -> None: ...
+
+
 def today_window(now: datetime) -> tuple[datetime, datetime]:
     """`period = "today"` 의 구간. 저장이 UTC 이므로 **UTC 자정**으로 끊는다(§1.2).
 
@@ -112,6 +124,8 @@ class EventService:
         clock: Clock,
         store: EventStore | None = None,
         policies: PolicyReader | None = None,
+        alerts: AlertSink | None = None,
+        clips: ClipScheduler | None = None,
     ) -> None:
         self._machine = machine
         self._tracks = tracks
@@ -119,10 +133,17 @@ class EventService:
         self._clock = clock
         self._store = store
         self._policies = policies
+        self._alerts = alerts
+        self._clips = clips
 
     @property
     def machine(self) -> EventMachine:
         return self._machine
+
+    @property
+    def alerts(self) -> AlertSink | None:
+        """경고 집행자. 수동 방송·일시중지(FN-ALM-04 · 05)가 같은 것을 쓴다."""
+        return self._alerts
 
     # -- 기동 -----------------------------------------------------------
 
@@ -305,6 +326,11 @@ class EventService:
             await self._persist(effect)
             if effect.message is not None:
                 await self._publish(effect.message)
+            # 경고가 먼저다(FN-ALM-01 · 1초 이내). 클립 예약은 20초 뒤에 실행될 잡이라
+            # 이 순서가 바뀌면 예약 기록의 DB 왕복이 방송 앞을 막는다.
+            if effect.alert is not None:
+                await self._fire(effect)
+            await self._schedule_clip(effect)
             touched.add((effect.cam_id, effect.track_id))
             status = effect.changes.get("status")
             terminal = terminal or status in {state.value for state in _TERMINAL}
@@ -312,6 +338,40 @@ class EventService:
             self._tracks.set_events(cam_id, track_id, self._machine.open_events(cam_id, track_id))
         if terminal:
             await self._publish_metric()
+
+    async def _fire(self, effect: Effect) -> None:
+        """FN-ALM-01 · 02 — 상태머신이 낸 경고 지시를 집행자에게 넘긴다.
+
+        **실패해도 전이를 되돌리지 않는다.** 경고가 나가지 않은 것은 심각하지만
+        (집행자가 ERROR 로 남기고 집계한다), 그 때문에 이벤트를 되돌리면 `alerted_at`
+        이 사라져 시정률의 기준점이 없어진다 — 위반 사실 자체는 관측된 것이다.
+        """
+        if effect.alert is None:
+            return
+        if self._alerts is None:
+            log.error(
+                "경고 집행자가 없어 %s 의 방송·경광등이 나가지 않았다 (조립 문제)",
+                effect.event_id,
+            )
+            return
+        try:
+            await self._alerts.fire(effect.alert)
+        except Exception:
+            log.exception("경고 집행이 실패했다 — %s", effect.event_id)
+
+    async def _schedule_clip(self, effect: Effect) -> None:
+        """FN-REC-03 — 확정된 이벤트의 키프레임을 뽑고 클립 추출을 예약한다.
+
+        `confirmed_at` 이 `changes` 에 실린 전이가 **확정 그 순간**이다. 재경고나 해소는
+        이 칸을 건드리지 않으므로 예약이 두 번 걸리지 않는다.
+        """
+        confirmed_at = effect.changes.get("confirmed_at")
+        if confirmed_at is None or self._clips is None:
+            return
+        try:
+            await self._clips.on_confirmed(effect.event_id, effect.cam_id, confirmed_at)
+        except Exception:
+            log.exception("클립 예약이 실패했다 — %s", effect.event_id)
 
     async def _persist(self, effect: Effect) -> None:
         if self._store is None:
@@ -335,9 +395,8 @@ class EventService:
         except (OSError, RuntimeError, ValueError) as exc:
             log.warning("지표를 다시 계산하지 못했다: %s", exc)
             return
-        # §5.3 페이로드에는 `resolved_late` 칸이 없다. 화면이 시정률을 다시 계산하지
-        # 않고 서버가 보낸 값을 그대로 쓰므로 문제되지 않으며, 늦은 시정 건수가
-        # 필요하면 `GET /metrics/summary` 를 읽는다.
+        # §5.3 이 `resolved_late` 를 실으면서 화면이 받은 숫자만으로 시정률을 검산할
+        # 수 있게 됐다 — 네 버킷의 합이 `total_violations` 이고, 분자는 `resolved` 다.
         await self._publish(
             MetricMsg(
                 period=summary.period,
@@ -345,6 +404,7 @@ class EventService:
                 undetermined_rate=summary.undetermined_rate,
                 total_violations=summary.total_violations,
                 resolved=summary.resolved,
+                resolved_late=summary.resolved_late,
                 unresolved=summary.unresolved,
                 undetermined=summary.undetermined,
                 avg_resolution_sec=summary.avg_resolution_sec,

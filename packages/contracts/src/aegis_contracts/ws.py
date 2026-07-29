@@ -228,9 +228,9 @@ class MetricMsg(SpecModel):
 
     `correction_rate` 와 `undetermined_rate` 는 화면에서 **항상 병기**한다.
 
-    §5.3 페이로드에는 `resolved_late`(§4.2 · §6.7)가 없다. 화면이 시정률을 다시
-    계산하지 않고 서버가 보낸 값을 그대로 쓰기 때문이며, 늦은 시정 건수가 필요하면
-    `GET /metrics/summary` 를 읽는다.
+    `resolved_late`(§4.2 · §6.7)도 함께 실린다. 이것이 없으면 화면이 받은 숫자만으로
+    `correction_rate = resolved / (resolved + resolved_late + unresolved)` 를 확인할 수
+    없어, 서버가 보낸 비율을 검산 없이 믿어야 한다.
     """
 
     type: Literal["metric"] = "metric"
@@ -241,6 +241,8 @@ class MetricMsg(SpecModel):
     """모집단이 비면 `null`."""
     total_violations: int
     resolved: int
+    resolved_late: int
+    """해소됐으나 `resolve_window_s` 를 넘긴 건수. **분모에만** 들어간다(§6.7)."""
     unresolved: int
     undetermined: int
     avg_resolution_sec: int

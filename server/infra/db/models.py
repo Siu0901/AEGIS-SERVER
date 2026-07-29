@@ -19,6 +19,7 @@ from sqlmodel import Field, SQLModel
 
 __all__ = [
     "EMBEDDING_DIM",
+    "AlertSound",
     "Anomaly",
     "Camera",
     "Event",
@@ -70,6 +71,11 @@ class Event(SQLModel, table=True):
 
     lost_at: datetime | None = Field(default=None, sa_column=_timestamptz())
     expired_at: datetime | None = Field(default=None, sa_column=_timestamptz())
+    dropped_at: datetime | None = Field(
+        default=None,
+        sa_column=_timestamptz(),
+        description="확정 전 소멸 시각. 종결 시각 셋(resolved·expired·dropped) 중 하나",
+    )
 
     reassoc_count: int = Field(default=0, description="재결합 횟수")
     prev_track_ids: list[int] = Field(
@@ -189,6 +195,33 @@ class VehicleClassRow(SQLModel, table=True):
     class_name: str = Field(primary_key=True)
     danger_radius_m: float = Field(default=3.0, description="지게차 기본 3.0m")
     active: bool = Field(default=True)
+
+
+class AlertSound(SQLModel, table=True):
+    """위반 유형 → 경고 음원 매핑. FN-ALM-01 · FN-CFG-03
+
+    ⚠ **기능명세서 §6 에 없는 테이블이다.** 명세서는 FN-CFG-03(경고 음원 매핑 · P0)과
+    "위반 유형에 **사전 매핑된** 음원 파일"(§4.3)을 요구하는데 그 매핑을 둘 자리를
+    데이터 모델에 정의하지 않았다. 코드에 파일명을 박으면 절대규칙 6(하드코딩 금지)과
+    FN-CFG-03(화면에서 지정) 둘 다 깨지므로 여기 둔다.
+    `docs/INDEX.md` 「명세서 확인 필요」에 올려 두었다 — §6 에 추가할지는 사람이 정한다.
+
+    `key` 는 두 가지로 쓰인다.
+
+    | 값 | 쓰임 |
+    |---|---|
+    | `no_helmet` · `zone_intrusion` · `proximity` · `fall` | 자동 경고(FN-ALM-01) |
+    | 그 밖의 이름 (`custom_notice` 등) | 수동 방송(FN-ALM-04 · §4.5 `sound`) |
+
+    한 테이블로 둔 이유: 수동 방송의 `sound` 도 결국 "이름 → 파일" 조회다. 나누면 같은
+    파일이 두 곳에 등록될 수 있고, 어느 쪽이 재생되는지가 호출 경로에 따라 갈린다.
+    """
+
+    __tablename__ = "alert_sounds"
+
+    key: str = Field(primary_key=True, description="위반 유형 또는 수동 방송 음원 이름")
+    filename: str = Field(description="assets/audio/ 기준 파일명. 경로가 아니라 파일명이다")
+    active: bool = Field(default=True, description="꺼두면 그 유형은 방송하지 않는다")
 
 
 class Policy(SQLModel, table=True):

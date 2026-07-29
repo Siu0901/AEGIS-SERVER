@@ -21,6 +21,7 @@ from .conftest import (
     FakeRecClient,
     FakeWatcher,
     FakeZoneStore,
+    make_alerts,
     make_settings,
 )
 
@@ -45,6 +46,8 @@ def event(
         "detected_at": EARLIER,
         "confirmed_at": EARLIER,
         "alerted_at": EARLIER,
+        "last_alerted_at": EARLIER,
+        "note": None,
         "resolved_at": None,
         "resolution_sec": resolution_sec,
         "alert_count": 1,
@@ -76,6 +79,7 @@ def build(store: FakeEventStore) -> TestClient:
         events=store,
         zones=FakeZoneStore(),
         policies=FakePolicyStore(),
+        alerts=make_alerts(FakeClock(NOW)),
     )
     return TestClient(app)
 
@@ -115,6 +119,7 @@ def test_summary_without_a_store_is_503_not_zeroes() -> None:
         events=FakeEventStore(),
         zones=FakeZoneStore(),
         policies=FakePolicyStore(),
+        alerts=make_alerts(FakeClock(NOW)),
     )
     # 조립이 잘못된 상황을 만든다. 저장소를 아예 주지 않으면 실제 DB 엔진이 만들어져
     # 테스트가 바깥 프로세스에 붙는다(conftest 서두의 원칙).
