@@ -90,9 +90,51 @@
 }
 
 .live__hint {
-  margin-left: auto;
   color: var(--text-dim);
   font-size: 11.5px;
+}
+
+.live__spacer {
+  margin-left: auto;
+}
+
+/* ── 정합 진단 (FN-UI-02, 개발용) ─────────────────────
+   영상 위에 겹치되 박스를 가리지 않도록 좌상단에 붙인다. 토글이 꺼져 있으면
+   컴포넌트 자체가 없으므로 계산도 돌지 않는다. */
+.tile__debug {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 3;
+  display: grid;
+  gap: 2px;
+  padding: 7px 9px;
+  border-radius: var(--radius);
+  background: rgba(0, 0, 0, 0.74);
+  color: #e6edf3;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.45;
+  pointer-events: none;
+}
+
+.tile__debug > div {
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.tile__debug span {
+  color: var(--text-dim);
+}
+
+.tile__debug b {
+  font-weight: 600;
+}
+
+/* 기대와 다른 값. 차이가 적용 버퍼와 어긋나거나 좌표 도착이 1초 넘게 밀린 경우다. */
+.tile__debug--bad b {
+  color: var(--danger);
 }
 
 /* ── 가장자리 알림 ───────────────────────────────────

@@ -10,7 +10,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import type { CameraStatus, OverlayPolicies, StreamState, Zone } from '../types/system'
-import OverlayCanvas from './OverlayCanvas'
+import OverlayCanvas, { type OverlayDebug } from './OverlayCanvas'
 import {
   OVERLAY_BUFFER_POLICY_KEY,
   preferenceFromLocation,
@@ -51,6 +51,8 @@ type Props = {
   policies: OverlayPolicies | null
   /** 캐시된 금지구역(§4.5 · §5.4). 라벨의 구역 표시 이름에 쓴다. */
   zones: Zone[]
+  /** 개발용 정합 진단 표시 (FN-UI-02). 꺼져 있으면 계산도 하지 않는다. */
+  debug: boolean
 }
 
 export default function CameraTile({
@@ -60,12 +62,14 @@ export default function CameraTile({
   onToggleSolo,
   policies,
   zones,
+  debug,
 }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [kind, setKind] = useState<PlaybackKind>('none')
   const [error, setError] = useState<string | null>(null)
   const [displayAt, setDisplayAt] = useState<string>('—')
   const [size, setSize] = useState<string>('—')
+  const [probe, setProbe] = useState<OverlayDebug | null>(null)
 
   const path = `cam${camera.cam_id}/main`
   const live = camera.main_state === 'ok'
@@ -150,8 +154,11 @@ export default function CameraTile({
             kind={kind}
             policies={policies}
             zones={zones}
+            onDebug={debug ? setProbe : undefined}
           />
         )}
+
+        {debug && live && <DebugPanel probe={probe} policies={policies} />}
 
         {/* 영상 위를 덮는 클릭 판. `video` 에 직접 걸면 브라우저 기본 컨트롤과 겹친다. */}
         <button
@@ -231,6 +238,69 @@ export default function CameraTile({
 
       {error && <p className="tile__error">{error}</p>}
     </figure>
+  )
+}
+
+/**
+ * 개발용 정합 진단 표시 (FN-UI-02).
+ *
+ * **버퍼 값은 실제로 적용된 것을 그대로 받아 적는다.** 화면에 따로 계산한 값을 적으면
+ * 버퍼가 잘못 걸렸을 때 그 사실이 표시에 가려진다 — 실제로 그 착각 때문에 좌표 지연
+ * 2.8초의 원인을 한 번 놓쳤다.
+ *
+ * `차이` 는 `표시 시각 − 그린 좌표 ts` 이고 **적용 버퍼와 같아야 한다.** 다르면 버퍼가
+ * 의도한 대로 걸리지 않은 것이다. 영상과의 실제 정합 오차는 이 값이 아니라
+ * marker 검증(`uv run tasks.py marker`)으로 잰다.
+ */
+function DebugPanel({
+  probe,
+  policies,
+}: {
+  probe: OverlayDebug | null
+  policies: OverlayPolicies | null
+}) {
+  if (!policies) {
+    return <div className="tile__debug">정책값 미수신 — 오버레이를 그리지 않는다</div>
+  }
+  if (!probe) {
+    return <div className="tile__debug">프레임 콜백 대기 중…</div>
+  }
+  const matched = Math.abs((probe.deltaMs ?? 0) - probe.bufferMs) < 1
+  return (
+    <div className="tile__debug">
+      <div>
+        <span>표시 프레임</span>
+        <b>{formatUtc(probe.displayAt)}</b>
+      </div>
+      <div>
+        <span>그린 좌표 ts</span>
+        <b>{probe.overlayTs === null ? '없음' : formatUtc(probe.overlayTs)}</b>
+      </div>
+      <div className={matched ? '' : 'tile__debug--bad'}>
+        <span>차이</span>
+        <b>{probe.deltaMs === null ? '—' : `${Math.round(probe.deltaMs)} ms`}</b>
+      </div>
+      <div>
+        <span>적용 버퍼</span>
+        <b>
+          {Math.round(probe.bufferMs)} ms · {probe.bufferKey}
+        </b>
+      </div>
+      <div>
+        <span>재생 경로</span>
+        <b>{probe.kind}</b>
+      </div>
+      <div className={(probe.arrivalLagMs ?? 0) > 1000 ? 'tile__debug--bad' : ''}>
+        <span>좌표 도착 지연</span>
+        <b>{probe.arrivalLagMs === null ? '수신 없음' : `${Math.round(probe.arrivalLagMs)} ms`}</b>
+      </div>
+      <div>
+        <span>버퍼 적재 / 낡음</span>
+        <b>
+          {probe.buffered}건 · {probe.ageMs === null ? '—' : `${Math.round(probe.ageMs)} ms`}
+        </b>
+      </div>
+    </div>
   )
 }
 

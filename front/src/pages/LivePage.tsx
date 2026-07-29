@@ -61,7 +61,11 @@ export default function LivePage() {
 
   const cameras = status?.cameras ?? []
 
-  // 확대 상태는 URL 이 원본이다(`/live?cam=1`). 컴포넌트 state 에 두면 새로고침에
+  // 개발용 정합 진단 표시. 확대 상태와 같이 URL 에 둔다 — 새로고침해도 유지되고,
+  // 어긋난 화면을 캡처해 공유할 때 링크만으로 같은 상태를 재현할 수 있다.
+  const debug = searchParams.get('debug') === '1'
+
+  // 확대 상태도 URL 이 원본이다(`/live?cam=1`). 컴포넌트 state 에 두면 새로고침에
   // 날아간다 — 시연 중 실수로 새로고침해도 화면이 돌아가면 안 된다.
   const requested = Number(searchParams.get('cam'))
   const solo =
@@ -91,10 +95,6 @@ export default function LivePage() {
     return () => window.removeEventListener('keydown', onKey)
   }, [solo, show])
 
-  // **구독은 확대 여부와 무관하다.** 화면에서 내린 채널의 이벤트도 계속 받는다 —
-  // 보이지 않는 것과 감시가 멈추는 것은 다르다. 소켓 자체도 `subscribeDashboard` 가
-  // 화면 밖에서 하나로 유지하므로 타일을 내려도 끊기지 않는다.
-  // (`event_created` 는 M2 부터 실제로 흐른다. 그때까지 이 구독은 조용하다.)
   // 오버레이 지연 버퍼(§4.5). 값을 프론트에 적지 않는다(절대규칙 6).
   useEffect(() => subscribePolicies(setPolicies), [])
 
@@ -111,6 +111,11 @@ export default function LivePage() {
     return () => controller.abort()
   }, [])
 
+  // **구독은 확대 여부와 무관하다.** 화면에서 내린 채널의 이벤트도 계속 받는다 —
+  // 보이지 않는 것과 감시가 멈추는 것은 다르다. 소켓 자체도 `subscribeDashboard` 가
+  // 화면 밖에서 하나로 유지하므로 타일을 내려도 끊기지 않는다.
+  // (`event_created` 는 확정 판정이 생기는 M3 부터 흐른다. 그때까지 이 구독은
+  // `zone_updated` 만 처리한다.)
   useEffect(() => {
     return subscribeDashboard({
       onMessage: (message) => {
@@ -174,6 +179,20 @@ export default function LivePage() {
               {CAMERA_NAMES[camera.cam_id] ?? `카메라 ${camera.cam_id}`}
             </button>
           ))}
+          <span className="live__spacer" />
+          <button
+            type="button"
+            className={`live__view ${debug ? 'live__view--on' : ''}`}
+            onClick={() => {
+              const next = new URLSearchParams(searchParams)
+              if (debug) next.delete('debug')
+              else next.set('debug', '1')
+              setSearchParams(next, { replace: true })
+            }}
+            title="재생 프레임 시각 · 그린 좌표 ts · 차이 · 적용 버퍼를 타일에 표시한다"
+          >
+            정합 진단
+          </button>
           {solo !== null && <span className="live__hint">Esc 로 분할 보기</span>}
         </div>
 
@@ -187,6 +206,7 @@ export default function LivePage() {
               onToggleSolo={() => show(solo === camera.cam_id ? null : camera.cam_id)}
               policies={policies}
               zones={zones.filter((zone) => zone.cam_id === camera.cam_id)}
+              debug={debug}
             />
           ))}
         </div>

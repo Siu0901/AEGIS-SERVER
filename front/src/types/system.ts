@@ -157,8 +157,15 @@ export function isEventCreatedMsg(message: DashboardMessage): message is EventCr
 /** 위반 유형. `person`/`vehicle` 2클래스와 달리 이쪽은 4종이다 (§2.2 · §4.1). */
 export type ViolationType = 'no_helmet' | 'zone_intrusion' | 'proximity' | 'fall'
 
-/** 오버레이 박스의 경고 단계 (§5.1). **`candidate` 는 없다** — 상태머신은 M3 다. */
-export type AlertState = 'active' | 'alerted' | 're_alerted' | 'lost'
+/**
+ * 오버레이 박스의 경고 단계 (§5.1).
+ *
+ * **`candidate` 와 `null` 은 다르다.** `candidate` 는 위반 조건이 관측됐으나 아직
+ * 확정 전이고, `null` 은 이 트랙에 진행 중 이벤트가 아예 없다는 뜻이다. 대시보드는
+ * `candidate` 를 **위반 색(적색)으로 그리지 않는다** — 확정 전이므로 위반으로 단정할
+ * 수 없다. 다만 확정 진행 중임은 구분 가능하게 표시한다.
+ */
+export type AlertState = 'candidate' | 'active' | 'alerted' | 're_alerted' | 'lost'
 
 /** 2단계 분류 결과. `unknown` 은 존재하지 않는다 (§6.3). */
 export type HelmetState = 'on' | 'off'

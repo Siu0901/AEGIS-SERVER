@@ -11,11 +11,16 @@
  * | 지게차 | 앰버 | `지게차 #1 · 이동 중` |
  * | 근접 거리선 | 적색 점선 + 거리 라벨 | `3.2 m` |
  *
+ * **확정 전(`alert_state === 'candidate'`)은 적색으로 그리지 않는다** (§5.1).
+ * 위반 조건이 관측됐을 뿐 확정된 것이 아니므로 위반으로 단정할 수 없다. 청록을
+ * 유지하되 **점선 테두리 + `확정 중` 라벨**로 진행 중임을 드러낸다 — 색을 바꾸지
+ * 않는 이유는 적색이 "경고가 나갔다"는 뜻으로 굳어져야 하기 때문이다.
+ *
  * **박스는 `person` 과 `vehicle` 에만 그린다.** 안전모에는 별도 bbox 가 없다 —
  * 1단계 감지는 2클래스뿐이고 안전모는 2단계 분류 결과라 사람 박스의 색과 라벨로 표현한다.
  *
- * **위반 여부를 여기서 추론하지 않는다.** `violations` 를 그대로 읽는다. `helmet` 으로
- * 색을 정하면 `proximity` 와 `fall` 을 놓친다.
+ * **위반 여부를 여기서 추론하지 않는다.** `violations` 와 `alert_state` 를 그대로 읽는다.
+ * `helmet` 으로 색을 정하면 `proximity` 와 `fall` 을 놓친다.
  *
  * 그리는 시점은 `requestVideoFrameCallback` 이다. 임의의 `requestAnimationFrame` 으로
  * 돌리면 "지금 화면에 나가는 프레임이 언제 찍힌 것인지"를 알 수 없어 ±100ms 를 맞출 수 없다.
@@ -30,8 +35,8 @@ import { OVERLAY_BUFFER_POLICY_KEY, type PlaybackKind } from './player'
 
 /** 기능명세서 §4.6 표시 규칙의 색. 시안의 팔레트를 따르되 용어는 명세서다. */
 const COLOR = {
-  normal: '#22d3ee', // 청록 — 정상 사람
-  violation: '#ef4444', // 적색 — 위반 사람 · 근접 거리선
+  normal: '#22d3ee', // 청록 — 정상 사람 · 확정 전 후보
+  violation: '#ef4444', // 적색 — 확정된 위반 사람 · 근접 거리선
   vehicle: '#f59e0b', // 앰버 — 지게차
 } as const
 
@@ -46,6 +51,29 @@ const VIOLATION_LABEL: Record<string, string> = {
 /** 쓰러짐 박스 점멸 주기(ms). 표시 효과일 뿐 판정과 무관하다. */
 const BLINK_PERIOD_MS = 700
 
+/** 디버그 표시 갱신 주기(ms). 매 프레임 setState 하면 렌더가 폭주한다. */
+const DEBUG_THROTTLE_MS = 200
+
+/** 실시간 관제 디버그 표시가 읽는 값 (FN-UI-02 정합 진단). */
+export type OverlayDebug = {
+  /** 지금 화면에 나가는 프레임의 표시 시각 (epoch ms). */
+  displayAt: number
+  /** 그 프레임에 맞춰 그린 오버레이의 `ts` (epoch ms). 그릴 것이 없으면 `null`. */
+  overlayTs: number | null
+  /** `displayAt − overlayTs`. **적용 버퍼와 같아야 한다** — 다르면 버퍼가 잘못 걸린 것이다. */
+  deltaMs: number | null
+  /** 실제로 적용한 버퍼 값(ms)과 그 정책 키. 하드코딩이 아니라 `GET /policies` 값이다. */
+  bufferMs: number
+  bufferKey: string
+  kind: PlaybackKind
+  /** 좌표 파이프라인 지연: 지금 − 가장 최근에 받은 `ts`. 커지면 엣지·서버 쪽 문제다. */
+  arrivalLagMs: number | null
+  /** 지연 버퍼에 쌓여 있는 프레임 수. */
+  buffered: number
+  /** 마지막 좌표가 낡은 정도(ms). `overlay_stale_ms` 초과면 흐리게 그린다. */
+  ageMs: number | null
+}
+
 type Props = {
   camId: number
   videoRef: React.RefObject<HTMLVideoElement | null>
@@ -55,9 +83,11 @@ type Props = {
   policies: OverlayPolicies | null
   /** 캐시된 금지구역. 라벨에 구역 표시 이름을 쓰기 위해서다(§5.1 · §5.4). */
   zones: Zone[]
+  /** 디버그 표시가 켜져 있을 때만 넘어온다. 꺼져 있으면 계산도 하지 않는다. */
+  onDebug?: (info: OverlayDebug) => void
 }
 
-export default function OverlayCanvas({ camId, videoRef, kind, policies, zones }: Props) {
+export default function OverlayCanvas({ camId, videoRef, kind, policies, zones, onDebug }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const bufferRef = useRef(new OverlayBuffer())
 
@@ -69,6 +99,8 @@ export default function OverlayCanvas({ camId, videoRef, kind, policies, zones }
   kindRef.current = kind
   const zonesRef = useRef(zones)
   zonesRef.current = zones
+  const debugRef = useRef(onDebug)
+  debugRef.current = onDebug
 
   // 수신 — 화면 갱신과 분리한다. 소켓은 `subscribeDashboard` 가 하나로 유지하므로
   // 단독 확대 보기에서 타일을 내려도 다른 채널의 수신은 끊기지 않는다(FN-UI-02).
@@ -91,6 +123,7 @@ export default function OverlayCanvas({ camId, videoRef, kind, policies, zones }
 
     let handle = 0
     let cancelled = false
+    let lastDebugAt = 0
 
     const draw: VideoFrameRequestCallback = (_now, metadata) => {
       if (cancelled) return
@@ -104,10 +137,30 @@ export default function OverlayCanvas({ camId, videoRef, kind, policies, zones }
         // `expectedDisplayTime` 은 `performance.now()` 기준이다. `timeOrigin` 을 더하면
         // 그 프레임이 화면에 나가는 벽시계 시각이 되고, 거기서 경로별 버퍼를 빼면
         // 그 프레임이 카메라에서 찍힌 시각이 된다.
+        const bufferMs = settings[bufferKey]
         const displayAt = performance.timeOrigin + metadata.expectedDisplayTime
-        const targetAt = targetTimestamp(displayAt, settings[bufferKey])
+        const targetAt = targetTimestamp(displayAt, bufferMs)
         const sample = bufferRef.current.sample(targetAt)
         if (sample) render(context, canvas, video, sample, settings, zonesRef.current)
+
+        const report = debugRef.current
+        if (report && _now - lastDebugAt >= DEBUG_THROTTLE_MS) {
+          lastDebugAt = _now
+          const newest = bufferRef.current.newestAt
+          report({
+            displayAt,
+            overlayTs: sample ? targetAt : null,
+            deltaMs: sample ? displayAt - targetAt : null,
+            // **실제로 적용한 값**을 그대로 올린다. 화면에 다른 값을 적으면
+            // 버퍼가 잘못 걸렸을 때 그 사실이 표시에 가려진다.
+            bufferMs,
+            bufferKey,
+            kind: kindRef.current,
+            arrivalLagMs: newest === null ? null : Date.now() - newest,
+            buffered: bufferRef.current.size,
+            ageMs: sample ? sample.ageMs : null,
+          })
+        }
       }
 
       handle = video.requestVideoFrameCallback(draw)
@@ -187,7 +240,7 @@ function render(
     if (object.class === 'person') drawNearby(context, view, object)
   }
 
-  if (stale) drawStaleBadge(context, canvas, view, sample.ageMs)
+  if (stale) drawStaleBadge(context, view, sample.ageMs)
   context.restore()
 }
 
@@ -213,9 +266,12 @@ function drawPerson(
   person: OverlayPerson,
   zones: Zone[],
 ): void {
-  const fallen = person.violations.includes('fall')
-  const violating = person.violations.length > 0
-  const color = violating ? COLOR.violation : COLOR.normal
+  // **확정 전은 위반이 아니다** (§5.1). 색은 서버가 준 `alert_state` 로 가르고,
+  // `violations` 는 라벨에만 쓴다.
+  const pending = person.alert_state === 'candidate'
+  const confirmed = person.violations.length > 0 && !pending
+  const fallen = confirmed && person.violations.includes('fall')
+  const color = confirmed ? COLOR.violation : COLOR.normal
 
   context.save()
   if (fallen) {
@@ -225,8 +281,11 @@ function drawPerson(
   }
   const rect = box(view, person.bbox)
   context.strokeStyle = color
-  context.lineWidth = view.unit * (violating ? 2.2 : 1.6)
+  context.lineWidth = view.unit * (confirmed ? 2.2 : 1.6)
+  // 확정 전은 점선 — 색을 바꾸지 않고도 "아직 단정하지 않았다"가 읽힌다.
+  if (pending) context.setLineDash([view.unit * 5, view.unit * 4])
   context.strokeRect(rect.x, rect.y, rect.w, rect.h)
+  context.setLineDash([])
 
   // 접지점 — 거리·구역 판정의 기준점이다(§6.1). 어디를 기준으로 판정했는지 보여준다.
   const foot = point(view, person.foot_point)
@@ -235,18 +294,20 @@ function drawPerson(
   context.arc(foot.x, foot.y, view.unit * 1.6, 0, Math.PI * 2)
   context.fill()
 
-  label(context, view, rect.x, rect.y, color, personLabel(person, zones))
+  label(context, view, rect.x, rect.y, color, personLabel(person, zones, pending))
   context.restore()
 }
 
-function personLabel(person: OverlayPerson, zones: Zone[]): string {
+function personLabel(person: OverlayPerson, zones: Zone[], pending: boolean): string {
   const who = `작업자 #${person.track_id}`
   if (person.violations.length === 0) {
     // 구역 안에 있는 것 자체는 위반이 아니다(통행이 허용된 구역도 있다). 위치만 덧붙인다.
     const zone = zones.find((item) => item.zone_id === person.in_zone)
     return zone ? `${who} · 정상 (${zone.name})` : `${who} · 정상`
   }
-  return `${who} · ${person.violations.map((v) => VIOLATION_LABEL[v] ?? v).join(' · ')}`
+  const kinds = person.violations.map((v) => VIOLATION_LABEL[v] ?? v).join(' · ')
+  // 확정 전이라는 사실을 라벨에도 적는다. 점선만으로는 캡처 화면에서 구분이 안 된다.
+  return pending ? `${who} · ${kinds} 확정 중` : `${who} · ${kinds}`
 }
 
 function drawVehicle(
@@ -258,6 +319,15 @@ function drawVehicle(
   context.strokeStyle = COLOR.vehicle
   context.lineWidth = view.unit * 1.6
   context.strokeRect(rect.x, rect.y, rect.w, rect.h)
+
+  // 접지점은 **서버가 준 `anchor`** 다(§2.1). 마스크 하단에서 산출한 값이라
+  // 박스 아래변 중앙과 다르다 — 포크가 뻗었거나 적재물이 있으면 어긋난다.
+  const anchor = point(view, vehicle.anchor)
+  context.fillStyle = COLOR.vehicle
+  context.beginPath()
+  context.arc(anchor.x, anchor.y, view.unit * 1.6, 0, Math.PI * 2)
+  context.fill()
+
   label(
     context,
     view,
@@ -318,22 +388,16 @@ function label(
 }
 
 /** 좌표가 끊겼다는 표시. 흐린 박스만으로는 "사람이 안 보인다"와 구분되지 않는다. */
-function drawStaleBadge(
-  context: CanvasRenderingContext2D,
-  canvas: HTMLCanvasElement,
-  view: View,
-  ageMs: number,
-): void {
+function drawStaleBadge(context: CanvasRenderingContext2D, view: View, ageMs: number): void {
   context.save()
   context.globalAlpha = 1
   label(
     context,
     view,
     view.unit * 4,
-    view.unit * 4 + view.unit * 16,
+    view.unit * 20,
     '#f59e0b',
     `좌표 지연 ${(ageMs / 1000).toFixed(1)}초 — 위치를 신뢰할 수 없다`,
   )
   context.restore()
-  void canvas
 }
