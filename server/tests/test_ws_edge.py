@@ -12,7 +12,7 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
-from aegis_contracts import OverlayMsg, SystemStatus
+from aegis_contracts import EventStatus, OverlayMsg, SystemStatus
 from aegis_vision.clock import FakeClock
 from server.app.main import create_app
 
@@ -118,6 +118,20 @@ def build(store: FakeEventStore | None = None) -> tuple[TestClient, FakeEventSto
 def drain(dashboard: Any, expected: int) -> list[dict[str, Any]]:
     """대시보드로 나간 메시지 `expected` 건을 받아온다."""
     return [dashboard.receive_json() for _ in range(expected)]
+
+
+def next_overlay(dashboard: Any, limit: int = 5) -> dict[str, Any]:
+    """다음 `overlay`(§5.1)를 받아온다. 그 앞의 다른 종류는 건너뛴다.
+
+    한 소켓에 여러 종류가 흐르므로(§5) 상태 전이가 섞이면 `receive_json()` 한 번이
+    `event_updated` 를 집는다. 순서를 시험하는 자리가 아니므로 종류로 고른다.
+    """
+    for _ in range(limit):
+        payload: dict[str, Any] = dashboard.receive_json()
+        if payload.get("type") == "overlay":
+            return payload
+    msg = f"overlay 가 {limit}건 안에 오지 않았다"
+    raise AssertionError(msg)
 
 
 # --------------------------------------------------------------------------
@@ -293,24 +307,28 @@ def test_track_lost_takes_the_box_state_down() -> None:
         edge.send_json(CANDIDATE)
         edge.send_json(TRACK_LOST)
         edge.send_json(FRAME)
-        payload = dashboard.receive_json()
+        # 확정 전 소멸은 §5.2 `event_updated`(`dropped`)를 먼저 내보낸다.
+        payload = next_overlay(dashboard)
 
     assert payload["objects"][0]["violations"] == []
 
 
-def test_track_lost_before_confirmation_discards_the_candidate() -> None:
-    """확정 전 후보는 이벤트가 아니다. `expired` 로 종결하지 않고 지운다.
+def test_track_lost_before_confirmation_drops_the_candidate() -> None:
+    """확정 전 후보는 `dropped` 로 종결한다. **레코드를 지우지 않는다**(§4.2).
 
     `expired` 로 보내면 "위반이었는지도 확정되지 않은 것"이 판정 불가율(§6.7)에
-    섞여 그 숫자의 뜻이 흐려진다. 그렇다고 `candidate` 인 채로 두면 병합 키
-    (FN-EVT-01)를 계속 점유해 같은 트랙의 다음 위반이 이벤트를 못 만든다.
+    섞여 그 숫자의 뜻이 흐려진다. `candidate` 인 채로 두면 병합 키(FN-EVT-01)를
+    계속 점유해 같은 트랙의 다음 위반이 이벤트를 못 만든다. 지워버리면
+    `dropped / (dropped + 확정)` 을 셀 수 없어 `confirm_duration_s` 튜닝의 근거가
+    사라진다. 그래서 세 번째 종결 상태가 있다.
     """
     client, events = build()
     with client, client.websocket_connect("/ws/edge") as edge:
         edge.send_json(CANDIDATE)
         edge.send_json(TRACK_LOST)
-    assert events.deleted == [events.created[0].event_id]
-    assert events.items == []
+    event_id = events.created[0].event_id
+    assert [item.event_id for item in events.items] == [event_id]
+    assert events.items[0].status is EventStatus.DROPPED
 
 
 # --------------------------------------------------------------------------

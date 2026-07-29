@@ -31,10 +31,11 @@ expect:
       resolved_at_s: 16.0   # 선택
       resolution_sec: 12    # 선택 (±1 허용)
   metrics:
-    correction_rate: 1.0
+    correction_rate: 1.0    # 분모가 0이면 `null` 이다 (0.0 이 아니다 · §6.7)
     undetermined_rate: 0.0
     total_violations: 1
-    resolved: 1
+    resolved: 1             # 창 이내 해소 — 분자
+    resolved_late: 0        # 창 초과 해소 — 분모에만 (unresolved 와 섞지 않는다)
     unresolved: 0
     undetermined: 0
     fall_events: 0
@@ -112,8 +113,8 @@ class CaseStore:
 
     def __init__(self) -> None:
         self.events: dict[str, EventDetail] = {}
-        self.deleted: list[str] = []
         self.false_positive: set[str] = set()
+        self.notes: dict[str, str] = {}
         self._sequence = 0
 
     async def find_open_all(self) -> list[EventSummary]:
@@ -140,13 +141,14 @@ class CaseStore:
             # `EventDetail`(§4.1 응답)에는 이 필드가 없다. DB `events` 컬럼이므로
             # 저장소 쪽에서 기억하고 지표 집계에만 쓴다.
             self.false_positive.add(event_id)
-        for key in ("prev_track_ids", "reassoc_count", "lost_at", "expired_at"):
+        note = patch.pop("note", None)
+        if note is not None:
+            # `note` 도 §4.1 응답에 없는 DB 컬럼이다(§6). 실제 저장소가 기억하는지를
+            # 여기서도 같은 방식으로 흉내 낸다.
+            self.notes[event_id] = note
+        for key in ("prev_track_ids", "reassoc_count", "lost_at", "expired_at", "last_alerted_at"):
             patch.pop(key, None)
         self.events[event_id] = event.model_copy(update=patch)
-
-    async def delete(self, event_id: str) -> None:
-        self.deleted.append(event_id)
-        self.events.pop(event_id, None)
 
     async def get(self, event_id: str) -> EventDetail | None:
         return self.events.get(event_id)
@@ -395,11 +397,21 @@ def _check_event(want: Mapping[str, Any], got: EventDetail, result: CaseResult) 
 
 
 def _check_metrics(expected: Mapping[str, Any], got: MetricsSummary) -> list[str]:
+    """기대 지표와 대조한다.
+
+    **`null` 은 값이다.** 시정률은 분모가 0이면 `None` 이고(§6.7), 그것은 "0%"와
+    다른 사실이다. 그래서 "필드가 없다"와 "값이 `None` 이다"를 섞지 않는다 —
+    섞으면 `correction_rate: null` 기대가 오타 하나로도 통과해 버린다.
+    """
     problems: list[str] = []
     for key, wanted in expected.items():
-        actual = getattr(got, key, None)
-        if actual is None:
+        if key not in MetricsSummary.model_fields:
             problems.append(f"지표에 없는 항목이다: {key}")
+            continue
+        actual = getattr(got, key)
+        if wanted is None or actual is None:
+            if wanted is not actual:
+                problems.append(f"지표 {key}: 기대 {_shown(wanted)} · 실제 {_shown(actual)}")
             continue
         if isinstance(wanted, float) or isinstance(actual, float):
             if abs(float(actual) - float(wanted)) > RATE_TOLERANCE:
@@ -407,6 +419,16 @@ def _check_metrics(expected: Mapping[str, Any], got: MetricsSummary) -> list[str
         elif actual != wanted:
             problems.append(f"지표 {key}: 기대 {wanted} · 실제 {actual}")
     return problems
+
+
+def _shown(value: Any) -> str:
+    """`None` 을 `null`(판정 가능한 이벤트가 없음)로 읽히게 찍는다."""
+    return "null" if value is None else str(value)
+
+
+def _rate(value: float | None) -> str:
+    """표에 찍을 비율. **분모가 0이면 `–` 다** — `0.00` 과 다르게 보여야 한다(§6.7)."""
+    return "–" if value is None else f"{value:.2f}"
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -433,8 +455,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     failed = 0
     print(
-        f"{'시나리오':<20} {'시정률':>8} {'판정불가율':>10} {'해소':>4} {'미시정':>6} "
-        f"{'판정불가':>8} {'쓰러짐':>6}  결과"
+        f"{'시나리오':<20} {'시정률':>8} {'판정불가율':>10} {'해소':>4} {'늦은시정':>8} "
+        f"{'미시정':>6} {'판정불가':>8} {'쓰러짐':>6}  결과"
     )
     for name in names:
         result = asyncio.run(run_case(name))
@@ -442,9 +464,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         failed += bool(problems)
         metrics = result.metrics
         print(
-            f"{name:<20} {metrics.correction_rate:>8.2f} {metrics.undetermined_rate:>10.2f} "
-            f"{metrics.resolved:>4} {metrics.unresolved:>6} {metrics.undetermined:>8} "
-            f"{metrics.fall_events:>6}  {'OK' if not problems else 'FAIL'}"
+            f"{name:<20} {_rate(metrics.correction_rate):>8} "
+            f"{_rate(metrics.undetermined_rate):>10} "
+            f"{metrics.resolved:>4} {metrics.resolved_late:>8} {metrics.unresolved:>6} "
+            f"{metrics.undetermined:>8} {metrics.fall_events:>6} "
+            f" {'OK' if not problems else 'FAIL'}"
         )
         for problem in problems:
             print(f"    - {problem}")

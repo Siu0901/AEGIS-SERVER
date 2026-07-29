@@ -33,6 +33,14 @@ class Policies(SpecModel):
     """이 시간 내 해소된 건만 시정률 분자에 포함."""
 
     # --- 트랙 소실 · 재결합 (FN-EVT-07) ---
+    track_miss_timeout_ms: float = 1500.0
+    """`frame` 에서 이 시간 이상 해당 `track_id` 가 관측되지 않으면 **소실로 간주**한다.
+
+    엣지가 `track_lost` 를 보내지 못하고 끊긴 경우의 대비책이다(§4.5).
+    **표시용 키인 `overlay_stale_ms` 와 혼용하지 않는다** — 그쪽은 "박스를 흐리게
+    그릴 시점"이고 이쪽은 "이벤트를 `lost` 로 보낼 시점"이라 튜닝 이유가 다르다.
+    """
+
     track_lost_grace_s: float = 15.0
     """트랙 소실 후 `expired` 종결까지의 유예."""
 
@@ -101,7 +109,10 @@ class Policies(SpecModel):
     """LL-HLS 폴백 재생 시 오버레이 지연 버퍼. 실측 지연 약 2.5초 기준."""
 
     overlay_stale_ms: float = 1000.0
-    """이 시간 이상 좌표 갱신이 없으면 박스를 흐리게 표시."""
+    """이 시간 이상 좌표 갱신이 없으면 박스를 흐리게 표시.
+
+    **표시 전용이다.** 소실 판정에는 `track_miss_timeout_ms` 를 쓴다(§4.5).
+    """
 
     # --- 쓰러짐 판정 3조건 (FN-DET-10) ---
     fall_height_ratio_max: float = 0.5
@@ -125,6 +136,7 @@ class PolicyPatch(SpecModel):
     resolve_duration_s: float | None = None
     cooldown_s: float | None = None
     resolve_window_s: float | None = None
+    track_miss_timeout_ms: float | None = None
     track_lost_grace_s: float | None = None
     reassoc_window_s: float | None = None
     reassoc_max_speed_ms: float | None = None

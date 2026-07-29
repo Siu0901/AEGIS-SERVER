@@ -30,6 +30,7 @@ SPEC_EVENT_COLUMNS = {
     "detected_at",
     "confirmed_at",
     "alerted_at",
+    "last_alerted_at",
     "resolved_at",
     "resolution_sec",
     "alert_count",
@@ -52,6 +53,7 @@ SPEC_EVENT_COLUMNS = {
     "llm_analysis",
     "regulation_refs",
     "is_false_positive",
+    "note",
 }
 
 #: 기능명세서 §6 `zones` 컬럼 전량.
@@ -107,6 +109,7 @@ def test_timestamps_are_timezone_aware() -> None:
         "detected_at",
         "confirmed_at",
         "alerted_at",
+        "last_alerted_at",
         "resolved_at",
         "lost_at",
         "expired_at",

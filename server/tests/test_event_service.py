@@ -16,6 +16,7 @@ from typing import Any
 
 from aegis_contracts import (
     CandidateMsg,
+    EventPatchRequest,
     EventStatus,
     FrameMsg,
     Policies,
@@ -155,6 +156,66 @@ def test_resolved_event_lets_the_same_track_start_a_new_event() -> None:
     asyncio.run(harness.service.on_candidate(candidate(24.5)))
     assert len(harness.store.created) == 2
     assert harness.store.created[1].event_id != harness.store.created[0].event_id
+
+
+def test_re_alert_updates_last_alerted_at_and_never_the_first_one() -> None:
+    """§5.2 · §6 — `alerted_at` 은 최초로 고정, `last_alerted_at` 만 갱신된다.
+
+    재경고마다 `alerted_at` 을 덮으면 `resolution_sec`(= `alerted_at → resolved_at`)이
+    마지막 방송 기준으로 줄어 **시정률이 부풀려진다.** 두 컬럼이 분리된 이유다.
+    """
+    harness = Harness()
+    asyncio.run(harness.service.on_candidate(candidate(0.5)))
+    harness.run_until(0.625, 3.5, "off")
+    first_alert = harness.store.items[0].alerted_at
+    assert first_alert is not None
+
+    # 쿨다운 30초 → 재경고.
+    harness.run_until(3.625, 34.0, "off")
+    assert status_of(harness) is EventStatus.RE_ALERTED
+
+    stamps = [changes for _, changes in harness.store.updates if "last_alerted_at" in changes]
+    assert len(stamps) == 2, "확정과 재경고 두 번 모두 최근 경고 시각을 남겨야 한다"
+    assert stamps[0]["last_alerted_at"] < stamps[1]["last_alerted_at"]
+
+    # 재경고 갱신에는 `alerted_at` 이 아예 실리지 않는다.
+    assert "alerted_at" not in stamps[1]
+    assert harness.store.items[0].alerted_at == first_alert
+
+
+def test_manual_note_is_stored_not_only_logged() -> None:
+    """§4.1 `PATCH` 의 `note` 는 §6 `events.note` 에 남는다.
+
+    저장하지 않으면 오탐 판단의 근거가 다시 조회했을 때 사라진다.
+    """
+    harness = Harness()
+    asyncio.run(harness.service.on_candidate(candidate(0.5)))
+    harness.run_until(0.625, 3.5, "off")
+    event_id = harness.store.items[0].event_id
+
+    asyncio.run(
+        harness.service.patch(
+            event_id,
+            EventPatchRequest(is_false_positive=True, note="허리 굽혀 작업 중이었음"),
+        )
+    )
+    assert harness.store.notes[event_id] == "허리 굽혀 작업 중이었음"
+
+
+def test_candidate_that_disappears_is_kept_as_dropped() -> None:
+    """§4.2 — 확정 전 소멸은 **레코드를 남긴다.** 지우면 튜닝 근거가 사라진다."""
+    harness = Harness()
+    asyncio.run(harness.service.on_candidate(candidate(0.5)))
+    # 확정(3초)에 닿기 전에 위반이 사라지고, 소멸이 3초 이어진다.
+    harness.run_until(0.625, 2.0, "off")
+    harness.run_until(2.125, 5.5, "on")
+
+    assert status_of(harness) is EventStatus.DROPPED
+    assert harness.store.items[0].alert_count == 0
+    # 종결됐으므로 병합 키가 풀린다 — 같은 트랙의 다음 위반이 새 이벤트를 만든다.
+    assert harness.machine.open_events(1, 3) == {}
+    asyncio.run(harness.service.on_candidate(candidate(6.0)))
+    assert len(harness.store.created) == 2
 
 
 def test_restart_recovers_open_events_so_they_can_still_be_closed() -> None:

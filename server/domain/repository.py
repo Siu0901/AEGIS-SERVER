@@ -112,14 +112,6 @@ class EventRepository(Protocol):
         """부분 갱신. 상태 전이·타임스탬프·재결합 이력 반영에 쓴다."""
         ...
 
-    async def delete(self, event_id: str) -> None:
-        """확정 전에 소멸한 후보를 지운다.
-
-        **확정된 이벤트에는 쓰지 않는다.** 지표에 들어간 적 없는 레코드만 대상이며,
-        남겨두면 병합 키(FN-EVT-01)를 점유해 다음 위반이 이벤트를 못 만든다.
-        """
-        ...
-
     async def set_status(
         self,
         event_id: str,

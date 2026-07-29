@@ -1,4 +1,4 @@
-"""시나리오 8종을 서버 상태머신에 태워 기대값과 대조한다.
+"""시나리오 9종을 서버 상태머신에 태워 기대값과 대조한다.
 
 `sim/cases/*.yaml` 의 `expect:` 블록이 정답이고, 대조는 `sim/case_check.py` 가 한다.
 여기서는 그것을 `uv run tasks.py verify` 안으로 끌어들이는 일만 한다 — 검증이
@@ -18,7 +18,7 @@ from sim.case_check import cases_with_expectations, check_case, run_case
 
 CASES = cases_with_expectations()
 
-#: M3 에서 만든 시나리오 8종. 이름이 바뀌거나 사라지면 여기서 드러난다.
+#: M3 에서 만든 시나리오 9종. 이름이 바뀌거나 사라지면 여기서 드러난다.
 REQUIRED = {
     "normal_resolve",
     "no_resolve",
@@ -28,10 +28,11 @@ REQUIRED = {
     "gating_freeze",
     "fall_excluded",
     "false_positive",
+    "dropped",
 }
 
 
-def test_the_eight_scenarios_exist() -> None:
+def test_every_required_scenario_exists() -> None:
     """파일이 사라지면 대조가 조용히 0건이 된다. 그것을 통과로 보지 않는다."""
     assert set(CASES) >= REQUIRED, f"빠진 시나리오: {sorted(REQUIRED - set(CASES))}"
 
@@ -79,3 +80,32 @@ def test_expired_is_broadcast_as_undetermined_not_as_a_failure_to_correct() -> N
     assert metrics[-1].undetermined == 1
     assert metrics[-1].undetermined_rate == 1.0
     assert metrics[-1].unresolved == 0
+    # ★ 분모가 0 이므로 시정률은 **null** 이다. `0.0` 으로 나가면 화면에 "시정률 0%"
+    # 가 뜨고, 판정 불가만 있는 구간이 "아무도 시정하지 않았다"로 읽힌다(§6.7).
+    assert metrics[-1].correction_rate is None
+
+
+def test_dropped_leaves_a_record_and_touches_neither_rate() -> None:
+    """확정 전 소멸은 §4.2 `dropped` 로 남는다. 지우지 않고, 지표도 건드리지 않는다."""
+    result = asyncio.run(run_case("dropped"))
+    assert [event.status for event in result.events] == [EventStatus.DROPPED]
+
+    updated = [m for m in result.published if isinstance(m, EventUpdatedMsg)]
+    assert [m.status for m in updated] == [EventStatus.DROPPED]
+    # 확정에 닿은 적이 없으므로 `event_created` 도 경고도 없다.
+    assert not [m for m in result.published if isinstance(m, EventCreatedMsg)]
+
+    metrics = result.metrics
+    assert metrics.total_violations == 0
+    assert (metrics.resolved, metrics.resolved_late, metrics.unresolved) == (0, 0, 0)
+    assert metrics.undetermined == 0
+    # `dropped` 가 미시정으로 새면 0.0, 판정 불가로 새면 undetermined_rate 가 1.0 이다.
+    assert metrics.correction_rate is None
+    assert metrics.undetermined_rate is None
+
+
+def test_dropped_frees_the_merge_key() -> None:
+    """`dropped` 는 종결 상태다 — 병합 키(FN-EVT-01)를 점유한 채 남아 있으면
+    같은 트랙의 다음 위반이 이벤트를 만들지 못한다."""
+    result = asyncio.run(run_case("dropped"))
+    assert result.machine.open_events(1, 3) == {}

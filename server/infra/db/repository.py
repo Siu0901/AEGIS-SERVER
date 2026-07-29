@@ -76,10 +76,14 @@ REPEAT_WINDOW = timedelta(days=7)
 MEDIA_URL_PREFIX = "/media"
 
 #: 상태별로 함께 찍히는 시각 컬럼. 기능명세서 §6 · §5.2 전이별 동반 필드.
+#:
+#: **`re_alerted` 는 `alerted_at` 을 건드리지 않는다**(§5.2). 최초 경고 시각을 덮으면
+#: `resolution_sec` 이 마지막 방송 기준으로 줄어 시정률이 부풀려진다.
+#: `dropped` 는 §6 에 대응 시각 컬럼이 없어 상태만 바뀐다.
 _STATUS_STAMP: dict[EventStatus, Callable[[datetime], dict[str, Any]]] = {
     EventStatus.ACTIVE: lambda at: {"confirmed_at": at},
-    EventStatus.ALERTED: lambda at: {"alerted_at": at},
-    EventStatus.RE_ALERTED: lambda at: {"alerted_at": at},
+    EventStatus.ALERTED: lambda at: {"alerted_at": at, "last_alerted_at": at},
+    EventStatus.RE_ALERTED: lambda at: {"last_alerted_at": at},
     EventStatus.LOST: lambda at: {"lost_at": at},
     EventStatus.RESOLVED: lambda at: {"resolved_at": at},
     EventStatus.EXPIRED: lambda at: {"expired_at": at},
@@ -379,25 +383,6 @@ class DbEventRepository:
         stamp = _STATUS_STAMP.get(status)
         await self.update(event_id, {"status": status.value, **(stamp(at) if stamp else {})})
 
-    async def delete(self, event_id: str) -> None:
-        """확정되지 않은 채 소멸한 후보를 지운다.
-
-        **확정된 이벤트에는 쓰지 않는다.** 지워도 되는 것은 상태머신이 `candidate`
-        단계에서 폐기한 건뿐이며, 그 레코드는 어떤 지표에도 들어간 적이 없다.
-        남겨두면 병합 키(FN-EVT-01)를 계속 점유해 같은 트랙의 다음 위반이 이벤트를
-        만들지 못한다.
-        """
-        await asyncio.to_thread(self._delete, event_id)
-
-    def _delete(self, event_id: str) -> None:
-        with Session(self._engine) as session:
-            row = session.get(EventRow, event_id)
-            if row is None:
-                log.warning("지울 이벤트가 없다: %s", event_id)
-                return
-            session.delete(row)
-            session.commit()
-
 
 class DbZoneRepository:
     """`server.domain.repository.ZoneRepository` 구현. 기능명세서 §6 `zones`"""
@@ -533,13 +518,15 @@ def _timeline(row: EventRow) -> list[TimelineEntry]:
     때문이다. 전이표(§4.2)의 각 상태에는 대응하는 시각 컬럼이 하나씩 있으므로
     그것만으로 순서가 복원된다.
 
-    `re_alerted` 는 여기 없다 — 재경고 시각을 담는 컬럼이 없고 `alert_count` 만
-    남는다. 없는 시각을 지어내지 않는다.
+    `re_alerted` 는 **마지막 재경고 하나만** 나온다(`last_alerted_at`). 중간 재경고
+    시각을 담는 자리는 없고 `alert_count` 만 남으므로, 없는 시각을 지어내지 않는다.
+    `dropped` 는 §6 에 대응 시각 컬럼이 아예 없어 타임라인에 나오지 않는다.
     """
     stamps: list[tuple[datetime | None, EventStatus]] = [
         (row.detected_at, EventStatus.CANDIDATE),
         (row.confirmed_at, EventStatus.ACTIVE),
         (row.alerted_at, EventStatus.ALERTED),
+        (row.last_alerted_at if row.alert_count > 1 else None, EventStatus.RE_ALERTED),
         (row.lost_at, EventStatus.LOST),
         (row.resolved_at, EventStatus.RESOLVED),
         (row.expired_at, EventStatus.EXPIRED),

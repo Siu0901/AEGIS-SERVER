@@ -41,7 +41,9 @@ class Event(SQLModel, table=True):
     """확정된 위반 사건. 기능명세서 §6 `events`
 
     상태 전이는 §4.2 상태 전이표를 따른다. `expired` 는 판정 불가이며
-    **시정률 분모·분자 모두에서 제외**된다(§4.8).
+    **시정률 분모·분자 모두에서 제외**된다(§4.8). `dropped`(확정 전 소멸)도 지표에서
+    빠지지만 **레코드는 남는다** — `dropped / (dropped + 확정)` 이 `confirm_duration_s`
+    튜닝의 근거이기 때문이다.
     """
 
     __tablename__ = "events"
@@ -56,6 +58,11 @@ class Event(SQLModel, table=True):
     detected_at: datetime | None = Field(default=None, sa_column=_timestamptz())
     confirmed_at: datetime | None = Field(default=None, sa_column=_timestamptz())
     alerted_at: datetime | None = Field(default=None, sa_column=_timestamptz())
+    last_alerted_at: datetime | None = Field(
+        default=None,
+        sa_column=_timestamptz(),
+        description="최근 경고 시각. alerted_at(최초)은 변경하지 않는다",
+    )
     resolved_at: datetime | None = Field(default=None, sa_column=_timestamptz())
 
     resolution_sec: int | None = Field(default=None, description="경고→시정 소요")
@@ -119,6 +126,10 @@ class Event(SQLModel, table=True):
         description="매핑 조항",
     )
     is_false_positive: bool = Field(default=False, description="수동 정정")
+    note: str | None = Field(
+        default=None,
+        description="관리자 메모. 수동 정정(is_false_positive) 사유 등",
+    )
 
 
 class Zone(SQLModel, table=True):

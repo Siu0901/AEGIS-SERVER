@@ -242,14 +242,31 @@ class MetricsSummary(SpecModel):
 
     `correction_rate` 와 `undetermined_rate` 는 **항상 병기**한다.
     `expired` 는 시정률 분모·분자 모두에서 제외되고 `undetermined` 로 따로 집계된다.
+
+    ```
+    correction_rate   = resolved / (resolved + resolved_late + unresolved)
+    undetermined_rate = expired  / (resolved + resolved_late + unresolved + expired)
+    ```
     """
 
     period: str
-    correction_rate: float
-    undetermined_rate: float
+    correction_rate: float | None
+    """**분모가 0이면 `null`**(§6.7). `0.0` 은 "시정률이 0%"라는 주장이지만 실제로는
+    "판정 가능한 이벤트가 없다"는 뜻이라 둘을 같은 값으로 내보낼 수 없다.
+    판정 불가 이벤트만 있는 구간에서 0% 가 표시되면 시스템이 전혀 작동하지 않은
+    것처럼 보인다. 화면은 `null` 을 `–` 로 그린다."""
+    undetermined_rate: float | None
+    """모집단이 비면 `null`. `correction_rate` 와 같은 이유다."""
     total_violations: int
     resolved: int
+    """`resolve_window_s` **이내**에 해소된 건수. 분자에 들어가는 유일한 버킷이다."""
+    resolved_late: int
+    """해소됐으나 창을 넘긴 건수. **분모에만** 들어간다.
+
+    `unresolved` 와 섞지 않는다 — "시정은 했으나 늦었다"와 "아직 안 했다"는 현장에서
+    의미가 다르고, 합쳐두면 응답만 보고 원인을 구분할 수 없다(§6.7)."""
     unresolved: int
+    """아직 해소되지 않은 건수(`alerted` · `re_alerted`)."""
     undetermined: int
     avg_resolution_sec: int
     fall_events: int

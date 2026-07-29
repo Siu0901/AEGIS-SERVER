@@ -124,6 +124,7 @@ expect:
     undetermined_rate: 0.0
     total_violations: 1
     resolved: 0
+    resolved_late: 0
     unresolved: 1
     undetermined: 0
     fall_events: 0

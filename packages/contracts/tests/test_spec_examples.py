@@ -35,6 +35,7 @@ from aegis_contracts import (
     MetricMsg,
     MetricsDistributionResponse,
     MetricsRepeatResponse,
+    MetricsSummary,
     MetricsTimeseriesResponse,
     OverlayMsg,
     OverlayPerson,
@@ -364,6 +365,58 @@ def test_event_summary_carries_confirmed_at() -> None:
     assert summary.detected_at < summary.confirmed_at < summary.alerted_at  # type: ignore[operator]
 
 
+#: API명세서 §4.2 `GET /metrics/summary` 응답 예시 전량.
+METRICS_SUMMARY_EXAMPLE: dict[str, Any] = {
+    "period": "today",
+    "correction_rate": 0.87,
+    "undetermined_rate": 0.05,
+    "total_violations": 23,
+    "resolved": 20,
+    "resolved_late": 1,
+    "unresolved": 2,
+    "undetermined": 1,
+    "avg_resolution_sec": 41,
+    "fall_events": 0,
+    "anomaly_flags": 1,
+}
+
+
+def test_metrics_summary_example_parses() -> None:
+    summary = MetricsSummary.model_validate(METRICS_SUMMARY_EXAMPLE)
+    assert summary.resolved_late == 1
+    assert summary.correction_rate == 0.87
+
+
+def test_metrics_summary_field_set_matches_spec() -> None:
+    """§4.2 예시에 있는 칸이 전부 있고, 없는 칸을 만들지 않았다."""
+    assert set(MetricsSummary.model_fields) == set(METRICS_SUMMARY_EXAMPLE)
+
+
+def test_rates_are_nullable_when_the_denominator_is_empty() -> None:
+    """§6.7 — **분모가 0이면 `null`.** `0.0` 은 "시정률 0%"라는 다른 주장이다.
+
+    판정 불가 이벤트만 있는 구간에서 0% 가 표시되면 시스템이 전혀 작동하지 않은
+    것처럼 보인다. 대시보드는 `null` 을 `–` 로 그린다.
+    """
+    empty = MetricsSummary.model_validate(
+        METRICS_SUMMARY_EXAMPLE
+        | {
+            "correction_rate": None,
+            "undetermined_rate": None,
+            "total_violations": 0,
+            "resolved": 0,
+            "resolved_late": 0,
+            "unresolved": 0,
+            "undetermined": 0,
+        }
+    )
+    assert empty.correction_rate is None
+    assert empty.undetermined_rate is None
+    # §5.3 `metric` 도 같은 값을 나른다 — 한쪽만 nullable 이면 발행이 불가능해진다.
+    live = MetricMsg.model_validate(METRIC_EXAMPLE | {"correction_rate": None})
+    assert live.correction_rate is None
+
+
 def test_metrics_timeseries_example_parses() -> None:
     """§4.2 — `n` 은 표본 크기다. 비율만 보고 판단하지 않기 위해 함께 온다."""
     response = MetricsTimeseriesResponse.model_validate(
@@ -683,6 +736,7 @@ POLICIES_EXAMPLE: dict[str, Any] = {
     "resolve_duration_s": 10,
     "cooldown_s": 30,
     "resolve_window_s": 300,
+    "track_miss_timeout_ms": 1500,
     "track_lost_grace_s": 15,
     "reassoc_window_s": 10,
     "reassoc_max_speed_ms": 1.5,
@@ -1040,16 +1094,19 @@ def test_event_updated_carries_only_changed_fields() -> None:
 TRANSITION_FIELDS: dict[str, dict[str, Any]] = {
     "alerted": {
         "alerted_at": "2026-08-14T05:37:03Z",
+        "last_alerted_at": "2026-08-14T05:37:03Z",
         "alert_count": 1,
         "severity": 2,
     },
-    "re_alerted": {"alerted_at": "2026-08-14T05:37:33Z", "alert_count": 2},
+    "re_alerted": {"last_alerted_at": "2026-08-14T05:37:33Z", "alert_count": 2},
     "lost": {"lost_at": "2026-08-14T05:37:20Z"},
     "alerted_after_reassoc": {"track_id": 12, "reassoc_count": 1},
     "resolved": {"resolved_at": "2026-08-14T05:37:40Z", "resolution_sec": 37},
     "expired": {"expired_at": "2026-08-14T05:37:35Z"},
     "clip_ready": {"clip_status": "ready", "clip_url": "/media/clips/EV-1.mp4"},
     "manual": {"is_false_positive": True, "note": "허리 굽혀 작업 중이었음"},
+    # 확정 전 소멸(§4.2). 동반 필드가 없다 — 상태만 바뀐다.
+    "dropped": {},
 }
 
 
@@ -1093,6 +1150,37 @@ def test_severity_shares_scale_with_alert_command_level() -> None:
             )
 
 
+def test_keyframe_url_may_be_null() -> None:
+    """§5.2 — 키프레임 추출이 실패했거나 REC 에 도달하지 못했을 수 있다.
+
+    **존재하지 않는 URL 을 문자열로 내보내지 않는다.** 404 가 나는 경로를 실어
+    보내면 화면은 그것을 "이미지가 있는데 깨졌다"로 표시하고, 실제 상태(아직
+    추출되지 않았다)와 구분되지 않는다.
+    """
+    created = EventCreatedMsg.model_validate(EVENT_CREATED_EXAMPLE | {"keyframe_url": None})
+    assert created.keyframe_url is None
+
+
+def test_re_alerted_carries_the_latest_time_in_its_own_field() -> None:
+    """§5.2 — 재경고는 `last_alerted_at` 을 싣고 `alerted_at` 은 건드리지 않는다.
+
+    `resolution_sec` 이 `alerted_at → resolved_at` 으로 정의되어 있으므로(§4.1),
+    재경고마다 `alerted_at` 을 덮으면 재경고가 많을수록 소요 시간이 짧아져
+    **시정률이 부풀려진다.**
+    """
+    msg = EventUpdatedMsg.model_validate(
+        {
+            "type": "event_updated",
+            "event_id": "EV-20260814-0231",
+            "status": "re_alerted",
+            "last_alerted_at": "2026-08-14T05:37:33Z",
+            "alert_count": 2,
+        }
+    )
+    assert msg.last_alerted_at is not None
+    assert msg.alerted_at is None
+
+
 # --- §5.4 zone_updated ----------------------------------------------------
 
 
@@ -1125,7 +1213,12 @@ def test_zone_updated_upsert_requires_full_zone() -> None:
 
 
 def test_event_status_covers_full_state_machine() -> None:
-    """기능명세서 §4.2 상태 전이표의 7개 상태 전량."""
+    """기능명세서 §4.2 상태 전이표의 8개 상태 전량.
+
+    종결 상태가 셋(`resolved` · `expired` · `dropped`)이고 뜻이 서로 다르다.
+    `dropped` 를 빼면 확정 전 소멸을 표현할 자리가 없어져, 그 후보들이
+    `expired`(판정 불가율 오염)나 삭제(튜닝 근거 소실)로 밀려난다.
+    """
     assert {s.value for s in EventStatus} == {
         "candidate",
         "active",
@@ -1134,4 +1227,5 @@ def test_event_status_covers_full_state_machine() -> None:
         "lost",
         "resolved",
         "expired",
+        "dropped",
     }

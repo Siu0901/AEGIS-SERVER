@@ -29,14 +29,28 @@ def row(
     )
 
 
-def test_empty_population_is_zero_not_a_crash() -> None:
+def test_empty_population_is_null_not_zero() -> None:
+    """§6.7 — **분모가 0이면 `null` 이다.**
+
+    `0.0` 은 "시정률이 0%"라는 주장이고, 실제로는 "판정 가능한 이벤트가 없다"는
+    뜻이다. 둘을 같은 값으로 내보내면 아무 일도 없던 구간이 "아무도 시정하지
+    않았다"로 읽힌다 — 대응이 정반대인 두 상황이다.
+    """
     summary = summarize([], period="today", resolve_window_s=WINDOW)
-    assert summary.correction_rate == 0.0
-    assert summary.undetermined_rate == 0.0
+    assert summary.correction_rate is None
+    assert summary.undetermined_rate is None
     assert summary.total_violations == 0
 
 
-def test_resolved_over_resolved_plus_unresolved() -> None:
+def test_only_undetermined_leaves_the_correction_rate_null() -> None:
+    """판정 불가만 있는 구간. 시정률은 `null`, 판정 불가율은 1.0 이다."""
+    summary = summarize([row(EventStatus.EXPIRED)], period="today", resolve_window_s=WINDOW)
+    assert summary.correction_rate is None
+    assert summary.undetermined_rate == pytest.approx(1.0)
+    assert summary.undetermined == 1
+
+
+def test_resolved_over_the_three_exclusive_buckets() -> None:
     rows = [
         row(EventStatus.RESOLVED, resolution_sec=12),
         row(EventStatus.RESOLVED, resolution_sec=41),
@@ -45,6 +59,7 @@ def test_resolved_over_resolved_plus_unresolved() -> None:
     ]
     summary = summarize(rows, period="today", resolve_window_s=WINDOW)
     assert summary.resolved == 2
+    assert summary.resolved_late == 0
     assert summary.unresolved == 2
     assert summary.correction_rate == pytest.approx(0.5)
     # (12 + 41) / 2 = 26.5 → 짝수 쪽으로 반올림(파이썬 기본)해 26.
@@ -66,8 +81,12 @@ def test_expired_leaves_the_correction_rate_untouched() -> None:
     assert with_expired.total_violations == 4
 
 
-def test_late_resolution_stays_in_the_denominator_only() -> None:
-    """창(300초)을 넘겨 해소된 건은 분자에서 빠지되 모집단에는 남는다(§6.7)."""
+def test_late_resolution_gets_its_own_bucket() -> None:
+    """창(300초)을 넘겨 해소된 건은 분자에서 빠지되 모집단에는 남는다(§6.7).
+
+    **`unresolved` 에 섞지 않는다.** "시정은 했으나 늦었다"와 "아직 안 했다"는
+    현장에서 의미가 다르고, 합쳐두면 응답만 보고 원인을 구분할 수 없다.
+    """
     summary = summarize(
         [
             row(EventStatus.RESOLVED, resolution_sec=10),
@@ -77,8 +96,51 @@ def test_late_resolution_stays_in_the_denominator_only() -> None:
         resolve_window_s=WINDOW,
     )
     assert summary.resolved == 1
-    assert summary.unresolved == 1
+    assert summary.resolved_late == 1
+    assert summary.unresolved == 0
     assert summary.correction_rate == pytest.approx(0.5)
+
+
+def test_the_three_buckets_are_mutually_exclusive_and_sum_to_the_denominator() -> None:
+    """§6.7 — `resolved` · `resolved_late` · `unresolved` 의 합이 분모다.
+
+    응답만 보고 `correction_rate = resolved / (resolved + resolved_late + unresolved)`
+    가 성립해야 한다. 성립하지 않으면 화면이 서버와 다른 숫자를 계산할 수 있다.
+    """
+    summary = summarize(
+        [
+            row(EventStatus.RESOLVED, resolution_sec=10),
+            row(EventStatus.RESOLVED, resolution_sec=20),
+            row(EventStatus.RESOLVED, resolution_sec=901),
+            row(EventStatus.ALERTED),
+            row(EventStatus.EXPIRED),
+        ],
+        period="today",
+        resolve_window_s=WINDOW,
+    )
+    denominator = summary.resolved + summary.resolved_late + summary.unresolved
+    assert (summary.resolved, summary.resolved_late, summary.unresolved) == (2, 1, 1)
+    assert summary.correction_rate == pytest.approx(summary.resolved / denominator)
+    assert summary.total_violations == denominator + summary.undetermined
+    assert summary.undetermined_rate == pytest.approx(1 / 5)
+
+
+def test_dropped_is_excluded_from_both_rates() -> None:
+    """§4.2 — 확정 전 소멸(`dropped`)은 시정률에도 판정 불가율에도 들어가지 않는다.
+
+    `expired` 로 샜다면 판정 불가율이 오르고, 분모에 남았다면 시정률이 내려간다.
+    레코드는 존재하지만 두 비율 중 어느 것도 움직이면 안 된다.
+    """
+    base = [row(EventStatus.RESOLVED, resolution_sec=10), row(EventStatus.EXPIRED)]
+    without = summarize(base, period="today", resolve_window_s=WINDOW)
+    with_dropped = summarize(
+        [*base, row(EventStatus.DROPPED), row(EventStatus.DROPPED)],
+        period="today",
+        resolve_window_s=WINDOW,
+    )
+    assert with_dropped.correction_rate == without.correction_rate == pytest.approx(1.0)
+    assert with_dropped.undetermined_rate == without.undetermined_rate == pytest.approx(0.5)
+    assert with_dropped.total_violations == without.total_violations == 2
 
 
 def test_fall_is_counted_separately_and_never_in_the_denominator() -> None:
@@ -126,11 +188,17 @@ def test_events_before_the_broadcast_are_not_in_the_population() -> None:
         resolve_window_s=WINDOW,
     )
     assert summary.total_violations == 0
-    assert summary.correction_rate == 0.0
+    assert summary.correction_rate is None
 
 
 def test_resolved_without_a_duration_is_not_credited() -> None:
-    """`resolution_sec` 이 비어 있으면 창 안이었다고 주장할 근거가 없다."""
+    """`resolution_sec` 이 비어 있으면 창 안이었다고 주장할 근거가 없다.
+
+    `unresolved`(아직 해소 안 됨)도 사실이 아니므로 늦은 시정 쪽에 둔다 — 분모에는
+    들어가고 분자에서는 빠지는 자리다.
+    """
     summary = summarize([row(EventStatus.RESOLVED)], period="today", resolve_window_s=WINDOW)
     assert summary.resolved == 0
-    assert summary.unresolved == 1
+    assert summary.resolved_late == 1
+    assert summary.unresolved == 0
+    assert summary.correction_rate == pytest.approx(0.0)

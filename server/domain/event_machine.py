@@ -2,12 +2,14 @@
 
 ```
 candidate ─→ active ─→ alerted ⇄ re_alerted
-                          │           │
-                          └─────┬─────┘
-                                ↓
-                              lost ──재결합 성공──→ 직전 상태로 복귀
-                                │                  (해소 타이머는 0부터 재시작)
-                                └──유예 만료──→ expired (판정 불가)
+    │                     │           │
+    │                     └─────┬─────┘
+    │                           ↓
+    │                         lost ──재결합 성공──→ 직전 상태로 복귀
+    │                           │                  (해소 타이머는 0부터 재시작)
+    │                           └──유예 만료──→ expired (판정 불가)
+    │
+    └──확정 전 조건 소멸──→ dropped (지표 전량 제외 · 진단용으로 보존)
 
             alerted / re_alerted ──위반 소멸 지속──→ resolved (시정 성공)
 ```
@@ -30,8 +32,9 @@ candidate ─→ active ─→ alerted ⇄ re_alerted
   조건이 영원히 충족되지 않는다.
 * **재결합은 이벤트를 살리는 처리이지 시정을 인정하는 처리가 아니다**(FN-EVT-07 ③).
   복귀 후 위반이 사라져 보여도 해소 타이머를 0부터 다시 채운다.
-* **확정되지 않은 후보는 이벤트가 아니다.** 소멸한 후보는 남기지 않고 지운다 —
-  남겨두면 병합 키(FN-EVT-01)가 막혀 같은 트랙의 다음 위반이 이벤트를 못 만든다.
+* **확정되지 않은 후보는 `dropped` 로 종결한다**(§4.2). 지우지 않는다 —
+  `dropped / (dropped + 확정)` 비율이 `confirm_duration_s` 튜닝의 유일한 근거다.
+  `dropped` 는 종결 상태이므로 병합 키(FN-EVT-01)를 점유하지 않는다.
 """
 
 from __future__ import annotations
@@ -63,7 +66,6 @@ from server.domain.reassociation import LostTrack, match_lost_track
 
 __all__ = [
     "EVENT_ID_PREFIX",
-    "KEYFRAME_URL_TEMPLATE",
     "SEVERITY",
     "CandidatePlan",
     "Effect",
@@ -90,13 +92,6 @@ SEVERITY: Mapping[ViolationType, AlertLevel] = {
     ViolationType.PROXIMITY: 2,
     ViolationType.FALL: 3,
 }
-
-#: `event_created.keyframe_url`(§5.2)에 실을 경로.
-#:
-#: **M3 에는 키프레임 추출이 없다**(FN-REC-03 · M4). §5.2 가 이 필드를 필수 `str` 로
-#: 두고 있어 비워둘 수 없으므로, 추출이 붙었을 때 파일이 놓일 자리를 미리 가리킨다.
-#: 그때까지 이 URL 은 404 다 — `docs/INDEX.md` 「명세서 확인 필요」에 올려 두었다.
-KEYFRAME_URL_TEMPLATE = "/media/kf/{event_id}_0.jpg"
 
 #: 한 관측 시점의 판정. `gated` 는 "판정할 수 없다"이지 "위반이 없다"가 아니다(§6.3).
 Judgement = Literal["violating", "cleared", "gated"]
@@ -204,7 +199,8 @@ def build_candidate_event(
 class Effect:
     """상태머신이 바깥에 시키는 일 한 건. 순서대로 적용한다."""
 
-    action: Literal["create", "update", "delete"]
+    action: Literal["create", "update"]
+    """`delete` 는 없다 — 확정 전 소멸도 `dropped` 로 **갱신**해 레코드를 남긴다(§4.2)."""
     event_id: str
     cam_id: int
     track_id: int
@@ -239,8 +235,8 @@ class OpenEvent:
 
     alerted_at: datetime | None = None
     """**최초** 경고 시각. `resolution_sec` 의 기준이며 재경고로 덮지 않는다."""
-    last_alert_at: datetime | None = None
-    """**최근** 경고 시각. 쿨다운(FN-EVT-04) 기준이자 §5.2 `re_alerted` 의 `alerted_at`."""
+    last_alerted_at: datetime | None = None
+    """**최근** 경고 시각. 쿨다운(FN-EVT-04) 기준이자 DB `events.last_alerted_at`(§6)."""
     lost_at: datetime | None = None
     status_before_lost: EventStatus | None = None
 
@@ -288,15 +284,15 @@ class EventMachine:
         self._policies = policies
 
     @property
-    def _gap_s(self) -> float:
-        """이 시간 이상 좌표가 갱신되지 않으면 **관측이 끊긴 것**으로 본다.
+    def _miss_s(self) -> float:
+        """이 시간 이상 트랙이 관측되지 않으면 **소실**로 본다. FN-EVT-07 ①
 
-        기능명세서 §4.2 는 "`track_lost` 수신 **또는** `frame` 에서 연속 미관측"이라고만
-        하고 그 기준 시간에 대응하는 정책 키를 두지 않았다. 같은 뜻을 이미 가진 값
-        (`overlay_stale_ms` — "이 시간 이상 좌표 갱신이 없으면")을 쓴다. 상수를 새로
-        지어내지 않기 위한 선택이며 `docs/INDEX.md` 「명세서 확인 필요」에 올려 두었다.
+        `track_miss_timeout_ms`(기본 1500ms · §4.5)다. 엣지가 `track_lost` 를 보내지
+        못하고 끊긴 경우의 대비책이며, **표시용 키인 `overlay_stale_ms` 와 혼용하지
+        않는다** — 박스를 흐리게 그릴 시점과 이벤트를 `lost` 로 보낼 시점은 튜닝
+        이유가 다르다.
         """
-        return self._policies.overlay_stale_ms / 1000.0
+        return self._policies.track_miss_timeout_ms / 1000.0
 
     def open_events(
         self, cam_id: int, track_id: int
@@ -320,6 +316,11 @@ class EventMachine:
         타이머는 **0부터 다시 채운다.** 재시작 전 얼마나 관측했는지는 DB 에 없고,
         모르는 값을 추정해 채우면 확정·해소가 관측 없이 일어난다. `lost` 의 유예도
         `at` 부터 다시 센다(더 늦게 종결되는 쪽이 안전하다).
+
+        쿨다운 기준(`last_alerted_at`)은 `alerted_at` 으로 채운다 — §4.1 응답에는
+        `last_alerted_at` 이 없어 여기까지 오지 않기 때문이다. 최초 시각이 최근
+        시각보다 이르므로 **재경고가 늦어지는 쪽**으로만 틀리며, 반대 방향(관측
+        없이 즉시 재경고)으로는 틀리지 않는다.
         """
         for summary in events:
             if summary.status not in _OPEN_STATUSES:
@@ -335,7 +336,7 @@ class EventMachine:
                 last_tick_at=at,
                 last_seen_at=at,
                 alerted_at=summary.alerted_at,
-                last_alert_at=summary.alerted_at,
+                last_alerted_at=summary.alerted_at,
                 lost_at=at if summary.status is EventStatus.LOST else None,
                 status_before_lost=(
                     EventStatus.ALERTED if summary.status is EventStatus.LOST else None
@@ -485,7 +486,7 @@ class EventMachine:
                 ):
                     effects += self._to_expired(event, at)
                 continue
-            if _elapsed(event.last_seen_at, at) > self._gap_s:
+            if _elapsed(event.last_seen_at, at) > self._miss_s:
                 effects += self._to_lost(event, at)
                 continue
             effects += self._evaluate(event, at)
@@ -595,11 +596,11 @@ class EventMachine:
         """관측 한 건을 타이머에 반영한다.
 
         지난 구간의 시간은 **그때의 판정**에 적산한다. 관측이 끊겼던 구간
-        (`_gap_s` 초과)과 게이팅 보류 구간은 어느 쪽에도 넣지 않는다.
+        (`_miss_s` 초과)과 게이팅 보류 구간은 어느 쪽에도 넣지 않는다.
         """
         elapsed = _elapsed(event.last_tick_at, at)
         event.last_tick_at = at
-        if 0.0 < elapsed <= self._gap_s and not event.gated:
+        if 0.0 < elapsed <= self._miss_s and not event.gated:
             if event.violating:
                 event.observed_s += elapsed
             else:
@@ -633,8 +634,7 @@ class EventMachine:
                 if event.observed_s >= policies.confirm_duration_s:
                     return self._to_alerted(event, at)
                 if event.cleared_s >= policies.confirm_duration_s:
-                    # 확정되지 않은 채 소멸했다. 이벤트가 아니므로 남기지 않는다.
-                    return self._discard(event, "확정 전 위반 소멸")
+                    return self._to_dropped(event, "확정 전 위반 소멸")
                 return []
             case EventStatus.ACTIVE:
                 # 확정과 경고 발동은 같은 순간이지만(§4.2 "즉시"), 재시작 복구처럼
@@ -645,8 +645,8 @@ class EventMachine:
                     return self._to_resolved(event, at)
                 if (
                     event.violating
-                    and event.last_alert_at is not None
-                    and _elapsed(event.last_alert_at, at) >= policies.cooldown_s
+                    and event.last_alerted_at is not None
+                    and _elapsed(event.last_alerted_at, at) >= policies.cooldown_s
                 ):
                     return self._to_re_alerted(event, at)
                 return []
@@ -664,11 +664,15 @@ class EventMachine:
         event.status = EventStatus.ALERTED
         if event.alerted_at is None:
             event.alerted_at = at
-        event.last_alert_at = at
+        event.last_alerted_at = at
         event.alert_count += 1
         changes: dict[str, Any] = {
             "status": EventStatus.ALERTED.value,
+            # `alerted_at` 은 **최초**로 고정되고, 매번 갱신되는 것은 `last_alerted_at`
+            # 이다(§5.2 · §6). 재경고로 `alerted_at` 을 덮으면 `resolution_sec` 이
+            # 마지막 방송 기준으로 줄어 시정률이 부풀려진다.
             "alerted_at": event.alerted_at,
+            "last_alerted_at": event.last_alerted_at,
             "alert_count": event.alert_count,
         }
         if confirmed:
@@ -684,7 +688,10 @@ class EventMachine:
             confirmed_at=at,
             alerted_at=event.alerted_at,
             severity=SEVERITY[event.violation_type],
-            keyframe_url=KEYFRAME_URL_TEMPLATE.format(event_id=event.event_id),
+            # **M3 에는 키프레임 추출이 없다**(FN-REC-03 · M4). §5.2 가 이 필드를
+            # nullable 로 넓혔으므로 아직 없는 파일을 가리키는 URL 대신 `null` 을
+            # 보낸다 — "존재하지 않는 URL 을 문자열로 내보내지 않는다".
+            keyframe_url=None,
         )
         return [
             Effect(
@@ -701,7 +708,7 @@ class EventMachine:
     def _to_re_alerted(self, event: OpenEvent, at: datetime) -> list[Effect]:
         """FN-EVT-04 — 미해소 상태로 쿨다운이 지났다. 재경고하고 횟수를 센다."""
         event.status = EventStatus.RE_ALERTED
-        event.last_alert_at = at
+        event.last_alerted_at = at
         event.alert_count += 1
         return [
             Effect(
@@ -711,15 +718,15 @@ class EventMachine:
                 track_id=event.track_id,
                 changes={
                     "status": EventStatus.RE_ALERTED.value,
+                    # **`alerted_at` 은 건드리지 않는다**(§5.2 · §6). 갱신되는 것은
+                    # 최근 경고 시각뿐이다.
+                    "last_alerted_at": at,
                     "alert_count": event.alert_count,
                 },
                 message=EventUpdatedMsg(
                     event_id=event.event_id,
                     status=EventStatus.RE_ALERTED,
-                    # §5.2 는 이 자리에 **최근** 경고 시각을 싣는다. DB `alerted_at` 은
-                    # 최초 경고 시각으로 고정한다 — 재경고로 덮으면 `resolution_sec` 이
-                    # 마지막 방송 기준으로 줄어 시정률이 부풀려진다.
-                    alerted_at=at,
+                    last_alerted_at=at,
                     alert_count=event.alert_count,
                 ),
                 note=f"재경고 {event.event_id} — {event.alert_count}회",
@@ -755,9 +762,9 @@ class EventMachine:
 
     def _to_lost(self, event: OpenEvent, at: datetime) -> list[Effect]:
         if event.status is EventStatus.CANDIDATE:
-            # 확정 전 후보는 이벤트가 아니다. `expired` 로 종결하면 판정 불가율이
-            # "위반이었는지도 모르는 것들"로 부풀어 지표의 뜻이 흐려진다.
-            return self._discard(event, "확정 전 트랙 소실")
+            # 확정 전 후보는 `dropped` 로 종결한다. `expired` 로 보내면 판정 불가율이
+            # "위반이었는지도 모르는 것들"로 부풀어 지표의 뜻이 흐려진다(§4.2).
+            return self._to_dropped(event, "확정 전 트랙 소실")
         if event.status is EventStatus.LOST:
             return []
         event.status_before_lost = (
@@ -804,21 +811,35 @@ class EventMachine:
             )
         ]
 
-    def _discard(self, event: OpenEvent, why: str) -> list[Effect]:
-        """확정되지 않은 후보를 지운다.
+    def _to_dropped(self, event: OpenEvent, why: str) -> list[Effect]:
+        """§4.2 — 확정 전(`candidate`)에 조건이 사라졌다. **레코드를 남기고 종결한다.**
 
-        상태 값으로 남길 자리가 없다 — 전이표(§4.2)의 종결 상태는 `resolved` 와
-        `expired` 뿐이고 둘 다 "확정된 위반"을 전제한다. `candidate` 인 채로 두면
-        병합 키(FN-EVT-01)를 계속 점유해 같은 트랙의 다음 위반이 이벤트를 못 만든다.
+        후보가 `confirm_duration_s` 를 채우지 못하고 사라지는 일은 정상적으로 흔하다.
+        그래서 세 가지 선택지 중 하나를 골라야 했고, 명세서가 `dropped` 를 신설했다.
+
+        | 대안 | 문제 |
+        |---|---|
+        | 레코드 삭제 | 튜닝 근거(`dropped / (dropped + 확정)`)가 사라진다 |
+        | `expired` 로 종결 | 판정 불가율이 오염된다 — 그쪽은 "경고까지 갔는데 못 봤다"는 뜻이다 |
+        | `candidate` 로 방치 | 병합 키(FN-EVT-01)를 점유해 같은 트랙의 새 위반이 병합된다 |
+
+        `dropped` 는 종결 상태이므로 `_close` 로 상태머신에서 내린다 — 병합 키가
+        풀리고, 지표에는 어느 쪽으로도 들어가지 않는다.
         """
+        event.status = EventStatus.DROPPED
         self._close(event)
         return [
             Effect(
-                action="delete",
+                action="update",
                 event_id=event.event_id,
                 cam_id=event.cam_id,
                 track_id=event.track_id,
-                note=f"후보 폐기 {event.event_id} — {why}",
+                changes={"status": EventStatus.DROPPED.value},
+                message=EventUpdatedMsg(
+                    event_id=event.event_id,
+                    status=EventStatus.DROPPED,
+                ),
+                note=f"확정 전 소멸 {event.event_id} — {why}",
             )
         ]
 
@@ -898,7 +919,7 @@ class EventMachine:
         최소한 "그 위치에서 해소 지속시간 동안 위반 없는 상태가 유지되었다"는 사실은
         보장된다.
 
-        **쿨다운은 이어받는다.** `last_alert_at` 을 건드리지 않으므로 복귀 직후 중복
+        **쿨다운은 이어받는다.** `last_alerted_at` 을 건드리지 않으므로 복귀 직후 중복
         경고가 나가지 않는다.
         """
         previous = event.status_before_lost or EventStatus.ALERTED
@@ -943,7 +964,7 @@ class EventMachine:
 
     def _prune(self, at: datetime) -> None:
         """오래된 트랙 기억을 버린다. 재결합 창을 넘긴 것은 더 쓸 데가 없다."""
-        horizon = max(self._policies.reassoc_window_s, self._gap_s)
+        horizon = max(self._policies.reassoc_window_s, self._miss_s)
         for key, seen_at in list(self._seen.items()):
             if key not in self._by_track and _elapsed(seen_at, at) > horizon:
                 self._seen.pop(key, None)

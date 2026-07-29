@@ -5,7 +5,7 @@
 
 | 하는 일 | 근거 |
 |---|---|
-| `Effect` 를 저장소에 적용 (생성 · 갱신 · 폐기) | FN-REC-04 |
+| `Effect` 를 저장소에 적용 (생성 · 갱신) | FN-REC-04 |
 | §5.2 `event_created` · `event_updated` 발행 | API명세서 §5.2 |
 | 전이 후 오버레이 트랙 상태 동기화 | §5.1 `alert_state` |
 | 종결 전이마다 §5.3 `metric` 재발행 | FN-SYS-04 |
@@ -55,6 +55,9 @@ __all__ = [
 log = logging.getLogger("server.events")
 
 #: 종결 상태. 여기에 닿으면 지표가 바뀌므로 `metric` 을 다시 내보낸다(§5.3).
+#:
+#: `dropped` 는 여기 없다 — 시정률·판정 불가율 어느 쪽에도 들어가지 않으므로(§4.2)
+#: 그 전이로는 지표가 한 숫자도 움직이지 않는다.
 _TERMINAL: frozenset[EventStatus] = frozenset({EventStatus.RESOLVED, EventStatus.EXPIRED})
 
 
@@ -68,8 +71,6 @@ class EventStore(Protocol):
     async def create(self, event: EventDetail) -> None: ...
 
     async def update(self, event_id: str, changes: Mapping[str, Any]) -> None: ...
-
-    async def delete(self, event_id: str) -> None: ...
 
     async def get(self, event_id: str) -> EventDetail | None: ...
 
@@ -215,9 +216,7 @@ class EventService:
 
         if request.is_false_positive is not None:
             changes["is_false_positive"] = request.is_false_positive
-            message = message.model_copy(
-                update={"is_false_positive": request.is_false_positive, "note": request.note}
-            )
+            message = message.model_copy(update={"is_false_positive": request.is_false_positive})
             if request.is_false_positive:
                 # 지표에서 전량 제외되는 건이다. 상태머신에서도 내린다 — 더 전이시켜
                 # 봐야 집계에 들어가지 않고, 남겨두면 병합 키만 붙잡는다.
@@ -245,14 +244,14 @@ class EventService:
             )
             self._machine.forget(event_id)
 
+        if request.note is not None:
+            # §6 `events.note` — **저장한다.** 여기 남지 않으면 오탐 판단의 근거가
+            # 다시 조회했을 때 사라진다. §5.2 「수동 정정」 동반 필드이기도 하다.
+            changes["note"] = request.note
+            message = message.model_copy(update={"note": request.note})
+
         if not changes:
             return event
-
-        # `note` 는 저장하지 않는다 — `events` 테이블(기능명세서 §6)에 컬럼이 없다.
-        # 명세서에 없는 컬럼을 코드가 먼저 만들지 않는다(절대규칙 8). 대시보드에는
-        # 실어 보내고 로그에 남긴다. docs/INDEX.md 「명세서 확인 필요」 참조.
-        if request.note:
-            log.info("수동 정정 메모 %s — %s", event_id, request.note)
 
         await self._store.update(event_id, changes)
         await self._publish(message)
@@ -324,8 +323,6 @@ class EventService:
                     await self._store.create(effect.event)
             case "update":
                 await self._store.update(effect.event_id, effect.changes)
-            case "delete":
-                await self._store.delete(effect.event_id)
 
     async def _publish_metric(self) -> None:
         """§5.3 `metric` — 종결이 일어났으니 시정률이 바뀌었다.
@@ -338,6 +335,9 @@ class EventService:
         except (OSError, RuntimeError, ValueError) as exc:
             log.warning("지표를 다시 계산하지 못했다: %s", exc)
             return
+        # §5.3 페이로드에는 `resolved_late` 칸이 없다. 화면이 시정률을 다시 계산하지
+        # 않고 서버가 보낸 값을 그대로 쓰므로 문제되지 않으며, 늦은 시정 건수가
+        # 필요하면 `GET /metrics/summary` 를 읽는다.
         await self._publish(
             MetricMsg(
                 period=summary.period,

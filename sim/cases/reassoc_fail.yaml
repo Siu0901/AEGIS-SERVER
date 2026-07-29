@@ -6,8 +6,12 @@
 #   +23.0s  유예 만료 → expired · track_lost_grace_s = 15
 #
 # **expired 는 미시정이 아니다.** 시정률 분모·분자 모두에서 빠지고
-# `undetermined_rate` 로 따로 집계된다(§6.7). 그래서 시정률은 0.0 이 아니라
-# "모집단이 비었다"이고, 판정 불가율이 1.0 이다.
+# `undetermined_rate` 로 따로 집계된다(§6.7).
+#
+# ★ 그래서 시정률은 **`null`** 이다. 해소 0 · 늦은시정 0 · 미시정 0 이면 분모가 0 이고,
+#   `0.00` 은 "시정률 0%"라는 주장이지만 실제로는 "판정 가능한 이벤트가 없다"이다.
+#   판정 불가만 있는 구간에서 0% 가 표시되면 시스템이 전혀 작동하지 않은 것처럼 보인다.
+#   판정 불가율은 1/(0+1) = 1.0 이다.
 
 name: reassoc_fail
 description: 재결합에 실패해 판정 불가(expired)로 끝난 경우
@@ -89,10 +93,12 @@ expect:
       alert_count: 1
       alerted_at_s: 3.5
   metrics:
-    correction_rate: 0.0
+    # ★ 0.0 이 아니라 null 이다. 분모(해소 + 늦은시정 + 미시정)가 0 이다.
+    correction_rate: null
     undetermined_rate: 1.0
     total_violations: 1
     resolved: 0
+    resolved_late: 0
     unresolved: 0
     undetermined: 1
     fall_events: 0

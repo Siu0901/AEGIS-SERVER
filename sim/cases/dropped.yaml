@@ -1,0 +1,123 @@
+# dropped — 후보가 확정 지속시간을 못 채우고 사라진다. **레코드는 남는다.**
+#
+# 기능명세서 §4.2 — 확정 전(`candidate`)에 조건이 사라지면 `dropped` 로 종결한다.
+# 이 일은 정상적으로 흔하며, 세 가지 대안이 전부 틀렸기 때문에 상태가 신설됐다.
+#
+#   레코드 삭제      → `dropped / (dropped + 확정)` 을 못 세어 confirm_duration_s 를
+#                      튜닝할 근거가 사라진다
+#   `expired` 로 종결 → 판정 불가율이 오염된다. `expired` 는 "경고까지 갔는데 시정
+#                      여부를 못 봤다"는 뜻이다
+#   `candidate` 방치  → 병합 키(cam_id+track_id+violation_type)를 계속 점유해
+#                      같은 트랙의 새 위반이 병합되어 버린다
+#
+# 서버가 이렇게 판정하기를 기대한다:
+#   +0.5s   `no_helmet` 후보 → 이벤트 생성 (status=candidate)
+#   ~+2.5s  안전모 착용 관측 (후보가 2초만 관측되고 끊긴다)
+#   +5.5s   소멸이 confirm_duration_s(3초)만큼 지속 → **dropped**
+#
+#   확정(3초)에 0.5초 모자란다. 관측이 2.0초에서 멈추므로 alerted 로 가지 않는다.
+#
+# 지표에서 무엇을 잠그는가: `dropped` 는 시정률에도 판정 불가율에도 들어가지 않는다.
+# 이벤트가 하나 있는데 total_violations 는 0 이고, 두 비율은 모집단이 비어 **null**이다.
+# `dropped` 가 미시정으로 새면 correction_rate 가 0.0 으로, 판정 불가로 새면
+# undetermined_rate 가 1.0 으로 나온다. 셋이 모두 구분된다.
+
+name: dropped
+description: 확정 전에 사라진 후보가 dropped 로 남고 지표 어디에도 들어가지 않는지
+cam_id: 1
+frame_fps: 8
+
+timeline:
+  - at: 0.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.91
+        bbox: [0.197, 0.364, 0.273, 0.764]
+        helmet: "off"
+        helmet_conf: 0.88
+        foot_point: [0.235, 0.762]
+        foot_point_m: [4.21, 7.85]
+        foot_conf: 0.88
+        posture: standing
+        height_ratio: 0.97
+        axis_angle_deg: 8.2
+        stillness_s: 0.4
+        in_zone: forklift_lane
+
+  - at: 0.5
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violation_type: no_helmet
+    zone_id: forklift_lane
+    bbox: [0.197, 0.364, 0.273, 0.764]
+    conf: 0.91
+    foot_point_m: [4.21, 7.85]
+    foot_conf: 0.88
+    helmet: "off"
+    helmet_conf: 0.88
+    posture: standing
+    observed_ms: 500
+    nearby: []
+
+  # --- 2.5s: 안전모를 쓴다. 확정까지 0.5초가 모자란 채로 위반이 사라진다 ---
+  - at: 2.5
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.92
+        bbox: [0.226, 0.362, 0.303, 0.763]
+        helmet: "on"
+        helmet_conf: 0.93
+        foot_point: [0.264, 0.761]
+        foot_point_m: [4.72, 7.88]
+        foot_conf: 0.89
+        posture: standing
+        height_ratio: 0.98
+        axis_angle_deg: 7.1
+        stillness_s: 0.3
+        in_zone: forklift_lane
+
+  # 소멸이 3초 이어지는 것을 서버가 관측해야 한다. 프레임은 계속 온다.
+  - at: 7.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.90
+        bbox: [0.281, 0.360, 0.358, 0.761]
+        helmet: "on"
+        helmet_conf: 0.95
+        foot_point: [0.319, 0.759]
+        foot_point_m: [6.44, 7.93]
+        foot_conf: 0.88
+        posture: standing
+        height_ratio: 0.98
+        axis_angle_deg: 5.1
+        stillness_s: 0.3
+        in_zone: forklift_lane
+
+expect:
+  events:
+    - track_id: 3
+      violation_type: no_helmet
+      # ★ 레코드가 지워지지 않고 남아 있어야 한다.
+      status: dropped
+      # 확정에 닿은 적이 없으므로 경고도 없다.
+      alert_count: 0
+  metrics:
+    # ★ 셋 다 0 이므로 분모가 0 이고, 두 비율은 null 이다.
+    correction_rate: null
+    undetermined_rate: null
+    total_violations: 0
+    resolved: 0
+    resolved_late: 0
+    unresolved: 0
+    undetermined: 0
+    fall_events: 0

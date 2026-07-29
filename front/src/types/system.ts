@@ -126,14 +126,40 @@ export interface EventCreatedMsg {
 }
 
 /**
+ * §5.3 `metric` — 종결이 일어나 지표가 바뀌었다.
+ *
+ * **`correction_rate` 와 `undetermined_rate` 는 `null` 이 될 수 있다** (§6.7).
+ * 분모(해소 + 늦은 시정 + 미시정)가 0이면 서버가 `null` 을 보낸다. `0` 으로 그리면
+ * "시정률 0%"라는 주장이 되는데, 실제로는 "판정 가능한 이벤트가 없다"는 뜻이다.
+ * 화면은 `formatRate` 로 `–` 를 찍고 **0% 와 다르게** 그린다.
+ *
+ * 늦은 시정 건수(`resolved_late`)는 이 페이로드에 없다 — 필요하면
+ * `GET /metrics/summary`(§4.2)를 읽는다.
+ */
+export interface MetricMsg {
+  type: 'metric'
+  period: string
+  correction_rate: number | null
+  undetermined_rate: number | null
+  total_violations: number
+  resolved: number
+  unresolved: number
+  undetermined: number
+  avg_resolution_sec: number
+  fall_events: number
+  anomaly_flags: number
+}
+
+/**
  * `/ws/dashboard` 로 내려오는 메시지 (§5).
  *
- * M2 에서 흐르는 것은 `system` 과 `overlay` 다. `event_*` 는 확정 판정이 생기는
- * M3 부터, `metric` 은 지표 집계가 생기는 M4 부터 붙는다.
+ * M2 에서 흐르는 것은 `system` 과 `overlay` 다. `event_*` 와 `metric` 은 확정 판정과
+ * 지표 집계가 생기는 M3 부터 흐른다(표시는 개요 화면 FN-UI-01 · M5).
  */
 export type DashboardMessage =
   | SystemMsg
   | EventCreatedMsg
+  | MetricMsg
   | OverlayMsg
   | ZoneUpdatedMsg
   | { type: string }
@@ -148,6 +174,25 @@ export function isCameraSystemMsg(message: SystemMsg): message is CameraSystemMs
 
 export function isEventCreatedMsg(message: DashboardMessage): message is EventCreatedMsg {
   return message.type === 'event_created'
+}
+
+export function isMetricMsg(message: DashboardMessage): message is MetricMsg {
+  return message.type === 'metric'
+}
+
+/** 비율이 `null`(모집단 없음)일 때 화면에 찍는 글자. 0% 와 같아 보이면 안 된다. */
+export const RATE_UNAVAILABLE = '–'
+
+/**
+ * 비율 지표를 화면 문자열로 (§6.7).
+ *
+ * `null` 은 **`–`** 다. `0%` 로 접으면 판정 불가만 있던 구간이 "아무도 시정하지
+ * 않았다"로 읽히는데, 두 상황은 대응이 정반대다.
+ *
+ * 시정률은 판정 불가율과 **항상 병기**한다 — `방송 후 시정률 87% (판정 불가 5%)`.
+ */
+export function formatRate(value: number | null): string {
+  return value === null ? RATE_UNAVAILABLE : `${Math.round(value * 100)}%`
 }
 
 // ---------------------------------------------------------------------------

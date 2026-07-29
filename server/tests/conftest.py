@@ -168,7 +168,7 @@ class FakeEventStore:
         self.items: list[EventDetail] = list(items or [])
         self.created: list[EventDetail] = []
         self.updates: list[tuple[str, dict[str, Any]]] = []
-        self.deleted: list[str] = []
+        self.notes: dict[str, str] = {}
         self.fail_with: Exception | None = None
 
     async def find_open_events(
@@ -199,13 +199,15 @@ class FakeEventStore:
         # 응답에 날문자열이 실려도 테스트가 통과한다.
         if "status" in patch:
             patch["status"] = EventStatus(patch["status"])
+        note = patch.pop("note", None)
+        if note is not None:
+            # `note` 는 DB `events` 컬럼(§6)이고 §4.1 응답 모델에는 없다.
+            # 실제 저장소와 마찬가지로 저장소 쪽에서 기억한다.
+            self.notes[event_id] = note
+        patch.pop("last_alerted_at", None)
         for index, item in enumerate(self.items):
             if item.event_id == event_id:
                 self.items[index] = item.model_copy(update=patch)
-
-    async def delete(self, event_id: str) -> None:
-        self.deleted.append(event_id)
-        self.items = [item for item in self.items if item.event_id != event_id]
 
     async def find_open_all(self) -> list[EventSummary]:
         return [

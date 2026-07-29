@@ -35,7 +35,19 @@ __all__ = [
 
 
 class EventStatus(StrEnum):
-    """이벤트 상태머신 값. 기능명세서 §4.2 상태 전이표."""
+    """이벤트 상태머신 값. 기능명세서 §4.2 상태 전이표.
+
+    종결 상태는 셋이며 **뜻이 서로 다르다**:
+
+    | 값 | 뜻 | 지표 |
+    |---|---|---|
+    | `resolved` | 위반 소멸이 지속되어 시정으로 인정 | 분모(창 안이면 분자도) |
+    | `expired` | 경고까지 갔으나 추적이 끊겨 시정 여부를 못 봄 | 판정 불가 — 분모·분자 제외 |
+    | `dropped` | **확정 전** 후보 단계에서 조건이 사라져 소멸 | 전량 제외 (진단용) |
+
+    `dropped` 를 `expired` 로 합치지 않는다 — `expired` 는 "위반이었음이 확정된 뒤
+    관측을 놓쳤다"는 뜻이라, 확정된 적도 없는 후보를 섞으면 판정 불가율이 오염된다.
+    """
 
     CANDIDATE = "candidate"
     ACTIVE = "active"
@@ -44,6 +56,7 @@ class EventStatus(StrEnum):
     LOST = "lost"
     RESOLVED = "resolved"
     EXPIRED = "expired"
+    DROPPED = "dropped"
 
 
 class ViolationType(StrEnum):

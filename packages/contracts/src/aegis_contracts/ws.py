@@ -158,7 +158,9 @@ class EventCreatedMsg(SpecModel):
     alerted_at: AwareDatetime | None
     severity: AlertLevel
     """§3 `AlertCommand.level` 과 동일한 척도이며 같은 값을 쓴다."""
-    keyframe_url: str
+    keyframe_url: str | None
+    """**`null` 이 될 수 있다**(§5.2). 키프레임 추출이 실패했거나 REC 에 도달하지
+    못한 경우다. 존재하지 않는 URL 을 문자열로 내보내지 않는다."""
 
 
 class EventUpdatedMsg(SpecModel):
@@ -169,14 +171,16 @@ class EventUpdatedMsg(SpecModel):
 
     | 전이 | 함께 싣는 필드 |
     |---|---|
-    | → `alerted` | `alerted_at` · `alert_count` · `severity` |
-    | → `re_alerted` | `alerted_at`(최근) · `alert_count` |
+    | → `alerted` | `alerted_at` · `last_alerted_at` · `alert_count` · `severity` |
+    | → `re_alerted` | `last_alerted_at` · `alert_count` |
     | → `lost` | `lost_at` |
     | `lost` → 복귀 | `track_id`(갱신된 값) · `reassoc_count` |
     | → `resolved` | `resolved_at` · `resolution_sec` |
     | → `expired` | `expired_at` |
     | 클립 준비 완료 | `clip_status` · `clip_url` |
     | 수동 정정 | `is_false_positive` · `note` |
+
+    `dropped`(확정 전 소멸)는 §5.2 표에 동반 필드가 없다 — `status` 만 바뀐다.
     """
 
     type: Literal["event_updated"] = "event_updated"
@@ -184,6 +188,13 @@ class EventUpdatedMsg(SpecModel):
     status: EventStatus
 
     alerted_at: AwareDatetime | None = None
+    """**최초** 경고 시각. 재경고로 갱신하지 않는다(§5.2)."""
+    last_alerted_at: AwareDatetime | None = None
+    """**최근** 경고 시각. 재경고할 때마다 갱신된다.
+
+    `alerted_at` 과 분리한 이유: `resolution_sec` 이 `alerted_at → resolved_at` 으로
+    정의되어 있어, 재경고마다 `alerted_at` 을 덮으면 재경고가 많을수록 시정 소요
+    시간이 짧아져 **시정률이 부풀려진다**(§5.2)."""
     alert_count: int | None = None
     severity: AlertLevel | None = None
 
@@ -216,12 +227,18 @@ class MetricMsg(SpecModel):
     `anomaly_flags` 는 §5.3 페이로드에 없다.
 
     `correction_rate` 와 `undetermined_rate` 는 화면에서 **항상 병기**한다.
+
+    §5.3 페이로드에는 `resolved_late`(§4.2 · §6.7)가 없다. 화면이 시정률을 다시
+    계산하지 않고 서버가 보낸 값을 그대로 쓰기 때문이며, 늦은 시정 건수가 필요하면
+    `GET /metrics/summary` 를 읽는다.
     """
 
     type: Literal["metric"] = "metric"
     period: str
-    correction_rate: float
-    undetermined_rate: float
+    correction_rate: float | None
+    """분모가 0이면 `null`(§6.7). `MetricsSummary.correction_rate` 와 같은 값이다."""
+    undetermined_rate: float | None
+    """모집단이 비면 `null`."""
     total_violations: int
     resolved: int
     unresolved: int
