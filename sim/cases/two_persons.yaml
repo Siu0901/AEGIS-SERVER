@@ -16,6 +16,10 @@
 #   +18s 1.18m
 #
 # cam 2 에는 금지구역을 두지 않았다. `in_zone` 은 계속 `null` 이다.
+#
+# **후보 메시지 하나에는 위반 유형이 하나만 담긴다**(§2.2). 9초 이후로는 `no_helmet`
+# 과 `proximity` 후보가 같은 시각에 각각 하나씩 나간다. `observed_ms` 는 안전모가
+# 0초부터, 근접이 8.4초(거리가 2.0m 를 통과한 시점)부터다.
 
 name: two_persons
 description: 작업자 2명 + 지게차 1대 · 한 명만 안전모 미착용 (no_helmet + proximity)
@@ -71,7 +75,8 @@ timeline:
         track_id: 12
         conf: 0.89
         bbox: [0.742, 0.375, 0.978, 0.660]
-        anchor_m: [10.36, 10.54]
+        anchor: [0.845, 0.668]
+        anchor_m: [10.10, 10.33]
         moving: true
         danger_radius_m: 3.0
 
@@ -142,7 +147,7 @@ timeline:
     type: candidate
     cam_id: 2
     track_id: 8
-    violations: [no_helmet, proximity]
+    violations: [no_helmet]
     zone_id: null
     bbox: [0.540, 0.342, 0.628, 0.713]
     conf: 0.92
@@ -152,6 +157,25 @@ timeline:
     helmet_conf: 0.88
     posture: standing
     observed_ms: 9000
+    nearby:
+      - {class: vehicle, track_id: 12, dist_m: 1.96, method: mask_nearest,
+         depth_verified: true, moving: true, within_danger_radius: true}
+
+  # ── 키프레임 ② ─────────────────────────────────────────
+  - at: 9.0
+    type: candidate
+    cam_id: 2
+    track_id: 8
+    violations: [proximity]
+    zone_id: null
+    bbox: [0.540, 0.342, 0.628, 0.713]
+    conf: 0.92
+    foot_point_m: [6.89, 9.18]
+    foot_conf: 0.89
+    helmet: "off"
+    helmet_conf: 0.88
+    posture: standing
+    observed_ms: 600
     nearby:
       - {class: vehicle, track_id: 12, dist_m: 1.96, method: mask_nearest,
          depth_verified: true, moving: true, within_danger_radius: true}
@@ -193,7 +217,8 @@ timeline:
         track_id: 12
         conf: 0.90
         bbox: [0.594, 0.382, 0.846, 0.685]
-        anchor_m: [8.50, 9.89]
+        anchor: [0.706, 0.693]
+        anchor_m: [8.29, 9.68]
         moving: true
         danger_radius_m: 3.0
 
@@ -212,7 +237,7 @@ timeline:
     type: candidate
     cam_id: 2
     track_id: 8
-    violations: [no_helmet, proximity]
+    violations: [no_helmet]
     zone_id: null
     bbox: [0.529, 0.341, 0.619, 0.719]
     conf: 0.92
@@ -226,11 +251,29 @@ timeline:
       - {class: vehicle, track_id: 12, dist_m: 1.67, method: mask_nearest,
          depth_verified: true, moving: true, within_danger_radius: true}
 
+  - at: 12.0
+    type: candidate
+    cam_id: 2
+    track_id: 8
+    violations: [proximity]
+    zone_id: null
+    bbox: [0.529, 0.341, 0.619, 0.719]
+    conf: 0.92
+    foot_point_m: [6.77, 9.01]
+    foot_conf: 0.89
+    helmet: "off"
+    helmet_conf: 0.88
+    posture: standing
+    observed_ms: 3600
+    nearby:
+      - {class: vehicle, track_id: 12, dist_m: 1.67, method: mask_nearest,
+         depth_verified: true, moving: true, within_danger_radius: true}
+
   - at: 15.0
     type: candidate
     cam_id: 2
     track_id: 8
-    violations: [no_helmet, proximity]
+    violations: [no_helmet]
     zone_id: null
     bbox: [0.520, 0.341, 0.611, 0.725]
     conf: 0.93
@@ -240,6 +283,24 @@ timeline:
     helmet_conf: 0.89
     posture: standing
     observed_ms: 15000
+    nearby:
+      - {class: vehicle, track_id: 12, dist_m: 1.42, method: mask_nearest,
+         depth_verified: true, moving: true, within_danger_radius: true}
+
+  - at: 15.0
+    type: candidate
+    cam_id: 2
+    track_id: 8
+    violations: [proximity]
+    zone_id: null
+    bbox: [0.520, 0.341, 0.611, 0.725]
+    conf: 0.93
+    foot_point_m: [6.67, 8.85]
+    foot_conf: 0.90
+    helmet: "off"
+    helmet_conf: 0.89
+    posture: standing
+    observed_ms: 6600
     nearby:
       - {class: vehicle, track_id: 12, dist_m: 1.42, method: mask_nearest,
          depth_verified: true, moving: true, within_danger_radius: true}
@@ -259,7 +320,7 @@ timeline:
     type: candidate
     cam_id: 2
     track_id: 8
-    violations: [no_helmet, proximity]
+    violations: [no_helmet]
     zone_id: null
     bbox: [0.510, 0.340, 0.602, 0.731]
     conf: 0.93
@@ -269,6 +330,25 @@ timeline:
     helmet_conf: 0.89
     posture: standing
     observed_ms: 18000
+    nearby:
+      - {class: vehicle, track_id: 12, dist_m: 1.18, method: mask_nearest,
+         depth_verified: true, moving: true, within_danger_radius: true}
+
+  # ── 키프레임 ③ ─────────────────────────────────────────
+  - at: 18.0
+    type: candidate
+    cam_id: 2
+    track_id: 8
+    violations: [proximity]
+    zone_id: null
+    bbox: [0.510, 0.340, 0.602, 0.731]
+    conf: 0.93
+    foot_point_m: [6.56, 8.69]
+    foot_conf: 0.90
+    helmet: "off"
+    helmet_conf: 0.89
+    posture: standing
+    observed_ms: 9600
     nearby:
       - {class: vehicle, track_id: 12, dist_m: 1.18, method: mask_nearest,
          depth_verified: true, moving: true, within_danger_radius: true}
@@ -310,7 +390,8 @@ timeline:
         track_id: 12
         conf: 0.91
         bbox: [0.485, 0.385, 0.755, 0.710]
-        anchor_m: [7.28, 9.24]
+        anchor: [0.607, 0.718]
+        anchor_m: [7.11, 9.03]
         moving: true
         danger_radius_m: 3.0
 
@@ -362,6 +443,7 @@ timeline:
         track_id: 12
         conf: 0.90
         bbox: [0.435, 0.386, 0.715, 0.722]
-        anchor_m: [6.77, 8.93]
+        anchor: [0.562, 0.730]
+        anchor_m: [6.62, 8.72]
         moving: true
         danger_radius_m: 3.0

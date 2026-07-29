@@ -49,7 +49,8 @@ timeline:
         track_id: 11
         conf: 0.87
         bbox: [0.591, 0.389, 0.838, 0.756]
-        anchor_m: [7.02, 8.90]
+        anchor: [0.728, 0.767]
+        anchor_m: [7.36, 8.72]
         moving: true
         danger_radius_m: 3.0
 
@@ -57,7 +58,31 @@ timeline:
     type: candidate
     cam_id: 1
     track_id: 3
-    violations: [no_helmet, zone_intrusion]
+    violations: [no_helmet]
+    zone_id: forklift_lane
+    bbox: [0.197, 0.364, 0.273, 0.764]
+    conf: 0.91
+    foot_point_m: [4.21, 7.85]
+    foot_conf: 0.88
+    helmet: "off"
+    helmet_conf: 0.88
+    posture: standing
+    observed_ms: 1000
+    nearby:
+      - class: vehicle
+        track_id: 11
+        dist_m: 3.2
+        method: mask_nearest
+        depth_verified: true
+        moving: true
+        within_danger_radius: false
+
+  # --- 확정 조건(3초)을 채우는 구간 ---
+  - at: 1.0
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violations: [zone_intrusion]
     zone_id: forklift_lane
     bbox: [0.197, 0.364, 0.273, 0.764]
     conf: 0.91
@@ -81,7 +106,24 @@ timeline:
     type: candidate
     cam_id: 1
     track_id: 3
-    violations: [no_helmet, zone_intrusion]
+    violations: [no_helmet]
+    zone_id: forklift_lane
+    bbox: [0.199, 0.363, 0.276, 0.765]
+    conf: 0.93
+    foot_point_m: [4.25, 7.88]
+    foot_conf: 0.90
+    helmet: "off"
+    helmet_conf: 0.91
+    posture: standing
+    observed_ms: 3200
+    nearby: []
+
+  # --- 안전모 착용 · 구역 이탈 → 위반 소멸 ---
+  - at: 3.2
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violations: [zone_intrusion]
     zone_id: forklift_lane
     bbox: [0.199, 0.363, 0.276, 0.765]
     conf: 0.93

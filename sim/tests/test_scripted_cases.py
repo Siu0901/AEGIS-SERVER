@@ -138,6 +138,7 @@ def test_tweening_only_covers_tracks_present_in_both_keyframes(tmp_path: Path) -
         "        track_id: 9\n"
         "        conf: 0.80\n"
         "        bbox: [0.600, 0.400, 0.800, 0.700]\n"
+        "        anchor: [0.700, 0.700]\n"
         "        anchor_m: [9.00, 9.00]\n"
         "        moving: false\n"
         "        danger_radius_m: 3.0\n",

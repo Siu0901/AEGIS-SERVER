@@ -2,9 +2,13 @@
 #
 # 서버가 이렇게 판정하기를 기대한다 (M2 범위):
 #   +1.0s   `no_helmet` 후보 수신 → 이벤트 1건 생성 (status=candidate)
-#   +6.5s   `zone_intrusion` 이 더해짐 → **위반 유형이 다르므로 이벤트 1건 추가**
+#   +6.5s   `zone_intrusion` 후보가 **따로** 도착 → 이벤트 1건 추가
 #   이후    같은 트랙·같은 유형의 후보는 **병합**되고 새 이벤트를 만들지 않는다
 #           (FN-EVT-01). 총 이벤트는 정확히 2건이어야 한다.
+#
+# **후보 메시지 하나에는 위반 유형이 하나만 담긴다**(§2.2). 6.5초 이후로는 같은
+# 시각에 `no_helmet` 과 `zone_intrusion` 후보가 각각 하나씩, 둘로 나뉘어 나간다.
+# `observed_ms` 도 유형별로 따로 잰다 — 안전모는 0초부터, 구역 침입은 6초부터다.
 #
 #   확정(3초)·경고·해소는 M3 이다. 여기서는 status 가 candidate 에 머문다.
 #
@@ -56,7 +60,8 @@ timeline:
         track_id: 11
         conf: 0.86
         bbox: [0.092, 0.361, 0.308, 0.620]
-        anchor_m: [2.01, 11.58]
+        anchor: [0.213, 0.631]
+        anchor_m: [2.27, 11.29]
         moving: false
         danger_radius_m: 3.0
 
@@ -142,7 +147,8 @@ timeline:
         track_id: 11
         conf: 0.87
         bbox: [0.092, 0.361, 0.308, 0.620]
-        anchor_m: [2.01, 11.58]
+        anchor: [0.213, 0.631]
+        anchor_m: [2.27, 11.29]
         moving: false
         danger_radius_m: 3.0
 
@@ -150,7 +156,7 @@ timeline:
     type: candidate
     cam_id: 1
     track_id: 3
-    violations: [no_helmet, zone_intrusion]
+    violations: [no_helmet]
     zone_id: forklift_lane
     bbox: [0.489, 0.339, 0.583, 0.736]
     conf: 0.93
@@ -162,11 +168,27 @@ timeline:
     observed_ms: 6500
     nearby: []
 
+  - at: 6.5
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violations: [zone_intrusion]
+    zone_id: forklift_lane
+    bbox: [0.489, 0.339, 0.583, 0.736]
+    conf: 0.93
+    foot_point_m: [6.36, 8.55]
+    foot_conf: 0.90
+    helmet: "off"
+    helmet_conf: 0.91
+    posture: standing
+    observed_ms: 500
+    nearby: []
+
   - at: 8.0
     type: candidate
     cam_id: 1
     track_id: 3
-    violations: [no_helmet, zone_intrusion]
+    violations: [no_helmet]
     zone_id: forklift_lane
     bbox: [0.446, 0.338, 0.541, 0.741]
     conf: 0.93
@@ -178,11 +200,27 @@ timeline:
     observed_ms: 8000
     nearby: []
 
+  - at: 8.0
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violations: [zone_intrusion]
+    zone_id: forklift_lane
+    bbox: [0.446, 0.338, 0.541, 0.741]
+    conf: 0.93
+    foot_point_m: [5.95, 8.44]
+    foot_conf: 0.90
+    helmet: "off"
+    helmet_conf: 0.92
+    posture: standing
+    observed_ms: 2000
+    nearby: []
+
   - at: 10.0
     type: candidate
     cam_id: 1
     track_id: 3
-    violations: [no_helmet, zone_intrusion]
+    violations: [no_helmet]
     zone_id: forklift_lane
     bbox: [0.388, 0.336, 0.485, 0.746]
     conf: 0.94
@@ -192,6 +230,22 @@ timeline:
     helmet_conf: 0.92
     posture: standing
     observed_ms: 10000
+    nearby: []
+
+  - at: 10.0
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violations: [zone_intrusion]
+    zone_id: forklift_lane
+    bbox: [0.388, 0.336, 0.485, 0.746]
+    conf: 0.94
+    foot_point_m: [5.42, 8.30]
+    foot_conf: 0.91
+    helmet: "off"
+    helmet_conf: 0.92
+    posture: standing
+    observed_ms: 4000
     nearby: []
 
   - at: 10.0
@@ -228,7 +282,8 @@ timeline:
         track_id: 11
         conf: 0.88
         bbox: [0.092, 0.361, 0.308, 0.620]
-        anchor_m: [2.01, 11.58]
+        anchor: [0.213, 0.631]
+        anchor_m: [2.27, 11.29]
         moving: false
         danger_radius_m: 3.0
 
@@ -236,7 +291,7 @@ timeline:
     type: candidate
     cam_id: 1
     track_id: 3
-    violations: [no_helmet, zone_intrusion]
+    violations: [no_helmet]
     zone_id: forklift_lane
     bbox: [0.317, 0.334, 0.416, 0.754]
     conf: 0.94
@@ -246,6 +301,24 @@ timeline:
     helmet_conf: 0.92
     posture: standing
     observed_ms: 13000
+    nearby:
+      - {class: vehicle, track_id: 11, dist_m: 4.43, method: mask_nearest,
+         depth_verified: false, moving: false, within_danger_radius: false}
+
+  - at: 13.0
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violations: [zone_intrusion]
+    zone_id: forklift_lane
+    bbox: [0.317, 0.334, 0.416, 0.754]
+    conf: 0.94
+    foot_point_m: [4.76, 8.11]
+    foot_conf: 0.91
+    helmet: "off"
+    helmet_conf: 0.92
+    posture: standing
+    observed_ms: 7000
     nearby:
       - {class: vehicle, track_id: 11, dist_m: 4.43, method: mask_nearest,
          depth_verified: false, moving: false, within_danger_radius: false}
@@ -265,7 +338,7 @@ timeline:
     type: candidate
     cam_id: 1
     track_id: 3
-    violations: [no_helmet, zone_intrusion]
+    violations: [no_helmet]
     zone_id: forklift_lane
     bbox: [0.275, 0.333, 0.375, 0.759]
     conf: 0.93
@@ -279,11 +352,29 @@ timeline:
       - {class: vehicle, track_id: 11, dist_m: 4.33, method: mask_nearest,
          depth_verified: false, moving: false, within_danger_radius: false}
 
+  - at: 16.0
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violations: [zone_intrusion]
+    zone_id: forklift_lane
+    bbox: [0.275, 0.333, 0.375, 0.759]
+    conf: 0.93
+    foot_point_m: [4.41, 7.98]
+    foot_conf: 0.90
+    helmet: "off"
+    helmet_conf: 0.91
+    posture: standing
+    observed_ms: 10000
+    nearby:
+      - {class: vehicle, track_id: 11, dist_m: 4.33, method: mask_nearest,
+         depth_verified: false, moving: false, within_danger_radius: false}
+
   - at: 19.0
     type: candidate
     cam_id: 1
     track_id: 3
-    violations: [no_helmet, zone_intrusion]
+    violations: [no_helmet]
     zone_id: forklift_lane
     bbox: [0.233, 0.331, 0.335, 0.763]
     conf: 0.92
@@ -293,6 +384,25 @@ timeline:
     helmet_conf: 0.91
     posture: standing
     observed_ms: 19000
+    nearby:
+      - {class: vehicle, track_id: 11, dist_m: 4.25, method: mask_nearest,
+         depth_verified: false, moving: false, within_danger_radius: false}
+
+  # ── 키프레임 ④ ─────────────────────────────────────────
+  - at: 19.0
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violations: [zone_intrusion]
+    zone_id: forklift_lane
+    bbox: [0.233, 0.331, 0.335, 0.763]
+    conf: 0.92
+    foot_point_m: [4.05, 7.85]
+    foot_conf: 0.90
+    helmet: "off"
+    helmet_conf: 0.91
+    posture: standing
+    observed_ms: 13000
     nearby:
       - {class: vehicle, track_id: 11, dist_m: 4.25, method: mask_nearest,
          depth_verified: false, moving: false, within_danger_radius: false}
@@ -320,7 +430,8 @@ timeline:
         track_id: 11
         conf: 0.88
         bbox: [0.092, 0.361, 0.308, 0.620]
-        anchor_m: [2.01, 11.58]
+        anchor: [0.213, 0.631]
+        anchor_m: [2.27, 11.29]
         moving: false
         danger_radius_m: 3.0
 
@@ -339,7 +450,7 @@ timeline:
     type: candidate
     cam_id: 1
     track_id: 3
-    violations: [no_helmet, zone_intrusion]
+    violations: [no_helmet]
     zone_id: forklift_lane
     bbox: [0.197, 0.328, 0.300, 0.768]
     conf: 0.91
@@ -349,6 +460,25 @@ timeline:
     helmet_conf: 0.90
     posture: standing
     observed_ms: 22000
+    nearby:
+      - {class: vehicle, track_id: 11, dist_m: 4.24, method: mask_nearest,
+         depth_verified: false, moving: false, within_danger_radius: false}
+
+  # ── 키프레임 ⑤  화면 왼쪽 끝 ────────────────────────────
+  - at: 22.0
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violations: [zone_intrusion]
+    zone_id: forklift_lane
+    bbox: [0.197, 0.328, 0.300, 0.768]
+    conf: 0.91
+    foot_point_m: [3.77, 7.72]
+    foot_conf: 0.89
+    helmet: "off"
+    helmet_conf: 0.90
+    posture: standing
+    observed_ms: 16000
     nearby:
       - {class: vehicle, track_id: 11, dist_m: 4.24, method: mask_nearest,
          depth_verified: false, moving: false, within_danger_radius: false}
@@ -376,7 +506,8 @@ timeline:
         track_id: 11
         conf: 0.87
         bbox: [0.092, 0.361, 0.308, 0.620]
-        anchor_m: [2.01, 11.58]
+        anchor: [0.213, 0.631]
+        anchor_m: [2.27, 11.29]
         moving: false
         danger_radius_m: 3.0
 
