@@ -1,0 +1,334 @@
+/* 개요 화면 (FN-UI-01). 시안 1페이지의 레이아웃·색상 체계를 따른다. */
+
+.overview {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* --- 핵심 지표 4개 ------------------------------------------------------- */
+
+.overview__tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px 18px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  border-left: 3px solid var(--text-dim);
+}
+
+.tile--ok {
+  border-left-color: var(--ok);
+}
+.tile--warn {
+  border-left-color: var(--warn);
+}
+.tile--danger {
+  border-left-color: var(--danger);
+}
+
+.tile__label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.tile__value {
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.5px;
+}
+
+.tile__unit {
+  margin-left: 3px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.tile__foot {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+/* 지표 검산이 어긋났다는 경고. 화면 전체에 걸치게 둔다 — 숫자를 그대로 믿게 하지 않는다. */
+.overview__mismatch {
+  margin: 0;
+  padding: 10px 14px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--text);
+  font-size: 13px;
+}
+
+/* --- 2열 배치 ------------------------------------------------------------ */
+
+.overview__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
+  gap: 16px;
+}
+
+@media (max-width: 1100px) {
+  .overview__row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.overview__panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.overview__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.overview__head .card__title {
+  margin: 0;
+}
+
+.overview__hint {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.overview__hint--off {
+  color: var(--danger);
+}
+
+.overview__dim {
+  color: var(--text-dim);
+}
+
+/* --- 위반 추세 ----------------------------------------------------------- */
+
+.spark {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.spark svg {
+  width: 100%;
+  height: 120px;
+}
+
+.spark__area {
+  fill: var(--accent-soft);
+}
+
+.spark__line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 0.8;
+  vector-effect: non-scaling-stroke;
+}
+
+.spark__axis {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* --- 유형 분포 ----------------------------------------------------------- */
+
+.dist {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dist__row {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr) 28px;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.dist__label {
+  color: var(--text-muted);
+}
+
+.dist__bar {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--bg-panel-hover);
+  overflow: hidden;
+}
+
+.dist__fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--text-dim);
+}
+
+/* 색은 오버레이 표시 규칙과 같은 계열을 쓴다(기능명세서 §4.6 표). */
+.dist__fill--no_helmet {
+  background: var(--danger);
+}
+.dist__fill--zone_intrusion {
+  background: var(--warn);
+}
+.dist__fill--proximity {
+  background: #a78bfa;
+}
+.dist__fill--fall {
+  background: #fb7185;
+}
+
+.dist__count {
+  text-align: right;
+  color: var(--text);
+}
+
+/* --- 최근 이벤트 --------------------------------------------------------- */
+
+.recent {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.recent__item + .recent__item {
+  border-top: 1px solid var(--border);
+}
+
+.recent__link {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 2px;
+  border-radius: var(--radius-sm);
+}
+
+.recent__link:hover {
+  background: var(--bg-panel-hover);
+}
+
+.recent__mark {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 999px;
+  background: var(--text-dim);
+}
+
+.recent__mark--no_helmet {
+  background: var(--danger);
+}
+.recent__mark--zone_intrusion {
+  background: var(--warn);
+}
+.recent__mark--proximity {
+  background: #a78bfa;
+}
+.recent__mark--fall {
+  background: #fb7185;
+}
+
+.recent__body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+
+.recent__title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.recent__meta {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.recent__when {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* --- 시스템 상태 --------------------------------------------------------- */
+
+.health {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.health__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.health__name {
+  color: var(--text-muted);
+}
+
+/* --- 상태 배지 (이벤트 화면과 공유) -------------------------------------- */
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.badge--ok {
+  background: rgba(45, 212, 191, 0.14);
+  border-color: rgba(45, 212, 191, 0.35);
+  color: var(--ok);
+}
+
+.badge--warn {
+  background: rgba(245, 158, 11, 0.14);
+  border-color: rgba(245, 158, 11, 0.35);
+  color: var(--warn);
+}
+
+.badge--danger {
+  background: rgba(239, 68, 68, 0.14);
+  border-color: rgba(239, 68, 68, 0.35);
+  color: var(--danger);
+}
+
+.badge--muted {
+  background: var(--bg-panel-hover);
+  border-color: var(--border-strong);
+  color: var(--text-muted);
+}
