@@ -82,11 +82,16 @@ __all__ = [
 #: 이벤트 ID 접두사. 기능명세서 §6 — `EV-YYYYMMDD-NNNN`.
 EVENT_ID_PREFIX = "EV"
 
-#: 위반 유형별 위험 등급. API명세서 §3 `AlertCommand.level` · §5.2 `severity` — 같은 값.
+#: 위반 유형별 위험 등급의 **기본값**. API명세서 §3 `AlertCommand.level` · §5.2 `severity`
 #:
 #: 명세서가 못박은 것은 **`fall` = 3(긴급)** 하나이고 §3 예시가 `no_helmet` = 2 다.
 #: 나머지 둘은 같은 「경고」 급으로 둔다. 1(주의)은 위반이 아닌 이상 탐지(FN-AI-04)의
 #: 자리이며, 이상 탐지는 애초에 경고를 발동하지 않는다.
+#:
+#: **런타임 원천은 DB `alert_sounds.level` 이다**(기능명세서 §6 · FN-CFG-03 · 절대규칙 6).
+#: 관리자가 설정 화면에서 등급을 바꿀 수 있으므로 `set_severity` 로 주입받는다.
+#: 여기 남은 표는 DB 를 읽지 못했거나 그 유형이 등록되지 않았을 때의 대비값이다 —
+#: 등급을 모른다고 경고를 못 내보내면 DB 장애가 안전 기능 정지로 번진다.
 SEVERITY: Mapping[ViolationType, AlertLevel] = {
     ViolationType.NO_HELMET: 2,
     ViolationType.ZONE_INTRUSION: 2,
@@ -190,6 +195,13 @@ def build_candidate_event(
         regulation_refs=[],
         similar_incidents=[],
         timeline=[],
+        # 확정 전이므로 클립 예약이 아직 없다. `pending` 은 "예약됐다"는 주장이라
+        # 다르다 — 예약은 확정 시점에 `ClipService` 가 건다(FN-REC-03).
+        clip_status=None,
+        clip_error=None,
+        # 방송은 확정 시점에 나간다. 그때 일시중지 중이면 집행자가 `False` 를
+        # 돌려주고 집행 계층이 이 칸을 참으로 바꾼다(§4.8).
+        alert_suppressed=False,
     )
 
 
@@ -282,6 +294,8 @@ class EventMachine:
         self._seen: dict[tuple[int, int], datetime] = {}
         self._foot: dict[tuple[int, int], tuple[float, float]] = {}
         self._helmet_checked: dict[tuple[int, int], datetime] = {}
+        self._severity: dict[ViolationType, AlertLevel] = {}
+        """DB `alert_sounds.level` 이 정한 등급. 비어 있으면 `SEVERITY` 를 쓴다."""
 
     # -- 정책 · 조회 ----------------------------------------------------
 
@@ -292,6 +306,24 @@ class EventMachine:
     def set_policies(self, policies: Policies) -> None:
         """`PATCH /policies` 이후 반영. 진행 중인 타이머는 새 값으로 판정된다."""
         self._policies = policies
+
+    def set_severity(self, severity: Mapping[ViolationType, AlertLevel]) -> None:
+        """유형별 위험 등급을 DB 값으로 갈아끼운다. 기능명세서 §6 · FN-CFG-03
+
+        **주입받는 이유**: §6 이 등급을 관리자가 바꾸는 값으로 정했으므로 원천은
+        `alert_sounds.level` 이다(절대규칙 6). 그러나 상태머신은 DB 를 읽지 않는다
+        (절대규칙 2) — 값만 받는다.
+
+        **여기 한 곳에서 갈아끼우는 이유**: §5.2 `severity` 와 §3 `AlertCommand.level`
+        은 같은 값이어야 한다. 집행 계층에서 따로 덮으면 ESP32 가 받은 등급과 화면에
+        뜬 등급이 갈리고, 어느 쪽이 맞는지 사후에 알 수 없다.
+
+        등록되지 않은 유형은 `SEVERITY` 기본값으로 남는다.
+        """
+        self._severity = dict(severity)
+
+    def _level(self, violation_type: ViolationType) -> AlertLevel:
+        return self._severity.get(violation_type, SEVERITY[violation_type])
 
     @property
     def _miss_s(self) -> float:
@@ -698,7 +730,7 @@ class EventMachine:
             status=EventStatus.ALERTED,
             confirmed_at=at,
             alerted_at=event.alerted_at,
-            severity=SEVERITY[event.violation_type],
+            severity=self._level(event.violation_type),
             # **M3 에는 키프레임 추출이 없다**(FN-REC-03 · M4). §5.2 가 이 필드를
             # nullable 로 넓혔으므로 아직 없는 파일을 가리키는 URL 대신 `null` 을
             # 보낸다 — "존재하지 않는 URL 을 문자열로 내보내지 않는다".
@@ -731,7 +763,7 @@ class EventMachine:
             event_id=event.event_id,
             cam_id=event.cam_id,
             violation_type=event.violation_type,
-            level=SEVERITY[event.violation_type],
+            level=self._level(event.violation_type),
             zone_id=event.zone_id,
             repeat=event.alert_count > 1,
             at=at,

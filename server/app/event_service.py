@@ -345,6 +345,11 @@ class EventService:
         **실패해도 전이를 되돌리지 않는다.** 경고가 나가지 않은 것은 심각하지만
         (집행자가 ERROR 로 남기고 집계한다), 그 때문에 이벤트를 되돌리면 `alerted_at`
         이 사라져 시정률의 기준점이 없어진다 — 위반 사실 자체는 관측된 것이다.
+
+        **일시중지로 방송이 나가지 않았다면 그 사실을 기록한다**(§4.8). 집행자가
+        `False` 를 돌려주면 `alert_suppressed = true` 로 남겨 시정률 모집단에서
+        제외한다 — 알린 적이 없는 위반을 미시정으로 세면 지표가 자기 이름
+        (「방송 후 시정률」)과 어긋난다.
         """
         if effect.alert is None:
             return
@@ -355,9 +360,27 @@ class EventService:
             )
             return
         try:
-            await self._alerts.fire(effect.alert)
+            dispatched = await self._alerts.fire(effect.alert)
         except Exception:
+            # 집행이 죽었다. **`alert_suppressed` 로 적지 않는다** — 그 칸은 "사람이
+            # 일부러 멈췄다"는 뜻이고, 여기는 "내보내려 했으나 고장났다"다. 후자를
+            # 지표에서 빼면 장애가 시정률을 좋아 보이게 만든다.
             log.exception("경고 집행이 실패했다 — %s", effect.event_id)
+            return
+        if not dispatched:
+            await self._mark_suppressed(effect.event_id)
+
+    async def _mark_suppressed(self, event_id: str) -> None:
+        """FN-ALM-05 · §4.8 — 방송 없이 확정된 이벤트를 표시한다."""
+        if self._store is None:
+            return
+        try:
+            await self._store.update(event_id, {"alert_suppressed": True})
+        except Exception:
+            # 조용히 넘기면 그 이벤트가 미시정으로 집계되어 시정률이 낮아진다.
+            log.exception(
+                "alert_suppressed 를 기록하지 못했다 — %s 가 시정률 분모에 남는다", event_id
+            )
 
     async def _schedule_clip(self, effect: Effect) -> None:
         """FN-REC-03 — 확정된 이벤트의 키프레임을 뽑고 클립 추출을 예약한다.

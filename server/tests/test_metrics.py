@@ -20,12 +20,14 @@ def row(
     violation: ViolationType = ViolationType.NO_HELMET,
     resolution_sec: int | None = None,
     false_positive: bool = False,
+    suppressed: bool = False,
 ) -> MetricsRow:
     return MetricsRow(
         violation_type=violation,
         status=status,
         resolution_sec=resolution_sec,
         is_false_positive=false_positive,
+        alert_suppressed=suppressed,
     )
 
 
@@ -202,3 +204,73 @@ def test_resolved_without_a_duration_is_not_credited() -> None:
     assert summary.resolved_late == 1
     assert summary.unresolved == 0
     assert summary.correction_rate == pytest.approx(0.0)
+
+
+# --- §4.8 방송 없이 확정된 이벤트 -------------------------------------------
+
+
+def test_a_suppressed_event_is_excluded_from_both_ratios() -> None:
+    """★ §4.8 — 「**방송 후** 시정률」이므로 방송이 없었던 건은 모집단이 아니다.
+
+    작업자에게 알린 적이 없으니 시정할 기회도 없었고, 이를 미시정으로 세면 시스템
+    성능을 부당하게 깎는다. `expired` 와 같은 원칙으로 제외하고 건수를 공개한다.
+    """
+    summary = summarize(
+        [row(EventStatus.ALERTED, suppressed=True)], period="today", resolve_window_s=WINDOW
+    )
+
+    assert summary.correction_rate is None
+    assert summary.undetermined_rate is None
+    assert summary.total_violations == 0
+    assert summary.unresolved == 0
+    assert summary.suppressed == 1
+
+
+def test_a_suppressed_event_does_not_dilute_a_broadcast_one() -> None:
+    """섞였을 때가 진짜 시험이다 — 새면 `1.00` 이 `0.50` 이 된다.
+
+    `sim/cases/alert_suppressed.yaml` 이 같은 성질을 서버 전체 경로에서 잠근다.
+    """
+    rows = [
+        row(EventStatus.RESOLVED, resolution_sec=12),
+        row(EventStatus.ALERTED, suppressed=True),
+    ]
+    summary = summarize(rows, period="today", resolve_window_s=WINDOW)
+
+    assert summary.correction_rate == pytest.approx(1.0)
+    assert summary.total_violations == 1
+    assert summary.suppressed == 1
+
+
+def test_a_resolved_but_suppressed_event_is_not_counted_as_a_success_either() -> None:
+    """해소됐어도 분자에 넣지 않는다.
+
+    방송을 듣지 않은 사람이 스스로 그만둔 것을 「방송 후 시정」으로 세면 지표가
+    자기 이름과 어긋난다 — 그 숫자로는 방송의 효과를 주장할 수 없다.
+    """
+    summary = summarize(
+        [row(EventStatus.RESOLVED, resolution_sec=8, suppressed=True)],
+        period="today",
+        resolve_window_s=WINDOW,
+    )
+
+    assert summary.resolved == 0
+    assert summary.correction_rate is None
+    assert summary.suppressed == 1
+    # 평균 시정 시간에도 섞이지 않는다 — 방송 기준 시각이 없는 건이다.
+    assert summary.avg_resolution_sec == 0
+
+
+def test_a_false_positive_wins_over_suppression() -> None:
+    """오탐으로 정정된 건은 **어느 칸에도** 들어가지 않는다.
+
+    `suppressed` 로 세면 "방송만 안 나갔다"로 읽혀 오탐이었다는 사실이 사라진다.
+    """
+    summary = summarize(
+        [row(EventStatus.ALERTED, suppressed=True, false_positive=True)],
+        period="today",
+        resolve_window_s=WINDOW,
+    )
+
+    assert summary.suppressed == 0
+    assert summary.total_violations == 0

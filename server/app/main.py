@@ -206,6 +206,11 @@ def create_app(
         # 재시작 전에 열려 있던 이벤트를 되살린다. 두지 않으면 그 이벤트들이
         # 영원히 미해소로 남아 시정률 분모를 오염시킨다.
         await event_service.start()
+        # 위험 등급(§3 `level` · §5.2 `severity`)의 원천은 DB `alert_sounds.level` 이다
+        # (§6 · FN-CFG-03 · 절대규칙 6). 상태머신은 그것을 **주입받아** 순수성을 지킨다.
+        # `alert_service.start()` 가 이미 매핑을 읽었으므로 여기서 넘긴다.
+        event_service.machine.set_severity(alert_service.severity_map())
+        alert_service.set_policies(event_service.machine.policies)
         if clip_service is not None:
             clip_service.set_policies(event_service.machine.policies)
         tasks = [
@@ -388,6 +393,9 @@ async def _tick_events(
         if since_policy >= POLICY_REFRESH_SECONDS:
             since_policy = 0.0
             await service.refresh_policies()
+            # `mute_default_duration_s`(§4.5)도 DB 값이다. 상태머신이 방금 읽은 것을
+            # 그대로 나눠 쓴다 — 두 번 읽으면 같은 순간에 서로 다른 값으로 돈다.
+            alerts.set_policies(service.machine.policies)
             if clips is not None:
                 # `clip_pre_roll_s` · `clip_post_roll_s` 도 DB 값이다(절대규칙 6).
                 # 상태머신이 방금 읽은 것을 그대로 나눠 쓴다 — 두 번 읽으면 같은 순간에
@@ -399,6 +407,9 @@ async def _tick_events(
             # DB 왕복을 넣지 않는다.
             since_sound = 0.0
             await alerts.refresh_sounds()
+            # 음원과 함께 **등급**도 바뀔 수 있다(§6 `alert_sounds.level`). 매핑만
+            # 갱신하고 등급을 두면 화면에서 바꾼 위험 등급이 반영되지 않는다.
+            service.machine.set_severity(alerts.severity_map())
 
 
 async def _watch_storage(client: StorageReader, hub: DashboardHub, clock: Clock) -> None:

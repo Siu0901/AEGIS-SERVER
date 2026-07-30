@@ -35,6 +35,7 @@ def event(
     *,
     violation: ViolationType = ViolationType.NO_HELMET,
     resolution_sec: int | None = None,
+    alert_suppressed: bool = False,
 ) -> EventDetail:
     body: dict[str, Any] = {
         "event_id": event_id,
@@ -66,6 +67,9 @@ def event(
         "regulation_refs": [],
         "similar_incidents": [],
         "timeline": [],
+        "clip_status": None,
+        "clip_error": None,
+        "alert_suppressed": alert_suppressed,
     }
     return EventDetail.model_validate(body)
 

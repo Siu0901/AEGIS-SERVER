@@ -200,7 +200,10 @@ def test_a_not_found_response_fails_the_job_and_records_the_reason(tmp_path: Pat
     run(service.run_due())
 
     assert store.clip_status["EV-1"] == "failed"
-    assert "보존 기간 경과" in store.notes["EV-1"]
+    # §6 `events.clip_error` 에 남는다. `note`(관리자 메모)는 건드리지 않는다 —
+    # `[클립]` 접두사로 한 칸을 나눠 쓰던 임시 처리가 사라졌다.
+    assert "보존 기간 경과" in store.clip_errors["EV-1"]
+    assert "EV-1" not in store.notes
     assert not (tmp_path / "clips" / "EV-1.mp4").exists()
     assert [m for m in published.messages if isinstance(m, EventUpdatedMsg)][-1].clip_status == (
         "failed"

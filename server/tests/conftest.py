@@ -28,6 +28,7 @@ from aegis_contracts.enums import StreamState
 from aegis_vision.clock import Clock
 from server.app.alert_service import AlertService
 from server.app.config import ServerSettings
+from server.domain.alerts import SoundEntry
 from server.domain.mcu_state import McuRuntime
 from server.domain.metrics import MetricsRow
 from server.infra.audio import SoundLibrary
@@ -182,7 +183,11 @@ class FakeEventStore:
         self.updates: list[tuple[str, dict[str, Any]]] = []
         self.notes: dict[str, str] = {}
         self.clip_status: dict[str, str] = {}
-        """§6 `events.clip_status`. §4.1 응답 모델에 없는 컬럼이라 따로 든다."""
+        """§6 `events.clip_status` 의 사본. 모델 필드이기도 하지만 "언제 무엇으로
+        바뀌었는가"를 테스트가 바로 볼 수 있게 따로 든다."""
+        self.clip_errors: dict[str, str] = {}
+        """§6 `events.clip_error`. **`notes` 와 섞지 않는다** — 관리자 메모와 클립 실패
+        사유가 한 칸을 쓰던 임시 처리가 사라졌다는 것을 이 분리가 잠근다."""
         self.keyframe_paths: dict[str, list[str]] = {}
         self.fail_with: Exception | None = None
 
@@ -232,8 +237,10 @@ class FakeEventStore:
             # §4.1 이 응답에 `note` 를 추가하면서 모델 필드가 됐다. 그대로 반영하되,
             # 저장소가 기억했는지를 테스트가 따로 볼 수 있게 사본도 남긴다.
             self.notes[event_id] = note
-        if (status := patch.pop("clip_status", None)) is not None:
+        if (status := patch.get("clip_status")) is not None:
             self.clip_status[event_id] = str(status)
+        if (clip_error := patch.get("clip_error")) is not None:
+            self.clip_errors[event_id] = str(clip_error)
         if (clip_path := patch.pop("clip_path", None)) is not None:
             # 실제 저장소는 경로를 URL 로 바꿔 내려준다(§5 「경로 규약」).
             patch["clip_url"] = f"/media/clips/{PurePosixPath(str(clip_path)).name}"
@@ -316,23 +323,26 @@ class FakePolicyStore:
 ASSETS_AUDIO = Path(__file__).resolve().parent.parent.parent / "assets" / "audio"
 
 #: 기본 음원 매핑. `scripts/seed_sounds.py` 가 DB 에 넣는 것과 같은 모양이다.
-SOUND_MAP: dict[str, str] = {
-    "no_helmet": "no_helmet.wav",
-    "zone_intrusion": "zone_intrusion.wav",
-    "proximity": "proximity.wav",
-    "fall": "fall.wav",
-    "custom_notice": "custom_notice.wav",
+#: **등급도 함께 온다**(§6 `alert_sounds.level`) — `fall` 만 3 이다(§3).
+SOUND_MAP: dict[str, SoundEntry] = {
+    "no_helmet": SoundEntry(file_path="no_helmet.wav", level=2, label="안전모 미착용 안내"),
+    "zone_intrusion": SoundEntry(
+        file_path="zone_intrusion.wav", level=2, label="금지구역 이탈 안내"
+    ),
+    "proximity": SoundEntry(file_path="proximity.wav", level=2, label="지게차 근접 경고"),
+    "fall": SoundEntry(file_path="fall.wav", level=3, label="쓰러짐 구조 안내"),
+    "custom_notice": SoundEntry(file_path="custom_notice.wav", level=2, label="일반 안내 방송"),
 }
 
 
 class FakeSoundStore:
     """`SoundReader` 대역 — `alert_sounds` 테이블 대신 dict 하나."""
 
-    def __init__(self, mapping: dict[str, str] | None = None) -> None:
+    def __init__(self, mapping: dict[str, SoundEntry] | None = None) -> None:
         self.mapping = dict(SOUND_MAP if mapping is None else mapping)
         self.calls = 0
 
-    async def load_sounds(self) -> dict[str, str]:
+    async def load_sounds(self) -> dict[str, SoundEntry]:
         self.calls += 1
         return dict(self.mapping)
 

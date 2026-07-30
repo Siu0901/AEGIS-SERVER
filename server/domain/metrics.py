@@ -19,7 +19,13 @@ undetermined_rate  = expired  / (resolved + resolved_late + unresolved + expired
 | `expired` (재결합 실패) | ✕ | **✕** | **판정 불가** — 따로 집계 |
 | `dropped` (확정 전 소멸) | ✕ | ✕ | 전량 제외 (진단용) |
 | `is_false_positive` | ✕ | ✕ | 전량 제외 |
+| **`alert_suppressed`** | ✕ | **✕** | **방송이 없었다** — `suppressed` 로 따로 집계 |
 | `fall` | ✕ | ✕ | 자력 시정 불가, 따로 카운트 |
+
+**경고가 나가지 않은 이벤트는 시정률에 넣지 않는다**(§4.8). 일시중지(FN-ALM-05) 중에
+확정된 건은 작업자에게 알린 적이 없으므로 시정할 기회도 없었다. 그것을 미시정으로
+세면 지표가 자기 이름(「**방송 후** 시정률」)과 어긋나고 시스템 성능을 부당하게 깎는다.
+`expired` 와 같은 원칙으로 **제외하고 건수를 공개**한다.
 
 **세 버킷은 서로 배타적이다**(§6.7). 늦은 시정을 `unresolved` 에 섞지 않는다 —
 "시정은 했으나 늦었다"와 "아직 안 했다"는 현장에서 의미가 다르고, 합쳐두면 응답만
@@ -74,6 +80,12 @@ class MetricsRow:
     resolution_sec: int | None
     """`alerted_at` → `resolved_at` 소요 초. 해소되지 않았으면 `None`."""
     is_false_positive: bool
+    alert_suppressed: bool = False
+    """경고 일시중지 중에 확정되어 **방송이 나가지 않았는가**(§6 · §4.8).
+
+    기본값이 `False` 인 것은 이 필드가 나중에 붙었기 때문이 아니라, **방송이 나갔다는
+    것이 정상 경로**이기 때문이다. 일시중지는 사람이 명시적으로 켠 예외 상태다.
+    """
 
 
 def summarize(
@@ -98,6 +110,7 @@ def summarize(
     resolved_late = 0
     unresolved = 0
     undetermined = 0
+    suppressed = 0
     fall_events = 0
     durations: list[int] = []
 
@@ -105,6 +118,16 @@ def summarize(
         if row.is_false_positive:
             # 오탐으로 정정된 건은 전량 제외한다(FN-EVT-05). 분모에 남기면
             # 시스템이 틀렸다는 사실이 "시정하지 않았다"로 둔갑한다.
+            continue
+        if row.alert_suppressed:
+            # **경고가 나가지 않은 건은 「방송 후」 시정률의 모집단이 아니다**(§4.8).
+            # 작업자에게 알린 적이 없으니 시정할 기회도 없었고, 이를 미시정으로 세면
+            # 시스템 성능을 부당하게 깎는다. `expired` 와 같은 원칙으로 제외하고
+            # 건수를 공개한다 — 숨기면 분모가 왜 줄었는지 설명할 수 없다.
+            #
+            # `is_false_positive` 다음에 두는 것은 의도다. 오탐으로 정정된 건은
+            # 방송 여부와 무관하게 **어느 칸에도** 들어가지 않는다.
+            suppressed += 1
             continue
         if row.violation_type is ViolationType.FALL:
             # 쓰러진 사람은 방송을 듣고 스스로 시정할 수 없다. 따로 센다.
@@ -150,6 +173,7 @@ def summarize(
         resolved_late=resolved_late,
         unresolved=unresolved,
         undetermined=undetermined,
+        suppressed=suppressed,
         avg_resolution_sec=round(sum(durations) / len(durations)) if durations else 0,
         fall_events=fall_events,
         anomaly_flags=anomaly_flags,

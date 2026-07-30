@@ -58,10 +58,14 @@ log = logging.getLogger("server.clips")
 #: 문제가 아니다 — 대시보드는 그동안 키프레임을 보여준다(§4.2).
 CLIP_POLL_SECONDS = 2.0
 
-#: 사후 구간 뒤에 더 기다리는 여유(초). 기능명세서 §4.4 「추출 타이밍」이 정한 값이다.
+#: 사후 구간 뒤에 더 기다리는 여유(초)의 **대비값**. 기능명세서 §4.4 「추출 타이밍」.
 #:
 #: 세그먼트가 10초 단위로 닫히므로, 사후 구간이 끝나는 순간에는 마지막 세그먼트가 아직
 #: 열려 있을 수 있다. 그 파일을 잘라내면 끝이 손상된다.
+#:
+#: **런타임 원천은 정책 키 `clip_extract_margin_s` 다**(§4.5 · 절대규칙 6). 서버 설정에만
+#: 있던 값을 명세서가 정책으로 올렸다 — `clip_pre_roll_s` · `clip_post_roll_s` 와 같은
+#: 성격인데 이것만 다른 곳에 있는 것이 어색했다.
 DEFAULT_MARGIN_S = 2.0
 
 #: 확정 시 뽑는 키프레임 수. 기능명세서 §4.4 「고화질 키프레임 2~3장」.
@@ -109,12 +113,18 @@ class ClipService:
         """뒤로 넘긴 키프레임 추출들. 참조를 놓으면 GC 가 중간에 회수한다."""
 
     def set_policies(self, policies: Policies) -> None:
-        """`clip_pre_roll_s` · `clip_post_roll_s` 는 DB 에서 온다(절대규칙 6)."""
+        """`clip_pre_roll_s` · `clip_post_roll_s` · `clip_extract_margin_s` 는 DB 에서 온다.
+
+        CLAUDE.md 절대규칙 6. 여유(margin)도 §4.5 정책 키가 되면서 서버 설정에서
+        떨어져 나왔다 — 세 값이 한 곳에서 오지 않으면 사전·사후 구간과 여유가 서로 다른
+        시점의 값으로 섞여 계산된다.
+        """
         self._policies = policies
+        self._margin_s = policies.clip_extract_margin_s
 
     @property
     def delay_s(self) -> float:
-        """확정 → 예약 실행까지의 대기. `clip_post_roll_s + margin`."""
+        """확정 → 예약 실행까지의 대기. `clip_post_roll_s + clip_extract_margin_s`."""
         return self._policies.clip_post_roll_s + self._margin_s
 
     @property
@@ -133,11 +143,12 @@ class ClipService:
         예약(`clip_status = pending`)만 기다린다 — DB 쓰기 한 번이라 짧고, 그것이
         끝나야 예약이 재시작을 견딘다.
 
-        **키프레임은 기다리지 않는다.** REC 의 `GET /keyframe` 은 ffmpeg 이 세그먼트를
-        열고 되감아 디코딩하는 작업이라 실측 **한 장에 약 5초**가 걸렸다(2026-07-30,
-        카메라·REC 이 같은 기계에서 도는 상태). 그동안 이 코루틴을 잡고 있으면 같은
-        루프에서 도는 `/ws/edge` 수신이 통째로 멈춘다 — 확정 한 건이 그 뒤 10초치
-        프레임을 밀어내고, **밀린 만큼 다른 이벤트의 타이머가 늦게 흐른다.**
+        **키프레임은 기다리지 않는다.** REC 의 `GET /keyframe` 은 ffmpeg 자식 프로세스
+        하나를 띄우는 작업이라 실측 **한 장에 약 390ms**다(M5 에서 불필요한 ffprobe 를
+        없애 약 590ms 에서 내렸다. 그중 190ms 가 프로세스 기동이라 더 줄일 여지가 없다).
+        확정 시 두 장을 뽑으므로 약 0.8초이고, 그동안 이 코루틴을 잡고 있으면 같은
+        루프에서 도는 `/ws/edge` 수신이 그만큼 멈춘다 — 8fps 기준 6프레임이 밀리고,
+        **밀린 만큼 다른 이벤트의 타이머가 늦게 흐른다.**
 
         경고(FN-ALM-01)는 이 호출보다 먼저 나가므로 1초 예산과는 무관하다. 여기서
         막히는 것은 그다음 관측들이다.
@@ -294,20 +305,18 @@ class ClipService:
         `reason` 을 반드시 남긴다. `status` 만으로는 "보존 기간이 지났다"와 "그 시각에
         녹화가 없었다"가 구분되지 않는데 대응이 다르다.
 
-        ⚠ §6 `events` 에 사유를 담을 컬럼이 없어 `note` 에 `[클립]` 접두사로 적는다.
-        관리자 메모와 한 칸을 쓰는 셈이라 `docs/INDEX.md` 「명세서 확인 필요」에
-        올려 두었다. 기존 메모는 지우지 않고 앞에 덧붙인다.
+        **`events.clip_error` 에 적는다**(§6). `note` 에 `[클립]` 접두사로 끼워 넣던
+        임시 처리를 없앴다 — 관리자 메모와 기계가 남긴 사유가 한 칸을 쓰면 사람이 쓴
+        문장이 덮이거나 사유가 메모처럼 읽힌다.
         """
         reason = response.reason or f"REC 이 {response.status} 를 돌려주었다(사유 없음)"
-        marker = f"[클립] {response.status}: {reason}"
-        note = marker if not event.note else f"{marker}\n{event.note}"
-        await self._store.update(event.event_id, {"clip_status": "failed", "note": note})
+        detail = f"{response.status}: {reason}"
+        await self._store.update(event.event_id, {"clip_status": "failed", "clip_error": detail})
         await self._emit(
             EventUpdatedMsg(
                 event_id=event.event_id,
                 status=event.status,
                 clip_status="failed",
-                note=note,
             )
         )
         log.warning("클립 추출 실패 — %s: %s (%s)", event.event_id, response.status, reason)

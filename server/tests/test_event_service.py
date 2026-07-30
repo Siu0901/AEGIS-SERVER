@@ -21,8 +21,11 @@ from aegis_contracts import (
     FrameMsg,
     Policies,
     SpecModel,
+    ViolationType,
 )
+from aegis_contracts.enums import AlertLevel
 from aegis_vision.clock import FakeClock
+from server.app.alert_service import AlertSink
 from server.app.event_service import EventService
 from server.domain.event_machine import EventMachine
 from server.domain.overlay import LiveTracks, compose_overlay
@@ -86,7 +89,11 @@ def candidate(at_s: float) -> CandidateMsg:
 class Harness:
     """상태머신 + 저장소 + 오버레이 트랙을 한 벌로 묶은 것."""
 
-    def __init__(self, store: FakeEventStore | None = None) -> None:
+    def __init__(
+        self,
+        store: FakeEventStore | None = None,
+        alerts: AlertSink | None = None,
+    ) -> None:
         self.clock = FakeClock(START)
         self.tracks = LiveTracks()
         self.store = store or FakeEventStore()
@@ -98,6 +105,7 @@ class Harness:
             publish=self._publish,
             clock=self.clock,
             store=self.store,
+            alerts=alerts,
         )
 
     async def _publish(self, message: SpecModel) -> None:
@@ -236,3 +244,59 @@ def test_restart_recovers_open_events_so_they_can_still_be_closed() -> None:
     assert status_of(second) is EventStatus.ALERTED
     second.run_until(14.125, 14.25, "on")
     assert status_of(second) is EventStatus.RESOLVED
+
+
+# --- §4.8 방송 없이 확정된 이벤트 -------------------------------------------
+
+
+class SilentSink:
+    """일시중지 중인 경고 집행자 대역 — `fire` 가 `False` 를 돌려준다.
+
+    `AlertService` 를 통째로 끼우지 않는 이유: 여기서 보는 것은 **집행 계층이 그
+    반환값을 기록하는가**이고, 무엇이 소리를 냈는지는 `test_alert_service.py` 의 일이다.
+    """
+
+    def __init__(self, *, dispatched: bool) -> None:
+        self.dispatched = dispatched
+        self.calls = 0
+
+    async def fire(self, intent: object) -> bool:
+        del intent
+        self.calls += 1
+        return self.dispatched
+
+    def severity_map(self) -> dict[ViolationType, AlertLevel]:
+        return {}
+
+
+def confirm(harness: Harness) -> None:
+    """후보 하나를 올리고 확정(3초)까지 프레임을 흘린다."""
+    asyncio.run(harness.service.on_candidate(candidate(0.5)))
+    harness.run_until(0.0, 4.0, "off")
+
+
+def test_a_muted_alert_marks_the_event_as_suppressed() -> None:
+    """★ §4.8 — 방송이 나가지 않았다는 사실이 **DB 에 남아야** 한다.
+
+    남지 않으면 그 이벤트가 미시정으로 집계되어 시정률이 부당하게 낮아진다.
+    화면도 "왜 이 이벤트가 지표에 없나"를 설명할 수 없다.
+    """
+    sink = SilentSink(dispatched=False)
+    harness = Harness(alerts=sink)
+
+    confirm(harness)
+
+    assert sink.calls == 1
+    assert status_of(harness) is EventStatus.ALERTED
+    assert harness.store.items[0].alert_suppressed is True
+
+
+def test_a_dispatched_alert_leaves_the_event_in_the_population() -> None:
+    """정상 경로에서는 이 칸을 건드리지 않는다 — 기본값이 「방송이 나갔다」다."""
+    sink = SilentSink(dispatched=True)
+    harness = Harness(alerts=sink)
+
+    confirm(harness)
+
+    assert sink.calls == 1
+    assert harness.store.items[0].alert_suppressed is False
