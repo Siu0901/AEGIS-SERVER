@@ -17,6 +17,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { fetchEvents, patchEvent } from '../api/events'
 import { subscribeDashboard } from '../api/system'
+import { useMergedRefresh } from '../api/useRefresh'
 import {
   STATUS_TONE,
   cameraName,
@@ -60,13 +61,16 @@ export default function ActiveEvents({ camIds }: { camIds: number[] }) {
     return () => controller.abort()
   }, [load])
 
+  // 한 전이가 §5.2 메시지를 여럿 만든다(확정 · 경고 · 해소 · 클립 준비). 그때마다
+  // 목록을 다시 읽으면 전이 하나에 요청이 서너 개씩 붙어 서버 로그를 덮는다.
+  const merged = useMergedRefresh(() => load())
   useEffect(() => {
     return subscribeDashboard({
       onMessage: (message) => {
-        if (isEventCreatedMsg(message) || isEventUpdatedMsg(message)) load()
+        if (isEventCreatedMsg(message) || isEventUpdatedMsg(message)) merged()
       },
     })
-  }, [load])
+  }, [merged])
 
   const acknowledge = (eventId: string) => {
     setBusy(eventId)

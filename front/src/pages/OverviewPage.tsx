@@ -22,6 +22,7 @@ import { Link } from 'react-router-dom'
 import { fetchEvents } from '../api/events'
 import { fetchMetricsSummary } from '../api/metrics'
 import { subscribeDashboard } from '../api/system'
+import { useMergedRefresh } from '../api/useRefresh'
 import { useSystemStatus } from '../api/useSystemStatus'
 import {
   cameraName,
@@ -81,15 +82,19 @@ export default function OverviewPage() {
 
   // §5.3 `metric` 과 §5.2 `event_*` 가 오면 다시 읽는다. `metric` 에는 `suppressed` 가
   // 없으므로(§5.3 은 §4.2 의 부분집합) 메시지 값만으로 갱신하면 그 칸이 낡는다.
+  //
+  // 한 전이가 `event_updated` 와 `metric` 을 함께 만들고 이 화면은 두 요청(지표 + 목록)을
+  // 보내므로, 접지 않으면 전이 하나에 네 요청이 붙는다.
+  const merged = useMergedRefresh(() => load())
   useEffect(() => {
     return subscribeDashboard({
       onMessage: (message) => {
         if (isMetricMsg(message) || isEventCreatedMsg(message) || isEventUpdatedMsg(message)) {
-          load()
+          merged()
         }
       },
     })
-  }, [load])
+  }, [merged])
 
   const distribution = useMemo(() => violationCounts(recent), [recent])
   const trend = useMemo(() => dailyCounts(recent), [recent])

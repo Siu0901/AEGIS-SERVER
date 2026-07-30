@@ -15,14 +15,33 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { fetchMuteState, postManualAlert, postMute } from '../api/alerts'
+import { subscribeDashboard } from '../api/system'
+import { useMergedRefresh } from '../api/useRefresh'
 import { cameraName, VIOLATION_LABEL } from '../types/labels'
+import { isCameraSystemMsg, isSystemMsg } from '../types/system'
 import type { AlertLevel, MuteAlertResponse, ViolationType } from '../types/system'
 
-/** 일시중지 남은 시간을 다시 그리는 주기(ms). 초 단위로 줄어드는 것이 보여야 한다. */
+/** 일시중지 남은 시간을 다시 그리는 주기(ms). 초 단위로 줄어드는 것이 보여야 한다.
+ *
+ * **일시중지가 걸려 있을 때만 돈다.** 평상시에도 돌리면 아무 변화도 없는 리렌더가
+ * 초당 한 번씩 쌓인다. */
 const TICK_MS = 1_000
 
-/** 상태를 서버에 다시 묻는 주기(ms). 다른 창에서 걸었을 수도 있다. */
-const POLL_MS = 15_000
+/**
+ * 상태를 서버에 다시 묻는 주기(ms).
+ *
+ * **15초에서 늘렸다.** 카메라 수 + 1 만큼 요청이 나가므로 15초면 분당 12요청이고,
+ * 서버 접근 로그가 그것으로 가득 차 정작 봐야 할 줄을 덮는다(실측: `server.log`
+ * 마지막 20줄이 전부 `GET /alerts/mute` 였다).
+ *
+ * 주기를 늘려도 늦어지지 않는 이유는 **바뀌는 순간을 따로 잡기 때문**이다.
+ *
+ *   · 누가 걸거나 풀면 §5.3 `system`(`component: mcu`)이 온다 → 즉시 재조회
+ *   · 기한이 다 되면 그 시각에 맞춰 한 번 더 조회한다
+ *
+ * 그래서 이 폴링은 "그 둘을 모두 놓쳤을 때"의 대비책이다.
+ */
+const POLL_MS = 120_000
 
 /** 일시중지 길이 선택지(분). `null` 은 정책 기본값(`mute_default_duration_s`)이다. */
 const MUTE_CHOICES: { label: string; minutes: number | null }[] = [
@@ -84,10 +103,39 @@ export default function QuickControls({ camIds }: { camIds: number[] }) {
     }
   }, [refresh])
 
+  // 누가 걸거나 풀면 §5.3 `system`(`component: mcu`)이 온다 — 다른 창에서 눌렀거나
+  // 서버가 자동으로 푼 경우다. 폴링을 기다리지 않고 그 자리에서 다시 읽는다.
+  const merged = useMergedRefresh(() => refresh())
   useEffect(() => {
+    return subscribeDashboard({
+      onMessage: (message) => {
+        if (!isSystemMsg(message) || isCameraSystemMsg(message)) return
+        if (message.component === 'mcu') merged()
+      },
+    })
+  }, [merged])
+
+  // **기한이 끝나는 시각에 맞춰 한 번 더 읽는다.** 폴링만 믿으면 이미 풀린 중지가
+  // 화면에 최대 폴링 주기만큼 남는데, "경고가 꺼져 있다"는 표시는 늦게 사라지는 것보다
+  // 늦게 나타나는 쪽이 위험하므로 정확한 시각을 노린다.
+  useEffect(() => {
+    const ends = Object.values(mutes)
+      .filter((state) => state.muted && state.muted_until)
+      .map((state) => new Date(state.muted_until as string).getTime())
+      .filter((at) => !Number.isNaN(at))
+    if (ends.length === 0) return
+    const delay = Math.max(0, Math.min(...ends) - Date.now()) + 500
+    const timer = window.setTimeout(() => refresh(), delay)
+    return () => window.clearTimeout(timer)
+  }, [mutes, refresh])
+
+  // 남은 시간 표시는 **중지가 걸려 있을 때만** 갱신한다.
+  const anyMuted = Object.values(mutes).some((state) => state.muted)
+  useEffect(() => {
+    if (!anyMuted) return
     const timer = window.setInterval(() => setNow(Date.now()), TICK_MS)
     return () => window.clearInterval(timer)
-  }, [])
+  }, [anyMuted])
 
   const broadcast = () => {
     if (target === null) return

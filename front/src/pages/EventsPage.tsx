@@ -22,6 +22,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { clipSrc, fetchEvent, fetchEvents, patchEvent, type EventQuery } from '../api/events'
 import { subscribeDashboard } from '../api/system'
+import { useMergedRefresh } from '../api/useRefresh'
 import {
   CLIP_STATUS_LABEL,
   STATUS_TONE,
@@ -108,13 +109,14 @@ export default function EventsPage() {
 
   // 확정·전이가 일어나면 목록을 다시 읽는다(§5.2). 선택은 유지한다 — 보고 있던
   // 이벤트가 갱신 때문에 닫히면 시연 중에 다시 찾아야 한다.
+  const mergedList = useMergedRefresh(() => load())
   useEffect(() => {
     return subscribeDashboard({
       onMessage: (message) => {
-        if (isEventCreatedMsg(message) || isEventUpdatedMsg(message)) load()
+        if (isEventCreatedMsg(message) || isEventUpdatedMsg(message)) mergedList()
       },
     })
-  }, [load])
+  }, [mergedList])
 
   const select = (eventId: string | null) => {
     const next = new URLSearchParams(searchParams)
@@ -248,14 +250,15 @@ function EventDetailPanel({
   }, [reload])
 
   // 이 이벤트에 대한 §5.2 갱신만 반영한다(클립 준비 완료 · 상태 전이).
+  const mergedDetail = useMergedRefresh(() => reload())
   useEffect(() => {
     if (!eventId) return
     return subscribeDashboard({
       onMessage: (message) => {
-        if (isEventUpdatedMsg(message) && message.event_id === eventId) reload()
+        if (isEventUpdatedMsg(message) && message.event_id === eventId) mergedDetail()
       },
     })
-  }, [eventId, reload])
+  }, [eventId, mergedDetail])
 
   const apply = (patch: Parameters<typeof patchEvent>[1], label: string) => {
     if (!eventId) return
