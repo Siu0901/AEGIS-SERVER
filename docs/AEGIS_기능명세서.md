@@ -596,7 +596,10 @@ confirmed_at + post_roll : 사후 세그먼트 기록 완료
 | **`expired` (재결합 실패)** | **분자·분모 모두 제외**, `undetermined`로 별도 집계 |
 | `is_false_positive = true` | 전량 제외 |
 | `dropped` (확정 전 소멸) | 전량 제외. 진단용으로만 집계 |
+| `alert_suppressed = true` | **전량 제외**, `suppressed` 로 별도 집계 |
 | `fall` | 전량 제외 (대상자가 스스로 시정할 수 없음), 별도 카운트 |
+
+**경고가 나가지 않은 이벤트는 시정률에 넣지 않는다.** 지표 이름이 「**방송 후** 시정률」이므로, 일시중지 중에 확정되어 방송이 없었던 이벤트를 분모에 넣으면 지표가 자기 정의와 어긋난다. 작업자에게 알린 적이 없으니 시정할 기회도 없었고, 이를 미시정으로 세면 시스템 성능을 부당하게 깎는다. `expired` 와 같은 원칙으로 **제외하고 건수를 공개**한다.
 
 **분모가 0이면 시정률은 `null` 이다.** `0.0` 은 "시정률 0%"라는 주장이므로, 판정 가능한 이벤트가 없는 구간과 구분되어야 한다.
 
@@ -677,6 +680,8 @@ stride 32에 맞춘 `640×384` 로 rect 추론하면 패딩이 12px씩으로 줄
 | `clip_path` | text | 클립 파일 경로 |
 | `keyframe_paths` | jsonb | 키프레임 경로 **배열**. 클라이언트에는 `keyframe_urls` 로 변환해 내려준다 |
 | `clip_status` | text | `pending` / `ready` / `failed` (예약 추출 상태) |
+| `clip_error` | text | 클립 추출 실패 사유. REC 의 `reason` 을 그대로 저장한다. `note` 에 섞지 않는다 |
+| `alert_suppressed` | bool | 경고 일시중지 중에 확정되어 **방송이 나가지 않은** 이벤트. 시정률에서 제외된다 |
 | `height_ratio` | real | 쓰러짐 판정 근거 ① (확정 시점 값) |
 | `nearby_snapshot` | jsonb | 확정 시점 주변 차량 목록 `[{track_id, dist_m, moving}]` |
 | `similar_incidents` | jsonb | 유사 사고사례. **확정 시 1회 계산해 저장**한다 |
@@ -689,6 +694,9 @@ stride 32에 맞춘 `640×384` 로 rect 추론하면 패딩이 12px씩으로 줄
 **cameras** `cam_id`, `name`, `rtsp_main`, `rtsp_sub`, `homography`, `ref_height_px_at_m`(높이 비율 기준값), `calibrated_at`
 **vehicle_classes** `class_name`, `danger_radius_m`(지게차 기본 3.0), `active`
 **policies** `key`, `value`
+**alert_sounds** `violation_type`, `file_path`, `level`(1/2/3), `label`, `active`
+　→ FN-CFG-03(경고 음원 매핑, P0)의 저장소. 파일명을 코드에 박지 않기 위한 테이블이며
+　　 관리자가 설정 화면에서 유형별 음원과 등급을 바꿀 수 있다(절대규칙 6)
 **normal_pool** `id`, `cam_id`, `time_bucket`, `embedding`, `sampled_at`
 **anomalies** `id`, `cam_id`, `score`, `keyframe_path`, `llm_note`, `detected_at`
 

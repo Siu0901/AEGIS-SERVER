@@ -668,7 +668,9 @@ v2.0 · 2026-07-18
   "fall_height_ratio_max": 0.5,
   "fall_axis_angle_min_deg": 55.0,
   "fall_stillness_s": 5.0,
-  "anomaly_sample_interval_min": 5
+  "anomaly_sample_interval_min": 5,
+  "mute_default_duration_s": 900,
+  "clip_extract_margin_s": 2
 }
 ```
 
@@ -699,13 +701,39 @@ v2.0 · 2026-07-18
 | `fall_axis_angle_min_deg` | 주축 각도가 이 값 이상이면 조건 ② 충족 |
 | `fall_stillness_s` | 정지 지속이 이 값 이상이면 조건 ③ 충족 |
 | `anomaly_sample_interval_min` | 정상 풀 샘플링 주기(분). 기본 5 |
+| `mute_default_duration_s` | 경고 일시중지 기본 지속시간(초). 기본 900 |
+| `clip_extract_margin_s` | 사후 구간 기록 완료 후 클립 추출까지의 여유(초). 기본 2. 세그먼트 파일이 닫히기 전에 잘라내면 끝이 손상된다 |
 
-#### `POST /alerts/manual` / `POST /alerts/mute`
+#### `POST /alerts/manual` — 수동 방송
 
 ```json
-{ "cam_id":1, "sound":"custom_notice", "level":2 }
+{ "cam_id":1, "sound":"custom_notice", "level":2, "notify_device":true }
+```
+
+| 필드 | 설명 |
+|---|---|
+| `sound` | `alert_sounds` 테이블의 키. 미지정 시 기본 안내 음원 |
+| `level` | `1`\|`2`\|`3`. `notify_device` 가 참이면 이 값으로 MQTT `aegis/alert` 도 발행한다 |
+| `notify_device` | 기본 `true`. 스피커만 울리고 경광등은 끄고 싶으면 `false` |
+
+응답은 `202` 와 `{ "dispatched_at": "..." }` 다.
+
+#### `POST /alerts/mute` — 경고 일시중지
+
+```json
 { "cam_id":1, "minutes":15, "reason":"정비 작업" }
 ```
+
+```json
+{ "cam_id":1, "muted":true,
+  "muted_until":"2026-08-14T05:52:00Z",
+  "reason":"정비 작업" }
+```
+
+`cam_id` 를 생략하면 전체 카메라에 적용된다. `minutes:0` 은 즉시 해제다.
+현재 상태는 `GET /alerts/mute` 로 조회하며 같은 형태를 반환한다.
+
+**일시중지 중에 확정된 이벤트는 `alert_suppressed = true` 로 기록되고 시정률 집계에서 제외된다.** 방송이 나가지 않았으므로 「방송 후 시정률」의 모집단이 아니다(기능명세서 §4.8).
 
 ---
 
