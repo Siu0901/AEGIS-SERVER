@@ -21,7 +21,7 @@
 | **M2** | 엣지 인터페이스와 이벤트 생성 | `/ws/edge` · 후보 병합(FN-EVT-01) · `overlay` · 오버레이 정합 · sim 시나리오 |
 | **M3** | 상태머신과 지표 | 확정 · 해소 · 쿨다운 · 소실 유예 · **재결합** · 수동 정정 · 반복 위반 · **시정률/판정 불가율** |
 | **M4** | 경고와 클립 | 음성 방송 · 경광등(MQTT) · 긴급 알림 · 수동 방송 · 클립 예약 추출 · 클라우드 격리 |
-| **M5** | 관제 화면 P0 | 개요 · 실시간 관제(오버레이 정합) · 이벤트 · `uv run tasks.py types` |
+| **M5** | 관제 화면 P0 | 개요 · 실시간 관제(진행 중 이벤트·수동 방송) · 이벤트 · `tasks.py types` · vitest |
 | **M6** | 설정과 비전 로직 | 캘리브레이션 · 구역 편집 · 음원 매핑 · 정책 · `packages/vision` 순수 계산 |
 | **M7** | 지능 기능 | 임베딩 · 장면 검색 · LLM 분석 · 규정 매핑 · 챗봇 · 브리핑 |
 | **M8** | 분석·보고서 | 분석 화면 · 이상 탐지 · 유사 사례 · 주간 보고서 (P2 다수) |
@@ -65,7 +65,7 @@
 | FN-EVT-02 | 이벤트 확정 판정 (`confirm_duration_s`) | P0 | SRV | 기능 §4.2 | M3 | `server/domain/event_machine.py` | ✅ |
 | FN-EVT-03 | 해소(시정) 판정 (`resolve_duration_s`) | P0 | SRV | 기능 §4.2 | M3 | `server/domain/event_machine.py` | ✅ |
 | FN-EVT-04 | 쿨다운 및 재경고 (`cooldown_s`) | P0 | SRV | 기능 §4.2 | M3 | `server/domain/event_machine.py` | ✅ |
-| FN-EVT-05 | 이벤트 수동 정정 (오탐·강제 종결) | P1 | SRV/WEB | 기능 §4.2 · API §4.1 | M3 (API) / M5 (화면) | `server/app/routes/events.py` · `server/app/event_service.py` | 🟡 (화면만 남음) |
+| FN-EVT-05 | 이벤트 수동 정정 (오탐·강제 종결) | P1 | SRV/WEB | 기능 §4.2 · API §4.1 | M3 (API) / M5 (화면) | `server/app/routes/events.py` · `front/src/pages/EventsPage.tsx` | ✅ |
 | FN-EVT-06 | 반복 위반 집계 (최근 7일) | P1 | SRV | 기능 §4.2 | M3 | `server/infra/db/repository.py` (`count_repeat_7d`) | ✅ |
 | FN-EVT-07 | 트랙 소실 유예 및 재결합 | P0(유예) / P1(재결합) | SRV | 기능 §4.2 · API §2.3 | M3 | `server/domain/reassociation.py` · `event_machine.py` | ✅ |
 
@@ -83,9 +83,9 @@
 |---|---|---|---|---|---|---|---|
 | FN-ALM-01 | 경고 발동 (사전 녹음 음성 방송) | P0 | SRV | 기능 §4.3 | M4 | `server/infra/audio/` · `server/app/alert_service.py` · `assets/audio/` | ✅ |
 | FN-ALM-02 | 경광등 · 부저 제어 (MQTT) | P0 | SRV/MCU | 기능 §4.3 · API §3 | M4 | `server/infra/mqtt/` · `server/domain/mcu_state.py` · `sim/mcu_sim/` | ✅ |
-| FN-ALM-03 | 긴급 알림 (쓰러짐 · 관리자 확인) | P1 | SRV/WEB | 기능 §4.3 | M4 (서버) / M5 (화면) | `server/domain/event_machine.py`(`SEVERITY`) · `front/src/pages/LivePage.tsx` | 🟡 (화면만 남음) |
-| FN-ALM-04 | 수동 방송 송출 | P1 | WEB/SRV | 기능 §4.3 · API §4.5 | M4 (API) / M5 (화면) | `server/app/routes/alerts.py` | 🟡 (화면만 남음) |
-| FN-ALM-05 | 경고 일시중지 (정비 작업 등) | P1 | WEB/SRV | 기능 §4.3 · API §4.5 | M4 (API) / M5 (화면) | `server/app/routes/alerts.py` · `alert_service.py` | 🟡 (화면만 남음) |
+| FN-ALM-03 | 긴급 알림 (쓰러짐 · 관리자 확인) | P1 | SRV/WEB | 기능 §4.3 | M4 (서버) / M5 (화면) | `server/domain/event_machine.py`(`SEVERITY`) · `front/src/live/ActiveEvents.tsx` | ✅ |
+| FN-ALM-04 | 수동 방송 송출 | P1 | WEB/SRV | 기능 §4.3 · API §4.5 | M4 (API) / M5 (화면) | `server/app/routes/alerts.py` · `front/src/live/QuickControls.tsx` | ✅ |
+| FN-ALM-05 | 경고 일시중지 (정비 작업 등) | P1 | WEB/SRV | 기능 §4.3 · API §4.5 | M4 (API) / M5 (화면) | `server/app/routes/alerts.py` · `front/src/live/QuickControls.tsx` | ✅ |
 
 > **경고 방송은 TTS가 아니다.** 위반 유형별 사전 녹음 wav를 재생한다(생성 지연 제거).
 > 확정 → 방송 시작 **1초 이내**가 요구사항이며, **실측 중앙값 43.8ms**다(아래 M4 실측표).
@@ -162,9 +162,9 @@
 
 | FN-ID | 화면 | 우선 | 계층 | 명세 위치 | 마일스톤 | 코드 위치(예정) | 상태 |
 |---|---|---|---|---|---|---|---|
-| FN-UI-01 | 개요 — 핵심 지표 · 추세 · 분포 · 최근 이벤트 · 시스템 상태 | P0 | WEB | 기능 §4.6 | M5 | `front/src/pages/OverviewPage.tsx` | ⬜ |
-| FN-UI-02 | 실시간 관제 — 2채널 라이브 + 오버레이 · **단독 확대 보기** · 수동 방송 | P0 | WEB | 기능 §4.6 · API §5 | M1 (라이브·상태·확대) / M2 (오버레이) / M3 (경고 상태 표시) / M5 (수동 방송 버튼) | `front/src/pages/LivePage.tsx` · `front/src/live/` | 🟡 (수동 방송만 남음) |
-| FN-UI-03 | 이벤트 — 목록·필터 + 상세(클립·LLM·규정·타임라인) | P0 | WEB | 기능 §4.6 · API §4.1 | M5 | `front/src/pages/EventsPage.tsx` | ⬜ |
+| FN-UI-01 | 개요 — 핵심 지표 · 추세 · 분포 · 최근 이벤트 · 시스템 상태 | P0 | WEB | 기능 §4.6 | M5 | `front/src/pages/OverviewPage.tsx` | ✅ |
+| FN-UI-02 | 실시간 관제 — 2채널 라이브 + 오버레이 · **단독 확대 보기** · 진행 중 이벤트 · 수동 방송 | P0 | WEB | 기능 §4.6 · API §5 | M1 (라이브·상태·확대) / M2 (오버레이) / M3 (경고 상태) / M5 (우측 패널) | `front/src/pages/LivePage.tsx` · `front/src/live/` | ✅ |
+| FN-UI-03 | 이벤트 — 목록·필터 + 상세(클립·LLM·규정·타임라인) | P0 | WEB | 기능 §4.6 · API §4.1 | M5 | `front/src/pages/EventsPage.tsx` | ✅ (LLM·규정·유사사례 칸은 M8) |
 | FN-UI-04 | 영상 검색 — 자연어 질의 · 유사도순 결과 | P1 | WEB | 기능 §4.6 · API §4.3 | M7 | `front/src/pages/SearchPage.tsx` | ⬜ |
 | FN-UI-05 | 분석 · 보고서 — 시정률 추이 · 반복 순위 · 히트맵 · 이상 탐지 | P1 | WEB | 기능 §4.6 · API §4.2 | M8 | `front/src/pages/AnalysisPage.tsx` | ⬜ |
 | FN-UI-06 | 챗봇 — 통계·검색·브리핑 질의 | P1 | WEB | 기능 §4.6 · API §4.4 | M7 | `front/src/pages/AssistantPage.tsx` | ⬜ |
@@ -174,7 +174,8 @@
 > 프레임 시각에 맞춰 그린다. 정합 오차 목표 **±100ms**.
 > **버퍼는 재생 경로별로 다르다** — `overlay_buffer_webrtc_ms` · `overlay_buffer_hls_ms`(2800).
 > M1 실측 지연이 0.3초 대 2.5초라 단일 값으로는 맞출 수 없다.
-> WebRTC 값은 **360 으로 확정**됐으나 반영은 M5 다(아래 「M5 보류 항목」).
+> WebRTC 값은 **300 을 유지한다** — 360 제안과 그 판단 근거는 아래
+> 「오버레이 시간 정합 — M5 결과」 ③ 에 있다.
 > `overlay_stale_ms`(기본 1000ms) 초과 시 박스를 흐리게 표시한다.
 >
 > **단독 확대 보기에서 다른 채널의 구독을 끊지 않는다.** 영상만 내리고 이벤트 수신과
@@ -192,7 +193,7 @@
 |---|---|---|---|---|---|---|---|
 | FN-CFG-01 | 카메라 캘리브레이션 (지면 4점 → 호모그래피) | P0 | SRV/WEB | 기능 §4.7 · API §4.5 | M6 | `packages/vision/homography.py` · `server/app/routes/cameras.py` | ⬜ |
 | FN-CFG-02 | 금지구역 편집 (폴리곤 → 지면 좌표) | P0 | SRV/WEB | 기능 §4.7 · API §4.5 | M6 | `server/app/routes/zones.py` · `front/src/pages/SettingsPage.tsx` | ⬜ |
-| FN-CFG-03 | 경고 음원 매핑 | P0 | SRV/WEB | 기능 §4.7 | M4 (저장소·조회) / M6 (화면) | `server/infra/db/models.py`(`alert_sounds`) · `server/infra/audio/library.py` · `scripts/seed_sounds.py` | 🟡 (화면만 남음) |
+| FN-CFG-03 | 경고 음원 매핑 (유형별 음원 + **등급**) | P0 | SRV/WEB | 기능 §4.7 · §6 | M4 (저장소) / M5 (§6 컬럼 반영) / M6 (화면) | `server/infra/db/models.py`(`alert_sounds`) · `server/infra/audio/library.py` · `scripts/seed_sounds.py` | 🟡 (화면만 남음) |
 | FN-CFG-04 | 임계값 정책 관리 | P1 | SRV/WEB | 기능 §4.7 · API §4.5 | M6 | `server/app/routes/policies.py` | ⬜ |
 | FN-CFG-05 | 위험 반경 설정 (클래스별) | P1 | SRV/WEB | 기능 §4.7 · API §4.5 | M6 | `server/app/routes/vehicle_classes.py` | ⬜ |
 
@@ -281,7 +282,7 @@ FN-ID가 붙지 않는 기반 작업이다. 전부 완료되었고 `uv run tasks
 | 카메라 끊김 감지 | **2.9초** 만에 `reconnecting`, 7.6초에 `down` |
 
 > **오버레이 정합(±100ms) 관점**: 이 실측을 근거로 명세서가 버퍼를 경로별로 나눴다 —
-> `overlay_buffer_webrtc_ms`(400) · `overlay_buffer_hls_ms`(2800). 화면에 어느 경로로
+> `overlay_buffer_webrtc_ms`(300) · `overlay_buffer_hls_ms`(2800). 화면에 어느 경로로
 > 재생 중인지 계속 표시하고(타일 하단), 그 라벨의 툴팁에 적용 정책 키를 적어 둔다.
 > **값은 프론트에 적지 않는다** — `GET /policies`(M6)로 읽는다. 경로 → 정책 키 대응만
 > `front/src/live/player.ts` 의 `OVERLAY_BUFFER_POLICY_KEY` 에 있고, M2 의 오버레이
@@ -392,10 +393,10 @@ FN-ID가 붙지 않는 기반 작업이다. 전부 완료되었고 `uv run tasks
 | 화면의 「정합 진단」 토글 (`/live?debug=1`) | 표시 프레임 시각 · 그린 좌표 `ts` · 둘의 차이 · **실제 적용된** 버퍼 값과 정책 키 · 좌표 도착 지연 · 버퍼 적재량. 차이가 적용 버퍼와 다르면 버퍼가 잘못 걸린 것이다 |
 | marker 대조 (`uv run tasks.py marker`) | 영상에 태운 사각형과 오버레이 박스가 겹치는가. **영상과의 실제 오차는 이쪽으로만 잰다.** 궤적은 `deploy/marker_path.py` 한 곳에만 정의되고, ffmpeg 표현식과 파이썬 함수가 같은 값을 내는지 테스트가 대조한다 |
 
-**프론트 단위 테스트 러너가 없다.** `overlayBuffer.ts` 의 보간·부호·낡음 판정은
-스크래치에서 `tsc` 로 컴파일해 node 로 9가지 성질을 확인했지만(전부 통과),
-`uv run tasks.py verify` 는 프론트에서 `tsc --noEmit` 과 `vite build` 만 돈다.
-러너(vitest 등)를 넣을지는 M5(`tasks.py types`)에서 함께 정한다.
+~~**프론트 단위 테스트 러너가 없다.**~~ **M5 에서 vitest 를 넣었다.** `overlayBuffer.ts` 의
+보간·부호·낡음 판정 10건과 표시 규약(`formatRate` · `metricsAddUp`) 7건이
+`uv run tasks.py verify` 안에서 돈다. 그때까지는 스크래치에서 `tsc` 로 컴파일해 node 로
+확인했고, 그 검증은 **다음 사람이 반복할 수 없는 것**이었다.
 
 ---
 
@@ -517,7 +518,7 @@ M3 까지는 "경고를 발동했다"는 기록만 있었고, 여기서 그 자�
 | REC 클라이언트 확장 (`GET /keyframe` · `POST /clips` · 다운로드) | `server/infra/rec_client.py` | §4.7 | ✅ |
 | `GET /events/{id}/clip` · `/media/*` 정적 제공 | `server/app/routes/events.py` · `main.py` | §4.1 · §5 경로 규약 | ✅ |
 | 마이그레이션 `0004`(`dropped_at`) · `0005`(`alert_sounds`) | `server/infra/db/migrations/` | §6 | ✅ |
-| 시나리오 11종 (경고·클립 기대값 포함) + `clip_recovery` · `alert_muted` | `sim/cases/` · `sim/case_check.py` | — | ✅ |
+| 시나리오 12종 (경고·클립 기대값 포함) + `clip_recovery` · `alert_muted` · `alert_suppressed` | `sim/cases/` · `sim/case_check.py` | — | ✅ |
 | 확정 → 방송 지연 실측 도구 | `scripts/measure_alert_latency.py` | FN-ALM-01 | ✅ |
 
 **실측치** (2026-07-30, 개발 노트북 · Windows · winsound · PostgreSQL 실물)
@@ -543,7 +544,7 @@ M3 까지는 "경고를 발동했다"는 기록만 있었고, 여기서 그 자�
 > 막히는 것은 시정률에 직접 영향을 준다. 그래서 `asyncio.create_task` 로 넘기고
 > 종료 시에만 기다린다(`ClipService.wait_idle`).
 
-**시나리오 11종** (`uv run tasks.py cases`) — M4 가 추가한 둘과 기존 아홉의 경고·클립 기대값
+**시나리오 12종** (`uv run tasks.py cases`) — M4 가 둘, M5 가 하나를 더했다
 
 | 시나리오 | 무엇을 잠그는가 | 경고 | 클립 |
 |---|---|---|---|
@@ -551,7 +552,8 @@ M3 까지는 "경고를 발동했다"는 기록만 있었고, 여기서 그 자�
 | `no_resolve` | 쿨다운 30초 뒤 재경고는 `repeat: true` 로 나간다 | 2건 (2번째 repeat) | `ready` |
 | `fall_excluded` | **`fall` 은 항상 level 3**, 안전모는 2 | 2건 (3 · 2) | — |
 | `dropped` | 확정 전 소멸 — 방송도 예약도 없다 | **0건** | `null` |
-| **`alert_muted`** (신규) | 일시중지 중 **장치만** 조용하고 이벤트·지표는 그대로 | **0건** | `ready` |
+| **`alert_muted`** | 일시중지 중 장치가 조용하고 **시정률이 `null`** 이 된다(방송이 없었다) | **0건** | `ready` |
+| **`alert_suppressed`** (M5 신규) | 방송 있는 건과 없는 건을 섞어 **분모에서 빠지는지** 잠근다 — 새면 1.00 이 0.50 | 1건 | `ready` |
 | **`clip_recovery`** (신규) | `pending` 중 서버 재시작 → 잡이 복구되어 `ready` | 1건 | **`ready`** |
 
 > `expect.alerts` 는 **전량 목록**이다. 기대보다 많이 나가도 실패한다 — 중복 경고는
@@ -588,6 +590,95 @@ M3 까지는 "경고를 발동했다"는 기록만 있었고, 여기서 그 자�
    **하나도 없다** — `server/ai/` 는 비어 있고, 실패는 `GET /system/status` 의 `cloud`
    절과 §5.3 `system` 으로만 나간다.
 3. 클라우드 상태가 바뀌어도 같은 응답의 카메라·엣지·저장소 절이 흔들리지 않는다.
+
+---
+
+## M5 산출물 (관제 화면 P0)
+
+**이 단계가 끝나 시연이 가능해졌다.** 감지 → 확정 → 경고 → 시정 → 숫자가 전부
+화면으로 나오고, 「방송 후 시정률」이 판정 불가율·방송 없이 확정 건수와 함께 표시된다.
+
+| 항목 | 위치 | 근거 | 상태 |
+|---|---|---|---|
+| FN-UI-01 개요 — 지표 4개 · 추세 · 분포 · 최근 이벤트 · 시스템 상태 | `front/src/pages/OverviewPage.tsx` · `overview.css` | 기능 §4.6 · 시안 1p | ✅ |
+| FN-UI-02 완성 — 진행 중 이벤트 · 빠른 제어(수동 방송 · 일시중지) | `front/src/live/ActiveEvents.tsx` · `QuickControls.tsx` | 기능 §4.6 · 시안 2p | ✅ |
+| FN-ALM-03 긴급 알림 — 쓰러짐 최상위 등급 + **관리자 확인** | `front/src/live/ActiveEvents.tsx` | 기능 §4.3 | ✅ |
+| FN-UI-03 이벤트 — 목록·필터·상세(클립 · 타임라인 · note · `clip_status`) | `front/src/pages/EventsPage.tsx` · `events.css` | 기능 §4.6 · API §4.1 · 시안 3p | ✅ |
+| FN-EVT-05 수동 정정 화면 — 메모 · 강제 종결 · 오탐 표시 | `front/src/pages/EventsPage.tsx` | §4.1 `PATCH` | ✅ |
+| **`uv run tasks.py types`** — Pydantic → JSON Schema → TS (모델 83종) | `scripts/gen_types.py` · `front/src/types/contracts.ts` | 절대규칙 5 | ✅ |
+| **vitest** — `overlayBuffer` 10건 · 표시 규약 7건 · `verify` 에 포함 | `front/src/**/*.test.ts` · `front/vite.config.ts` | — | ✅ |
+| 계약 열거형 → 화면 표기 한 곳 (부록 B 대조표) | `front/src/types/labels.ts` | 부록 B | ✅ |
+| REST 클라이언트 (§1.4 오류 봉투를 문장으로) | `front/src/api/client.ts` · `events.ts` · `metrics.ts` · `alerts.ts` | §1.4 · §4.1 · §4.2 · §4.5 | ✅ |
+| 명세서 갱신 반영 — `alert_sounds` 재정의 · `alert_suppressed` · `clip_error` · 정책 키 2개 · mute 응답 · `notify_device` | 아래 「명세서 갱신 반영 (v11)」 | §4.5 · §4.8 · §6 | ✅ |
+| 키프레임·클립 추출 성능 | `recorder/clips.py` | — | ✅ |
+
+**실측치** (2026-07-30 · 개발 노트북 · Windows · ffmpeg 8.1.2)
+
+| 항목 | 고치기 전 | 고친 뒤 |
+|---|---|---|
+| **키프레임 1장 추출** (중앙값) | **593 ms** | **390 ms** (−34%) |
+| 그중 제거한 ffprobe 몫 | 175~208 ms | 0 (호출하지 않는다) |
+| 클립 20초 추출 — 세그먼트 길이 측정 3회 | 533 ms (순차) | **342 ms** (동시) |
+| 클립 20초 추출 전체 | 1352 ms | **1228 ms** (−9%) |
+| ffmpeg 프로세스 기동만 (`ffmpeg -version`) | — | **140~190 ms** ← 남은 시간의 하한 |
+
+> **`-ss` 위치는 원래 맞았다.** 보고받은 진단(「`-ss` 를 `-i` 뒤에 두면 느리다」)은 사실이지만
+> **이 코드에 해당하지 않았다** — `extract_keyframe` 과 `_cut` 은 처음부터 `-ss` 를 `-i`
+> 앞에 두고 있었고 그 이유가 주석에도 적혀 있었다. 확인 삼아 출력 seek 을 재보니
+> 5초 지점 735ms · 9.5초 지점 1119ms 로 **오프셋에 비례해 느려졌고**, 입력 seek 은
+> 오프셋과 무관하게 480~690ms 였다. 즉 그 함정은 이미 피해 있었다.
+>
+> **실제로 낭비되고 있던 것은 ffprobe 한 번이었다.** 오프셋을 파일 끝 안쪽으로 자르려고
+> 세그먼트 길이를 재고 있었는데, 그 경계는 **이웃 세그먼트의 시작 시각**으로 알 수 있다
+> (`select_overlapping` 이 이미 그 규칙을 쓴다). 프로세스 하나가 175~208ms 였으므로
+> 그것만 없애 590ms → 390ms 가 됐다.
+>
+> **남은 390ms 는 더 깎을 수 없다.** 그중 140~190ms 가 ffmpeg 프로세스 기동이고
+> (`ffmpeg -version` 실측) 나머지가 mp4 열기 · GOP(2초 · 30프레임) 디코딩 · 1920×1080
+> JPEG 인코딩이다. **「수십 ms」는 자식 프로세스로 ffmpeg 을 부르는 구조에서 도달할 수
+> 없다** — 그 값을 원하면 인프로세스 디코더(PyAV 등)를 들여야 하고, 그것은 REC 의
+> 의존성과 젯슨 이식 범위를 바꾸는 결정이라 여기서 임의로 하지 않았다.
+>
+> 클립 쪽은 **길이 측정을 추정으로 바꾸지 않았다.** 그 값이 곧 절단 위치이고,
+> `actual_from` 은 계산이 아니라 실측이어야 한다(§4.7). 대신 세 번의 ffprobe 를
+> **동시에** 돌려 533ms → 342ms 로 줄였다. 남은 시간은 ffmpeg 3패스 + ffprobe 1회,
+> 즉 프로세스 4개의 기동 비용이며 3패스 구조는 `actual_from` 을 실측으로 얻기 위한 것이다.
+>
+> **빈 출력을 성공으로 넘기지 않는다.** `-ss` 가 실제 파일 끝을 넘으면 ffmpeg 은
+> **0바이트를 내고 종료코드 0** 으로 끝난다. 그대로 돌려주면 "키프레임을 저장했다"는
+> 기록만 남고 그림이 없으므로 오류로 올린다(`recorder/tests/test_clips.py` 가 잠근다).
+
+**M5 가 고른 것 (설계 판단)**
+
+| 판단 | 이유 |
+|---|---|
+| **위험 등급(`level`)의 원천을 DB 로 옮겼다** | §6 이 `alert_sounds.level` 을 정의하면서 "관리자가 유형별 음원과 **등급**을 바꿀 수 있다"고 적었다. 코드에 박힌 `SEVERITY` 표는 절대규칙 6 위반이 된다. 상태머신은 순수성을 지키려 값을 **주입받고**(`set_severity`), `SEVERITY` 는 DB 를 못 읽었을 때의 대비값으로 남는다 — 등급을 모른다고 경고를 못 내보내면 DB 장애가 안전 기능 정지로 번진다 |
+| 등급을 **상태머신 한 곳에서만** 갈아끼운다 | §5.2 `severity` 와 §3 `AlertCommand.level` 은 같은 값이어야 한다. 집행 계층에서 따로 덮으면 ESP32 가 받은 등급과 화면에 뜬 등급이 갈리고, 어느 쪽이 맞는지 사후에 알 수 없다 |
+| `AlertSink.fire` 가 **`bool` 을 돌려준다** | 일시중지로 조용했다는 사실이 호출자에게 돌아가지 않으면 `alert_suppressed` 를 기록할 방법이 없다. **재생 실패는 `True` 다** — "사람이 일부러 멈췄다"와 "내보내려 했으나 고장났다"는 다르고, 후자를 지표에서 빼면 장애가 시정률을 좋아 보이게 만든다 |
+| 일시중지 창을 `dict[int \| None, ...]` 로 둔다 | §4.5 의 「`cam_id` 생략 = 전체 카메라」를 표현하는 자리다. `0` 이나 `-1` 같은 가짜 번호를 만들면 실제 카메라 번호와 섞여 **엉뚱한 카메라의 경고가 조용히 멎는다.** 조회는 카메라별 창과 전체 창을 **둘 다** 본다 — 하나만 보면 "이 카메라는 안 멈췄다"고 잘못 표시한다 |
+| `minutes` 생략 시 정책 기본값을 **올림**한다 | `mute_default_duration_s` 가 30초처럼 1분 미만이면 내림하면 0이 되어 「즉시 해제」로 뒤집힌다. 중지를 요청했는데 켜지는 것이 가장 나쁜 결과다 |
+| 타입 생성물을 **`serialization` 모드**로 뽑고 `?` 를 붙이지 않는다 | `validation` 모드는 기본값이 있는 필드를 옵셔널로 낸다. 그러면 `Policies.overlay_stale_ms` 가 `number \| undefined` 가 되어 프론트가 `?? 1000` 로 값을 메우게 되고, 그것이 절대규칙 6 이 금지하는 것이다. nullable 은 `\| null` 로 그대로 구분된다. 대가로 요청 모델도 전부 필수가 되지만 그쪽은 `Partial<>` 로 좁히면 된다 |
+| 생성 대상을 **계약이 내보내는 SpecModel 전량**으로 한다 | 화면이 쓰는 것만 고르면 다음 화면을 만들 때 무엇이 빠졌는지 아무도 모르고, 손으로 옮기는 관행이 되살아난다 |
+| 추세·분포를 **최근 이벤트로 계산**한다 | `GET /metrics/timeseries` · `/distribution` 은 M8 이다. 없는 API 를 흉내 내 곡선을 그리면 **시연에서 사실처럼 보인다.** 표본으로 그렸다는 것을 화면에 적었다 |
+| 개요가 `metric`(§5.3)을 받으면 **다시 조회한다** | §5.3 페이로드는 §4.2 의 부분집합이라 `suppressed` 가 없다. 메시지 값만으로 갱신하면 「방송 없이 확정」이 낡은 채 남는데, 그 숫자는 **분모가 왜 줄었는지**를 설명하는 값이므로 시정률과 함께 움직여야 한다 |
+| 이벤트 상세가 `clip_status` 로 재생 여부를 정한다 | `pending` 인 동안 `<video>` 를 붙이면 조용히 재생에 실패한다(§4.1 은 그 상황에 404 를 준다). 키프레임으로 대체하고 **왜 아직 없는지**를 적는다 |
+| M8 칸(LLM · 유사 사례 · 규정)을 **비워 두되 이유를 적는다** | 빈 칸은 "아직 그 기능이 없다"와 "생성에 실패했다"를 구분하지 못한다(§4.6 null 규약) |
+| 클립 링크로 `/events/{id}/clip` 을 쓴다 | `/media/clips/...` 정적 경로로 직접 붙으면 `pending` 과 「파일 없음」이 같아 보인다. 서버 경로는 **없는 것을 없다고** 404 로 말해준다 |
+
+**화면에서 확인한 것** (실제 서버 · PostgreSQL · REC · 가짜 카메라 2대)
+
+| 확인 | 결과 |
+|---|---|
+| 개요 지표 4개 · 시정률 병기 | `100% / 판정 불가 0%` · `방송 없이 확정 1건` |
+| 일시중지 중 확정 → 지표 | `correction_rate` 1.00 유지 · `suppressed` 1 · `total_violations` 1 (섞였다면 0.50) |
+| 이벤트 상세에서 **클립 재생** | `readyState 4` · 20.07초 · 1920×1080 · 8.5초 지점 디코딩 픽셀 14400/14400 비검정 |
+| `POST`/`GET /alerts/mute` | 15분 · 정책 기본값(900초 → 15분) · `cam_id` 생략(전체) · `minutes:0` 해제 전부 왕복 |
+| 빠른 제어 UI 로 일시중지 | 배너에 `14분 31초 남음 · 정비 작업` 표시 · 서버 상태와 일치 |
+| 레이아웃 | 사이드바 232px · 지표 타일 4×274px 균등 · 2열(711/418) · 가로 스크롤 없음 |
+
+> **스크린샷은 남기지 못했다.** 이 환경의 브라우저 창이 화면에 표시되지 않아 프레임을
+> 합성하지 않는다(캡처 시도가 타임아웃). 위 값들은 DOM·계산 스타일·`getBoundingClientRect`
+> 와 실제 비디오 디코딩 픽셀로 확인한 것이다.
 
 ---
 
@@ -674,20 +765,32 @@ M3 까지는 "경고를 발동했다"는 기록만 있었고, 여기서 그 자�
 | **§4.1 `GET /events/{id}` 의 `last_alerted_at` · `note`** | 응답에 추가됨 — **저장만 되고 못 읽던 상태가 끝났다** | `EventSummary` 에 필수(nullable) 추가 · 저장소가 채운다 · 오탐 사유가 화면(FN-UI-03)까지 도달한다. **재시작 복구가 저장된 `last_alerted_at` 을 쓰게 되어**, 재경고를 여러 번 한 이벤트가 복구 직후 즉시 재경고하던 문제도 함께 사라졌다 |
 | **§6 `events.dropped_at`** | 추가됨 | 마이그레이션 `0004` · `_to_dropped` 가 시각을 찍고 §4.1 `timeline` 에 `dropped` 가 나온다. 종결 시각 셋(`resolved`·`expired`·`dropped`)이 모두 생겼다 |
 
+**v11 (M4 에서 보고한 7건 전량)** — 전부 코드에 반영했다.
+
+| 항목 | 확정된 내용 | 반영 |
+|---|---|---|
+| **`alert_sounds` 테이블** ★ | §6 에 실렸고 컬럼이 확정됐다 — `violation_type` · `file_path` · `level`(1/2/3) · `label` · `active`. 서버가 임시로 만든 `key`·`filename` 과 다르다 | 마이그레이션 `0006` 이 **테이블을 옮긴다**(새로 만들지 않는다 — 현장에서 바꿔 둔 매핑을 지우면 FN-CFG-03 이 깨진다). `level`·`label` 은 시드 기본값으로 백필했고 `fall` 만 3이다. `test_db_schema.py` 의 `EXTRA_TABLES` 가 **비었다** |
+| **`level` 의 원천** | §6 이 "관리자가 유형별 음원과 **등급**을 바꿀 수 있다"고 명시 | `EventMachine.set_severity()` 로 주입한다. `SEVERITY` 표는 DB 미도달 시 대비값으로만 남는다(절대규칙 6 · 2 를 동시에 지키는 유일한 형태) |
+| **일시중지 중 확정 이벤트와 시정률** ★ | §4.8 이 **전량 제외 + `suppressed` 별도 집계**로 확정. 「방송 후」 시정률이므로 알린 적 없는 건은 모집단이 아니다 | `events.alert_suppressed`(마이그레이션 `0006`) · `AlertSink.fire` 가 `bool` 반환 · `metrics.summarize` 가 제외하고 센다 · `sim/cases/alert_suppressed.yaml` 이 **1.00 이 0.50 으로 새는지** 잠근다 |
+| **`clip_error` 컬럼** | §6 에 추가됨 | `note` 의 `[클립]` 접두사 임시 처리를 없앴다. 관리자 메모와 기계가 남긴 사유가 더 이상 한 칸을 쓰지 않는다 |
+| **정책 키 2개** | `mute_default_duration_s`(900) · `clip_extract_margin_s`(2) | 서버 설정(`CLIP_MARGIN_S`)에서 정책으로 옮겼다. `ClipService.set_policies` 가 margin 까지 DB 값으로 갈아끼운다 |
+| **mute 응답과 조회** | `cam_id` · `muted` · `muted_until` · `reason`. `GET /alerts/mute` 도 같은 형태. `minutes:0` 은 즉시 해제, `cam_id` 생략은 전체 카메라 | 204 를 버렸다 — 새로고침 뒤에도 "경고가 꺼져 있다"가 화면에 남는다. `minutes` 생략 시 정책 기본값이 붙어 **기한 없는 중지를 만들 수 없다** |
+| **`notify_device`** | `POST /alerts/manual` 에 추가(기본 `true`). 참이면 `level` 로 MQTT 도 발행 | 수동 방송이 경광등을 켠다. `AlertCommand` 가 요구하는 두 값은 `MANUAL-cam{N}-{ISO}` 와 `zone_intrusion` 으로 채우고 그 사실을 아래에 올렸다 |
+
 ### A. 남아 있는 확인 필요
 
-M4 에서 새로 드러난 것들이다. 전부 **명세서가 요구하는 기능을 구현하려는데 둘 자리가
+M5 에서 새로 드러난 것들이다. 전부 **명세서가 요구하는 기능을 구현하려는데 둘 자리가
 없어서** 서버가 임시로 정한 것이며, 코드에는 그 사실을 주석으로 표시해 두었다.
 
 | 내용 | 상세 |
 |---|---|
-| **경고 음원 매핑을 둘 자리가 §6 에 없다** ★ | FN-CFG-03(경고 음원 매핑 · **P0**)과 §4.3 "위반 유형에 **사전 매핑된** 음원 파일"이 매핑을 요구하는데, §6 데이터 모델에 대응 테이블이 없다. 파일명을 코드에 박으면 절대규칙 6(하드코딩 금지)과 FN-CFG-03(화면에서 지정) 둘 다 깨지므로 **`alert_sounds`(`key`·`filename`·`active`) 테이블을 서버가 만들었다**(마이그레이션 `0005`). `key` 는 위반 유형 넷과 수동 방송 이름(§4.5 `sound`)을 함께 담는다. §6 에 추가할지 정해 달라 |
-| **`POST /alerts/manual` · `/alerts/mute` 의 응답이 정의되지 않았다** | §4.5 는 두 요청 본문만 보여주고 응답 스키마가 없다. 없는 계약을 지어내지 않으려고 **204 No Content** 로 두었다. 그래서 **일시중지가 언제 풀리는지 화면이 다시 물어볼 경로가 없다** — `GET /system/status`(§4.6)에도 `GET /alerts` 같은 것에도 자리가 없다. 지금은 §5.3 `system`(`component: mcu`, `state: degraded`)으로 "그 카메라 경고가 멈췄다"를 한 번 알리는 것으로 대신한다. 조회 경로가 필요한지 정해 달라 |
-| **일시중지 중 확정된 이벤트가 「방송 후」 시정률 분모에 드는가** ★ | FN-ALM-05 로 장치를 멈춘 동안에도 확정·`alerted_at` 기록·시정 판정은 그대로 돈다(이벤트까지 멈추면 그 시간의 위반이 통째로 사라진다). 그런데 지표 이름이 「**방송 후** 시정률」이므로, 방송이 나가지 않은 건이 분모에 남는 것은 정의와 어긋난다. **지금은 지표를 건드리지 않는 쪽**(상태머신 무영향)으로 두었다 — 어느 쪽이든 근거가 필요하다 |
-| **`AlertCommand.duration_s` 에 대응하는 정책 키가 없다** | §3 이 경광등·부저 지속 시간을 요구하는데 §4.5 `GET /policies` 목록에 그 키가 없다. **장치 쪽 운용값**이라 상태머신 타이머와 성격이 다르다고 보아 서버 설정(`ALERT_DURATION_S`, 기본 5)에 두었다. 정책으로 올릴지 정해 달라 |
-| **클립 추출 여유(margin)에 대응하는 정책 키가 없다** | 기능명세서 §4.4 가 "여유(margin) **2초**"를 명시하는데 §4.5 정책 목록에 없다. 서버 설정(`CLIP_MARGIN_S`, 기본 2.0)에 두었다. `clip_pre_roll_s`·`clip_post_roll_s` 는 정책인데 이것만 아닌 것이 어색하다 |
-| **클립 실패 사유를 담을 컬럼이 §6 에 없다** | §4.7 은 `partial`·`not_found` 의 `reason` 을 서버가 기록하라고 하는데 §6 `events` 에 자리가 없다. 지금은 `note` 앞에 `[클립]` 접두사로 덧붙인다(기존 메모는 지우지 않는다). 관리자 메모와 한 칸을 쓰는 셈이라 `clip_reason` 전용 컬럼이 필요한지 정해 달라 |
-| **수동 방송의 `level` 을 장치로 내보낼 방법이 없다** | §4.5 `POST /alerts/manual` 이 `level` 을 받는데, 그것을 §3 `AlertCommand` 로 옮기려면 `event_id` 와 `type`(`ViolationType`)이 필요하고 수동 방송에는 둘 다 없다. 지금은 **스피커만** 울리고 경광등은 켜지 않는다. 수동 방송에도 경광등이 필요하면 §3 에 그 경우를 정의해 달라 |
+| **§4.2 응답 예시에 `suppressed` 가 없다** ★ | 기능명세서 §4.8 은 「`suppressed` 로 별도 집계」를 요구하는데 API명세서 §4.2 `GET /metrics/summary` 예시 JSON 과 필드 표에는 그 칸이 없다. 예시에 없다는 이유로 계약에서 빼면 지표가 자기 정의를 못 지키므로 **응답에 두었다**. `packages/contracts/tests/test_spec_examples.py` 의 `SUMMARY_FIELDS_BEYOND_EXAMPLE` 한 곳에만 그 차이가 적혀 있다. §4.2 에 추가해 달라 |
+| **§5.3 `metric` 에도 `suppressed` 가 없다** | 같은 이유다. 지금은 화면이 `metric` 을 받으면 `GET /metrics/summary` 를 **다시 조회**해 그 칸을 채운다(종결 전이당 요청 한 번). §5.3 에 추가되면 재조회를 없앨 수 있다 |
+| **§4.1 응답에 `clip_status` · `clip_error` · `alert_suppressed` 자리가 없다** ★ | 셋 다 §6 `events` 컬럼인데 §4.1 목록·상세 예시에는 없다. **다시 읽을 수 없으면 화면이 그릴 수 없는** 값들이라 `EventDetail` 에 두었다 — `clip_status` 없이는 클립 재생 여부를 정할 수 없고(§5.2 `event_updated` 는 그 순간 보고 있던 사람만 받는다), `alert_suppressed` 없이는 "왜 이 이벤트가 지표에 없나"를 설명할 수 없다. §4.1 에 추가할지 정해 달라 |
+| **수동 방송의 `type` 을 §3 에 정의할 자리가 없다** | `notify_device` 가 생겨 수동 방송도 MQTT 를 발행하는데, §3 `AlertCommand.type` 은 `ViolationType` 이고 수동 방송에는 위반 유형이 없다. ESP32 가 이 값으로 **점멸 패턴을 고르므로** 아무 것이나 될 수 없어 지금은 `zone_intrusion`(「지금 그 구역을 주목하라」에 가장 가까운 일반 경보)을 쓴다. `event_id` 는 `MANUAL-cam{N}-{ISO8601}` 로 두어 조회 가능한 이벤트처럼 보이지 않게 했다. §3 에 「수동 방송」 경우를 정의해 달라 |
+| **`AlertCommand.duration_s` 에 대응하는 정책 키가 없다** | §3 이 경광등·부저 지속 시간을 요구하는데 §4.5 `GET /policies` 목록에 그 키가 없다. **장치 쪽 운용값**이라 상태머신 타이머와 성격이 다르다고 보아 서버 설정(`ALERT_DURATION_S`, 기본 5)에 두었다. `clip_extract_margin_s` 가 이번에 정책으로 올라갔으니 이것도 함께 정해 달라 |
+| **`alert_sounds.level` 과 §5.2 `severity` 의 우선순위** | 등급의 원천을 DB 로 옮겼으므로 관리자가 `no_helmet` 을 3으로 올리면 §5.2 `severity` 와 §3 `level` 이 함께 3이 된다. 그런데 §3 은 「**`fall` 은 항상 3**」을 못박았다 — 관리자가 `fall` 을 2로 **내리는** 것을 서버가 막아야 하는지가 정의되지 않았다. 지금은 막지 않는다(DB 값을 그대로 쓴다). 하한을 강제해야 하면 알려 달라 |
+| **`alert_sounds.label` 을 읽을 API 가 없다** | §6 이 표시 이름을 정의했지만 그것을 내보내는 엔드포인트가 §4.5 에 없다. FN-CFG-03 화면(M6)이 필요하므로 그때 `GET /alert-sounds` 같은 것을 정의해 달라. **M5 는 그것 없이 만들었다** — 수동 방송이 고를 수 있는 것은 위반 유형 넷(값 자체가 절대규칙 11 로 고정)과 「기본 안내」(`sound` 생략)뿐이라 파일명이 프론트에 없다 |
 
 ### B. 판단이 필요했던 타입
 
@@ -704,12 +807,74 @@ M4 에서 새로 드러난 것들이다. 전부 **명세서가 요구하는 기�
 
 ---
 
-## M5 보류 항목 (오버레이 시간 정합)
+## 오버레이 시간 정합 — M5 결과
 
-M2 에서 드러났지만 **M5(관제 화면 P0)에서 함께 처리한다.** 지금 손대지 않는다.
+M2 에서 드러나 M5 로 넘긴 세 항목이다. **둘은 닫혔고 하나는 측정 수단만 만들었다.**
 
-| 항목 | 내용 |
+### ① marker 모드의 overlay 필터가 더하는 지연 — **닫힘**
+
+| 항목 | 값 |
 |---|---|
-| `overlay_buffer_webrtc_ms` = **360** 확정 | 실측 중앙값 358ms, 규격 ±100ms 안이다. **API명세서 §4.5 기본값 300 과 다르며 DB 값이 우선한다** — 코드는 원래 `GET /policies` 로 읽으므로 시드만 바꾸면 된다 |
-| `requestVideoFrameCallback` 의 `captureTime` · `rtpTimestamp` 조사 | 브라우저가 **프레임 촬영 시각**을 알려준다면 고정 버퍼 없이 그 시각으로 직접 정합할 수 있다. 지금 남아 있는 지터(260~458ms)의 원인이 고정 버퍼이므로 이것이 되면 문제 자체가 사라진다 |
-| marker 모드의 overlay 필터가 더하는 지연 몫 측정 | marker 대조는 영상·좌표를 같은 정의로 만들지만, 필터 체인이 영상 쪽에만 지연을 더한다면 측정값이 그만큼 왜곡된다. 그 몫을 따로 재야 marker 수치를 실제 정합 오차로 읽을 수 있다 |
+| 기본 체인 (`scale,fps,realtime제외,setpts,drawtext`) · 450프레임 | 프레임당 **4.01 ms** |
+| marker 체인 (위 + `overlay=eval=frame`) | 프레임당 **3.88 ms** |
+| **짝 차이 중앙값** (같은 회차 안에서 번갈아 측정) | **프레임당 0.29 ms** (범위 −1.2 ~ +2.5) |
+| 같은 체인 회차 간 흔들림 | 프레임당 0.93 ms |
+| 15fps 프레임 간격(66.7 ms) 대비 | **0.43%** |
+
+`overlay` 는 **상태 없는 프레임 단위 필터**다 — 2차 입력이 1프레임(`repeatlast=1`)이고
+재정렬·버퍼링이 없다. 따라서 이 필터가 더하는 **지연 = 프레임당 처리 시간**이며, 그 값이
+프레임 간격의 0.5% 미만이고 측정 노이즈(0.93 ms)와 구분되지 않는다.
+
+> **결론: marker 대조 수치를 그대로 정합 오차로 읽어도 된다.** 필터가 더하는 몫은
+> ±100ms 목표의 100분의 1 이하다. 측정은 CPU 가 한가할 때(가짜 카메라 정지) 한 것이며,
+> 개발 스택이 다 떠 있는 상태에서는 노이즈가 3.4 ms/프레임까지 커져 **차이를 분리할 수
+> 없었다** — marker 실측은 다른 프로세스를 내린 뒤에 해야 한다.
+
+### ② `requestVideoFrameCallback` 의 `captureTime` · `rtpTimestamp` — **측정 수단만**
+
+**정합 방식을 바꾸지 않았다.** 이 환경에서 필드 존재 여부를 확인할 수 없었기 때문이다.
+
+* 이 레포에 딸린 브라우저 창은 **화면에 표시되지 않아 프레임을 합성하지 않는다** —
+  `requestVideoFrameCallback` 이 아예 불리지 않는다(3초 대기 후 타임아웃).
+* 실제 Chrome 은 `127.0.0.1:5173` 에 `ERR_CONNECTION_REFUSED` 로 닿지 못했다
+  (같은 기계에서 `curl` 은 200 을 받는다).
+
+대신 **`/live?debug=1` 정합 진단에 세 줄을 추가**했다. 실제 브라우저로 열면 한눈에 답이 나온다.
+
+| 표시 | 읽는 법 |
+|---|---|
+| `촬영 시각(rVFC)` | 값이 뜨면 `captureTime` 이 실려 온다. `없음 — 고정 버퍼 사용` 이면 이 경로가 없다 |
+| `실제 영상 지연` | `표시 시각 − 촬영 시각`. **적용 버퍼와 100ms 이상 다르면 붉게 표시된다** |
+| `rtpTimestamp` | 있으면 함께 표시. 벽시계가 아니라 클럭레이트 카운터라 단독으로는 쓸 수 없다 |
+
+**바꾸지 않은 이유** (측정 없이 채택하면 더 나빠질 수 있다): `captureTime` 은 WebRTC
+경로에서 **송신 측이 `abs-capture-time` RTP 확장을 실어 보낼 때만** 채워진다. mediamtx 가
+그것을 넣는지 확인되지 않았고, 넣더라도 그 값이 **카메라 센서 시각인지 mediamtx 수신
+시각인지**에 따라 의미가 정반대다 — 후자라면 영상 지연의 대부분인 카메라→mediamtx
+0.27초가 빠져 **고정 버퍼보다 나빠진다.** 「실제 영상 지연」 줄이 0에 가까우면 센서
+시각이고, 250~300ms 대면 중간 지점이다. 그 숫자를 보고 정하면 된다.
+
+### ③ `overlay_buffer_webrtc_ms` 기본값 제안 — **제안만** (명세서는 고치지 않았다)
+
+| 값 | 출처 |
+|---|---|
+| **300** | API명세서 §4.5 · `Policies` 기본값 · DB 시드 (현재 동작하는 값) |
+| **360** | M2 실측 중앙값 358ms 를 반영한 M5 제안값 |
+| 실측 영상 지연 (M1 · WebRTC) | 0.27 ~ 0.34초 (중앙값 약 305ms) |
+
+**제안: 300 을 유지하고, ②의 「실제 영상 지연」을 재고 나서 한 번에 정한다.**
+
+근거 — 300 과 360 의 차이 60ms 는 ±100ms 규격 **안에 있어** 어느 쪽도 규격을 벗어나지
+않는다. 반면 값을 옮기는 비용은 작지 않다.
+
+* `Policies` 기본값을 360 으로 바꾸면 **명세서 §4.5 와 갈린다.** 그 기본값은
+  `test_spec_examples.py` 가 명세서 예시와 한 글자까지 대조하는 값이다.
+* 시드만 360 으로 바꾸면 `scripts/seed_policies.py` 가 계약 기본값에서 파생된다는 규약이
+  깨진다 — 두 곳이 갈리는 순간 "지금 DB 에 뭐가 들어 있나"를 코드로 알 수 없게 된다.
+* 그리고 **360 의 근거인 358ms 자체가 고정 버퍼 기반 추정치다.** ②가 `captureTime` 을
+  주면 그 값이 곧 정답이 되므로, 지금 60ms 를 옮기는 것은 곧 다시 바꿀 값을 두 곳에
+  퍼뜨리는 일이다.
+
+바꾸기로 정한다면 손댈 곳은 **두 곳**이다 — `packages/contracts/.../policies.py` 의 기본값과
+`packages/contracts/tests/test_spec_examples.py` 의 `POLICIES_EXAMPLE`. 그리고 그 전에
+**API명세서 §4.5 를 360 으로 갱신**해야 한다(코드가 명세서를 앞서갈 수 없다 · 절대규칙 8).
