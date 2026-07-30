@@ -36,5 +36,22 @@ export default defineConfig(({ mode }) => {
         '/ws': { target: 'ws://127.0.0.1:8000', ws: true },
       },
     },
+    /**
+     * 프론트 단위 테스트 (`npm run test` · `uv run tasks.py verify` 가 부른다).
+     *
+     * 검증 대상은 **순수 로직**이다 — 오버레이 지연 버퍼의 보간·부호·낡음 판정과
+     * 지표 표시 규약(`formatRate` 의 `null` → `–`). M2 에서는 스크래치에서 `tsc` 로
+     * 컴파일해 node 로 돌려 확인했고, 그것은 다음 사람이 반복할 수 없는 검증이었다.
+     *
+     * `environment` 를 `node` 로 둔다. DOM 이 필요한 렌더 테스트는 없다 —
+     * 컴포넌트는 브라우저에서 눈으로 보는 것이 더 정확하고, 여기서 잠글 것은
+     * **눈으로 확인할 수 없는 계산**이다.
+     */
+    test: {
+      environment: 'node',
+      include: ['src/**/*.test.ts'],
+      // 통과했는지 아닌지가 종료코드로만 드러나면 안 된다(절대규칙 9).
+      reporters: ['default'],
+    },
   }
 })
