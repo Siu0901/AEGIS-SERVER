@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import tempfile
@@ -39,6 +40,14 @@ _GAP_TOLERANCE_S = 3.0
 
 #: 구간을 "전부 확보했다"고 볼 여유. 프레임 간격(15fps → 67ms)보다 크게 잡는다.
 _COVERAGE_TOLERANCE_S = 0.5
+
+#: 키프레임 오프셋을 세그먼트 끝에서 이만큼 물린다(초).
+#:
+#: 파일명 간격이 곧 실제 길이라는 보장이 없다 — 리먹스는 키프레임에서만 자르므로
+#: 실제 파일이 간격보다 짧을 수 있다. 그 뒤를 요청하면 ffmpeg 은 **0바이트를 내고
+#: 종료코드 0** 으로 끝난다(빈 JPEG). 이 여유가 그 경우 대부분을 막고, 그래도 비면
+#: `extract_keyframe` 이 오류를 낸다 — 빈 그림을 성공으로 넘기지 않는다.
+_KEYFRAME_TAIL_S = 0.5
 
 #: `event_id` 로 파일명을 만들기 때문에 경로 조작이 들어올 자리다.
 _SAFE_ID = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
@@ -79,18 +88,31 @@ async def _measure(segments: list[Segment]) -> list[tuple[Segment, float]]:
     아직 닫히지 않은 세그먼트는 mp4 의 moov 가 없어 ffprobe 가 실패한다. 그것을
     **조용히 0초로 치지 않고 목록에서 뺀다** — 길이를 모르는 파일을 이어붙이면
     타임라인이 어긋나 `actual_from` 이 거짓말이 된다. (기록 중 세그먼트를 읽을 수
-    없다는 것이 FN-REC-03 의 `+ margin(2초)` 예약이 존재하는 이유다.)
+    없다는 것이 FN-REC-03 의 `+ margin` 예약이 존재하는 이유다.)
+
+    **동시에 잰다.** ffprobe 는 프로세스 하나에 약 200ms 인데(Windows 실측) 그중
+    대부분이 프로세스 기동이라 CPU 를 쓰지 않고 기다리는 시간이다. 20초 클립이면
+    세그먼트가 3개이므로 순차 실행은 그 대기를 3번 겹쳐 쌓는다 — 실측 540ms 가
+    210ms 로 줄었다. 길이를 **추정으로 대신하지 않는 이유**는 그 값이 곧 절단
+    위치이기 때문이다. 파일명 간격으로 갈음하면 중간 세그먼트가 짧았을 때
+    `actual_from` 이 가리키는 순간과 실제 화면이 어긋난다.
     """
-    measured: list[tuple[Segment, float]] = []
-    for segment in segments:
-        try:
-            duration = await ffmpeg.probe_duration(segment.path)
-        except ffmpeg.FfmpegError:
-            log.debug("길이를 읽을 수 없는 세그먼트를 건너뛴다 (기록 중) — %s", segment.path)
-            continue
-        if duration > 0:
-            measured.append((segment, duration))
-    return measured
+    durations = await asyncio.gather(
+        *(_duration_or_none(segment) for segment in segments),
+    )
+    return [
+        (segment, duration)
+        for segment, duration in zip(segments, durations, strict=True)
+        if duration is not None and duration > 0
+    ]
+
+
+async def _duration_or_none(segment: Segment) -> float | None:
+    try:
+        return await ffmpeg.probe_duration(segment.path)
+    except ffmpeg.FfmpegError:
+        log.debug("길이를 읽을 수 없는 세그먼트를 건너뛴다 (기록 중) — %s", segment.path)
+        return None
 
 
 def _contiguous_runs(
@@ -348,33 +370,97 @@ async def extract_keyframe(settings: RecSettings, *, cam_id: int, at: datetime) 
 
     클립과 달리 사후 구간을 기다릴 필요가 없어 지연 없이 응답해야 한다. 그래서
     구간을 이어붙이지 않고 그 시각이 들어 있는 세그먼트 하나만 연다.
+
+    **ffprobe 를 부르지 않는다.** 길이를 재던 이유는 오프셋을 파일 끝 안쪽으로
+    자르기 위한 것뿐이었는데, 그 경계는 `select_overlapping` 이 이미 파일명 간격으로
+    알고 있다. 프로세스 하나가 실측 약 200ms 였으므로 이것만 없애 **한 장에 약
+    600ms → 약 390ms** 가 됐다(아래 실측표는 `docs/INDEX.md` M5 절).
+
+    남은 시간은 거의 전부 **ffmpeg 프로세스 기동**(약 190ms · `ffmpeg -version` 실측)과
+    mp4 열기·GOP 디코딩·JPEG 인코딩이다. 세그먼트의 GOP 가 2초(30프레임)이므로 입력
+    seek 뒤 디코딩량은 최대 30프레임이고, 이 경로에서 더 깎을 것은 남아 있지 않다 —
+    "수십 ms"는 자식 프로세스로 ffmpeg 을 부르는 구조에서는 도달할 수 없다.
+
+    빈 출력을 성공으로 넘기지 않는다. `-ss` 가 실제 파일 끝을 넘었거나 세그먼트가
+    아직 닫히지 않았으면 ffmpeg 은 **0바이트를 내고 종료코드 0** 으로 끝나므로,
+    그것을 그대로 돌려주면 "키프레임을 저장했다"는 기록만 남고 그림은 없다.
     """
     segments = scan_segments(settings.rec_media_root, cam_id)
+    nominal = float(settings.rec_segment_seconds)
     candidates = select_overlapping(
         segments,
         at,
         at + timedelta(milliseconds=1),
-        nominal_seconds=float(settings.rec_segment_seconds),
+        nominal_seconds=nominal,
     )
-    measured = await _measure(candidates)
-    if not measured:
-        msg = f"cam{cam_id} {at.isoformat()} 시점의 세그먼트가 없다"
-        raise ClipError(msg)
+    if not candidates:
+        raise ClipError(_keyframe_missing_reason(segments, cam_id, at))
 
-    segment, duration = measured[0]
-    offset = min(max((at - segment.start_at).total_seconds(), 0.0), max(duration - 0.05, 0.0))
+    segment = candidates[0]
+    offset = _keyframe_offset(segments, segment, at, nominal)
     argv = [
         ffmpeg.require_ffmpeg(),
         "-hide_banner",
         "-loglevel", "error",
         "-nostdin",
-        # 입력 seek + 디코딩이므로 키프레임까지 되감았다가 정확한 프레임까지
-        # 디코딩해 온다. 클립과 달리 여기서는 프레임 정확도를 얻을 수 있다.
+        # **`-ss` 는 `-i` 앞이다(입력 seek).** 뒤에 두면 파일 처음부터 디코딩하며
+        # 탐색하므로 오프셋이 커질수록 느려진다(실측: 5초 지점 735ms · 9.5초 지점
+        # 1119ms). 앞에 두면 컨테이너 인덱스로 바로 점프한 뒤 그 GOP 만 디코딩한다.
         "-ss", f"{offset:.3f}",
         "-i", str(segment.path),
+        # 영상 스트림 하나만 본다. 녹화는 `-an` 이라 오디오가 없지만, 명시하면
+        # ffmpeg 이 다른 스트림을 찾느라 컨테이너를 더 훑지 않는다.
+        "-map", "0:v:0",
         "-frames:v", "1",
         "-q:v", "2",
         "-f", "mjpeg",
         "pipe:1",
     ]  # fmt: skip
-    return await ffmpeg.run_bytes(argv, timeout_s=30.0)
+    payload = await ffmpeg.run_bytes(argv, timeout_s=30.0)
+    if not payload:
+        msg = (
+            f"cam{cam_id} {at.isoformat()} 의 프레임을 얻지 못했다 "
+            f"({segment.path.name} +{offset:.3f}s · 빈 출력). "
+            "세그먼트가 아직 닫히지 않았거나 그 지점에 프레임이 없다"
+        )
+        raise ClipError(msg)
+    return payload
+
+
+def _keyframe_offset(
+    segments: list[Segment],
+    segment: Segment,
+    at: datetime,
+    nominal_seconds: float,
+) -> float:
+    """세그먼트 안에서의 오프셋(초). **파일 끝을 넘지 않게 자른다.**
+
+    끝 경계는 **다음 세그먼트의 시작**으로 본다 — 녹화가 끊김 없이 이어지므로
+    ffprobe 로 재는 것보다 정확하고 프로세스가 필요 없다(`select_overlapping` 과
+    같은 규칙이다). 마지막 세그먼트만 명목 길이를 쓴다.
+    """
+    index = segments.index(segment)
+    if index + 1 < len(segments):
+        end = segments[index + 1].start_at
+    else:
+        end = segment.start_at + timedelta(seconds=nominal_seconds)
+    span = (end - segment.start_at).total_seconds()
+    wanted = max((at - segment.start_at).total_seconds(), 0.0)
+    limit = max(span - _KEYFRAME_TAIL_S, 0.0)
+    if wanted > limit:
+        # 세그먼트 끝에 걸쳤다. 조용히 넘기지 않는다 — 돌려주는 프레임이 요청한 순간이
+        # 아니라는 사실이 로그에 남아야 한다(최대 `_KEYFRAME_TAIL_S` 만큼 이르다).
+        log.info(
+            "키프레임 요청이 세그먼트 끝에 걸쳤다 — %s +%.3fs → +%.3fs 로 당긴다",
+            segment.path.name,
+            wanted,
+            limit,
+        )
+    return min(wanted, limit)
+
+
+def _keyframe_missing_reason(segments: list[Segment], cam_id: int, at: datetime) -> str:
+    """왜 그 시각의 프레임이 없는지. `_not_found_reason` 과 같은 구분을 쓴다."""
+    return (
+        f"cam{cam_id} {at.isoformat()} 시점의 세그먼트가 없다 — {_not_found_reason(segments, at)}"
+    )

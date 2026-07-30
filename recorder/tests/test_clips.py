@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from recorder import ffmpeg as ffmpeg_module
 from recorder.clips import ClipError, extract_clip, extract_keyframe
 from recorder.config import RecSettings
 from recorder.ffmpeg import probe_duration
@@ -264,3 +265,51 @@ def test_keyframe_without_recording_is_an_error(rec_settings: RecSettings) -> No
     except ClipError:
         return
     raise AssertionError("없는 시각인데 프레임을 돌려줬다")
+
+
+def test_keyframe_does_not_call_ffprobe(
+    rec_settings: RecSettings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """★ 키프레임 경로에는 ffprobe 가 없다 — 프로세스 하나가 실측 약 175ms 였다.
+
+    길이를 재던 유일한 이유는 오프셋을 파일 끝 안쪽으로 자르는 것이었는데, 그 경계는
+    이웃 세그먼트의 시작 시각으로 알 수 있다. 확정 처리에 딸린 경로라 프로세스 한 개가
+    그대로 지연이 되므로, 다시 들어오면 여기서 드러나야 한다.
+    """
+    called: list[Path] = []
+    real = ffmpeg_module.probe_duration
+
+    async def spy(path: Path) -> float:
+        called.append(path)
+        return float(await real(path))
+
+    monkeypatch.setattr(ffmpeg_module, "probe_duration", spy)
+    write_run(rec_settings.rec_media_root, 1, BASE_AT, 2)
+
+    asyncio.run(extract_keyframe(rec_settings, cam_id=1, at=BASE_AT + timedelta(seconds=5)))
+
+    assert called == []
+
+
+def test_keyframe_at_the_very_end_of_a_segment_still_returns_a_frame(
+    rec_settings: RecSettings,
+) -> None:
+    """세그먼트 마지막 순간을 요청해도 빈 출력이 나오지 않는다.
+
+    오프셋을 파일 끝에 정확히 걸치면 ffmpeg 은 **0바이트를 내고 종료코드 0** 으로
+    끝난다. 그것을 성공으로 넘기면 "키프레임을 저장했다"는 기록만 남고 그림은 없다.
+    """
+    write_run(rec_settings.rec_media_root, 1, BASE_AT, 2)
+    segment_seconds = float(rec_settings.rec_segment_seconds)
+
+    payload = asyncio.run(
+        extract_keyframe(
+            rec_settings,
+            cam_id=1,
+            # 첫 세그먼트의 끝 직전. 여기서 잘리면 빈 JPEG 이 나온다.
+            at=BASE_AT + timedelta(seconds=segment_seconds - 0.01),
+        )
+    )
+
+    assert payload.startswith(b"\xff\xd8")
+    assert payload.endswith(b"\xff\xd9")
