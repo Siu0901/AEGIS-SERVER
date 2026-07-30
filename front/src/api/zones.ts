@@ -33,8 +33,16 @@ export function applyZoneUpdate(zones: Zone[], message: DashboardMessage): Zone[
     return zones.filter((item) => item.zone_id !== zone.zone_id)
   }
 
-  if (!zone.polygon_m || !zone.name || zone.buffer_m === undefined || zone.active === undefined) {
-    console.warn('[zones] polygon_m 없는 upsert 는 캐시를 손상시킨다 — 거부한다', message)
+  // §5.4 는 `action: "upsert"` 일 때 네 필드를 필수로 요구하지만, 계약상 각 필드는
+  // nullable 이다(`delete` 는 `zone_id` 만 싣기 때문이다). 여기서 걸러 두지 않으면
+  // 반쯤 채워진 구역이 캐시에 들어가 화면이 이름 없는 폴리곤을 그린다.
+  if (
+    zone.polygon_m === null ||
+    zone.name === null ||
+    zone.buffer_m === null ||
+    zone.active === null
+  ) {
+    console.warn('[zones] 필드가 빠진 upsert 는 캐시를 손상시킨다 — 거부한다', message)
     return zones
   }
 

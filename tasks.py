@@ -209,6 +209,12 @@ def check_front(step: Progress) -> None:
     run(["npm", "run", "typecheck"], cwd=FRONT)
     step.ok()
 
+    step.start("front 단위 테스트 (vitest)")
+    # `overlayBuffer.ts` 의 보간·부호·낡음 판정과 `formatRate` 의 null 처리가 여기 걸린다.
+    # M2 에서는 스크래치에서 손으로 확인했고, 그것은 다음 사람이 반복할 수 없는 검증이다.
+    run(["npm", "run", "test"], cwd=FRONT)
+    step.ok()
+
     step.start("front 빌드 (vite build)")
     run(["npm", "run", "build"], cwd=FRONT)
     step.ok()
@@ -221,7 +227,13 @@ def task_verify() -> int:
     의미가 있고, 실패 목록을 길게 늘어놓는 것보다 첫 원인을 보는 편이 빠르다.
     """
     say("===== uv run tasks.py verify =====")
-    step = Progress(total=10)
+    step = Progress(total=11)
+
+    # 프론트 타입 생성물이 계약과 맞는지 **먼저** 본다. 낡은 타입 위에서 돈 타입체크는
+    # 통과해도 의미가 없다 — 계약이 넓어진 것을 프론트가 모르는 상태 그대로 통과한다.
+    step.start("contracts -> front 타입 정합 (재생성 후 대조)")
+    run(uv("python", "-m", "scripts.gen_types", "--check"))
+    step.ok()
 
     step.start("ruff check")
     run(uv("ruff", "check", "."))
@@ -252,12 +264,6 @@ def task_verify() -> int:
     step.ok()
 
     check_front(step)
-
-    step.nothing_to_do(
-        "contracts -> front 타입 정합",
-        "생성기가 아직 없다 (M5). front/src/types/system.ts 는 §4.6·§5.3 을 손으로 옮긴 것이라"
-        " contracts 와 어긋나도 지금은 아무도 잡아주지 않는다",
-    )
 
     say()
     say("==================================")
@@ -512,16 +518,18 @@ def task_mcu(extra: Sequence[str]) -> int:
     return 0
 
 
-def task_types() -> int:
-    """contracts -> front TypeScript 타입 생성. M5 에서 구현한다.
+def task_types(check: bool = False) -> int:
+    """contracts -> front TypeScript 타입 생성 (Pydantic -> JSON Schema -> TS).
 
-    구현 전까지 0을 돌려주지 않는다. 하지 않은 일을 했다고 보고하는 것이 이 러너를
-    새로 쓰게 된 원인이다.
+    스키마의 원본은 `packages/contracts` 하나다(절대규칙 5). 프론트가 그것을 손으로
+    옮겨 두면 계약이 바뀔 때 아무도 잡아주지 않으므로 생성물로 대체한다.
     """
-    raise TaskError(
-        "types 생성기가 아직 없다 (M5 에서 구현한다).\n"
-        "  도구 문제가 아니라 미구현이다. 구현 전까지 이 태스크는 성공하지 않는다."
-    )
+    say("[types] contracts -> front/src/types/contracts.ts")
+    argv = uv("python", "-m", "scripts.gen_types")
+    if check:
+        argv += ["--check"]
+    run(argv)
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -540,7 +548,12 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("fmt", help="포매팅과 자동 수정")
     sub.add_parser("dev", help="docker-compose + 마이그레이션 + 실행 안내")
     sub.add_parser("migrate", help="alembic upgrade head + policies 시드")
-    sub.add_parser("types", help="contracts -> front TypeScript 타입 생성 (M5)")
+    types = sub.add_parser("types", help="contracts -> front TypeScript 타입 생성")
+    types.add_argument(
+        "--check",
+        action="store_true",
+        help="쓰지 않고 생성물이 최신인지만 확인한다 (verify 가 쓰는 방식)",
+    )
 
     cams = sub.add_parser("cams", help="가짜 RTSP 4경로 송출 (cam1·cam2 × main·sub)")
     cams.add_argument(
@@ -602,7 +615,7 @@ def dispatch(args: argparse.Namespace) -> int:
         case "migrate":
             return task_migrate()
         case "types":
-            return task_types()
+            return task_types(args.check)
         case "cams":
             return task_cams(args.source, args.cams, args.marker)
         case "cams-stop":
