@@ -9,22 +9,25 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, cast
 
 from aegis_contracts import (
     AlertCommand,
+    AlertSound,
     EventDetail,
     EventListQuery,
     EventStatus,
     EventSummary,
     Policies,
     RecCameraStatus,
+    RecRecordingStatus,
     RecStatusResponse,
     RecStorageStatus,
+    VehicleClass,
     ViolationType,
     Zone,
 )
-from aegis_contracts.enums import StreamState
+from aegis_contracts.enums import AlertLevel, StreamState
 from aegis_vision.clock import Clock
 from server.app.alert_service import AlertService
 from server.app.config import ServerSettings
@@ -38,12 +41,14 @@ __all__ = [
     "ASSETS_AUDIO",
     "REC_STATUS",
     "SOUND_MAP",
+    "FakeCameraStore",
     "FakeEventStore",
     "FakeMqtt",
     "FakePlayer",
     "FakePolicyStore",
     "FakeRecClient",
     "FakeSoundStore",
+    "FakeVehicleClassStore",
     "FakeWatcher",
     "FakeZoneStore",
     "make_alerts",
@@ -83,6 +88,7 @@ REC_STATUS = RecStatusResponse(
         retention_days=7,
         oldest_segment_at=datetime(2026, 8, 7, 5, 37, 0, tzinfo=UTC),
     ),
+    recording=RecRecordingStatus(segment_seconds=10, snapshot_fps=1, snapshot_window_s=60),
 )
 
 
@@ -101,6 +107,7 @@ def rec_status_with(*, recording: dict[int, bool]) -> RecStatusResponse:
             for cam_id, is_recording in sorted(recording.items())
         ],
         storage=REC_STATUS.storage,
+        recording=REC_STATUS.recording,
     )
 
 
@@ -287,7 +294,7 @@ class FakeEventStore:
 
 
 class FakeZoneStore:
-    """`ZoneReader` 대역."""
+    """`ZoneRepository` 대역 — 조회와 편집(FN-CFG-02) 양쪽."""
 
     def __init__(self, zones: list[Zone] | None = None) -> None:
         self.zones = list(zones or [])
@@ -298,9 +305,88 @@ class FakeZoneStore:
             raise self.fail_with
         return [zone for zone in self.zones if cam_id is None or zone.cam_id == cam_id]
 
+    async def upsert(self, zone: Zone) -> None:
+        if self.fail_with is not None:
+            raise self.fail_with
+        self.zones = [item for item in self.zones if item.zone_id != zone.zone_id]
+        self.zones.append(zone)
+
+    async def delete(self, zone_id: str) -> bool:
+        if self.fail_with is not None:
+            raise self.fail_with
+        before = len(self.zones)
+        self.zones = [item for item in self.zones if item.zone_id != zone_id]
+        return len(self.zones) < before
+
+
+class FakeCameraStore:
+    """`CameraRepository` 대역. 캘리브레이션 전에는 `homography` 가 `None` 이다."""
+
+    def __init__(self, cameras: dict[int, str] | None = None) -> None:
+        self.names = dict(cameras or {1: "1번 카메라", 2: "2번 카메라"})
+        self.homography: dict[int, list[list[float]]] = {}
+        self.reference: dict[int, dict[str, Any] | None] = {}
+        self.calibrated_at: dict[int, datetime] = {}
+        self.fail_with: Exception | None = None
+
+    async def list_cameras(self) -> list[dict[str, Any]]:
+        if self.fail_with is not None:
+            raise self.fail_with
+        return [
+            {
+                "cam_id": cam_id,
+                "name": name,
+                "homography": self.homography.get(cam_id),
+                "ref_height_px_at_m": self.reference.get(cam_id),
+                "calibrated_at": self.calibrated_at.get(cam_id),
+            }
+            for cam_id, name in sorted(self.names.items())
+        ]
+
+    async def get_homography(self, cam_id: int) -> list[list[float]] | None:
+        if self.fail_with is not None:
+            raise self.fail_with
+        return self.homography.get(cam_id)
+
+    async def save_calibration(
+        self,
+        cam_id: int,
+        homography: list[list[float]],
+        ref_height_px_at_m: dict[str, Any] | None,
+        calibrated_at: datetime,
+    ) -> None:
+        if self.fail_with is not None:
+            raise self.fail_with
+        if cam_id not in self.names:
+            msg = f"등록되지 않은 카메라다: {cam_id}"
+            raise LookupError(msg)
+        self.homography[cam_id] = homography
+        self.reference[cam_id] = ref_height_px_at_m
+        self.calibrated_at[cam_id] = calibrated_at
+
+
+class FakeVehicleClassStore:
+    """`VehicleClassRepository` 대역. FN-CFG-05"""
+
+    def __init__(self, classes: list[VehicleClass] | None = None) -> None:
+        self.classes = list(
+            classes or [VehicleClass(class_name="vehicle", danger_radius_m=3.0, active=True)]
+        )
+
+    async def list_vehicle_classes(self) -> list[VehicleClass]:
+        return list(self.classes)
+
+    async def patch(self, class_name: str, changes: dict[str, Any]) -> VehicleClass | None:
+        for index, item in enumerate(self.classes):
+            if item.class_name == class_name:
+                updated = item.model_copy(update=changes)
+                self.classes[index] = updated
+                return updated
+        return None
+
 
 class FakePolicyStore:
-    """`PolicyReader` 대역."""
+    """`PolicyRepository` 대역 — 조회와 갱신(FN-CFG-04) 양쪽."""
 
     def __init__(self, policies: Policies | None = None) -> None:
         self.policies = policies or Policies()
@@ -309,6 +395,12 @@ class FakePolicyStore:
     async def load(self) -> Policies:
         if self.fail_with is not None:
             raise self.fail_with
+        return self.policies
+
+    async def patch(self, changes: dict[str, Any]) -> Policies:
+        if self.fail_with is not None:
+            raise self.fail_with
+        self.policies = self.policies.model_copy(update=changes)
         return self.policies
 
 
@@ -336,15 +428,48 @@ SOUND_MAP: dict[str, SoundEntry] = {
 
 
 class FakeSoundStore:
-    """`SoundReader` 대역 — `alert_sounds` 테이블 대신 dict 하나."""
+    """`SoundReader` + 설정 API(§4.5) 대역 — `alert_sounds` 테이블 대신 dict 하나.
+
+    두 역할을 한 대역이 맡는 이유는 **실제로도 한 테이블**이기 때문이다. 경고 경로는
+    켜진 것만 읽고(`load_sounds`), 설정 화면은 꺼진 것까지 읽어 고친다.
+    """
 
     def __init__(self, mapping: dict[str, SoundEntry] | None = None) -> None:
         self.mapping = dict(SOUND_MAP if mapping is None else mapping)
+        self.inactive: set[str] = set()
         self.calls = 0
 
     async def load_sounds(self) -> dict[str, SoundEntry]:
         self.calls += 1
-        return dict(self.mapping)
+        return {key: entry for key, entry in self.mapping.items() if key not in self.inactive}
+
+    async def list_sounds(self) -> list[AlertSound]:
+        return [
+            AlertSound(
+                violation_type=key,
+                file_path=entry.file_path,
+                level=entry.level,
+                label=entry.label,
+                active=key not in self.inactive,
+            )
+            for key, entry in sorted(self.mapping.items())
+        ]
+
+    async def patch_sound(self, violation_type: str, changes: dict[str, Any]) -> AlertSound | None:
+        entry = self.mapping.get(violation_type)
+        if entry is None:
+            return None
+        self.mapping[violation_type] = SoundEntry(
+            file_path=str(changes.get("file_path", entry.file_path)),
+            level=cast("AlertLevel", changes.get("level", entry.level)),
+            label=cast("str | None", changes.get("label", entry.label)),
+        )
+        if "active" in changes:
+            self.inactive.discard(violation_type)
+            if not changes["active"]:
+                self.inactive.add(violation_type)
+        found = [item for item in await self.list_sounds() if item.violation_type == violation_type]
+        return found[0]
 
 
 class FakePlayer:

@@ -8,6 +8,7 @@
 * `GET /api/v1/events` · `/events/{id}` · `PATCH /events/{id}` (§4.1 · FN-EVT-05)
 * `GET /api/v1/metrics/summary` (§4.2 · FN-SYS-04 · FN-SYS-05)
 * `GET /api/v1/zones` · `/policies` (§4.5) — 오버레이가 읽는 폴리곤과 지연 버퍼
+* 설정 API (§4.5 · FN-CFG-01~05) — 캘리브레이션 · 구역 편집 · 음원 · 임계값 · 위험 반경
 * `/ws/edge` (§2) — 엣지 메시지 수신 · 검증 · 상태머신 입력 (FN-EVT-01 · FN-SYS-06)
 * `POST /api/v1/alerts/manual` · `/alerts/mute` (§4.5 · FN-ALM-04 · FN-ALM-05)
 * `GET /api/v1/events/{id}/clip` · `/media/*` (§4.1 · FN-REC-03)
@@ -27,7 +28,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import io
 import logging
+import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Protocol
@@ -50,10 +53,13 @@ from server.app.event_service import (
     PolicyReader,
 )
 from server.app.routes import alerts as alert_routes
+from server.app.routes import cameras as camera_routes
 from server.app.routes import events as event_routes
 from server.app.routes import metrics as metric_routes
 from server.app.routes import policies as policy_routes
+from server.app.routes import sounds as sound_routes
 from server.app.routes import system as system_routes
+from server.app.routes import vehicles as vehicle_routes
 from server.app.routes import zones as zone_routes
 from server.app.ws_dashboard import DashboardHub
 from server.app.ws_edge import EdgeGateway
@@ -65,9 +71,11 @@ from server.domain.overlay import LiveTracks
 from server.infra.audio import SoundLibrary, SoundReader, resolve_player
 from server.infra.clip import CLIP_POLL_SECONDS, ClipService
 from server.infra.db.repository import (
+    DbCameraRepository,
     DbEventRepository,
     DbPolicyRepository,
     DbSoundRepository,
+    DbVehicleClassRepository,
     DbZoneRepository,
 )
 from server.infra.db.session import create_db_engine
@@ -85,6 +93,34 @@ API_PREFIX = "/api/v1"
 
 #: REC 생존 확인 주기(초). 용량은 급변하지 않으므로 카메라만큼 자주 볼 필요가 없다.
 _STORAGE_POLL_SECONDS = 10.0
+
+
+def _configure_logging() -> None:
+    """서버 자신의 로그가 보이게 한다.
+
+    **uvicorn 은 자기 로거만 설정한다.** 루트 로거에 핸들러가 없으면 우리가 남긴
+    `log.info` 는 어디에도 나오지 않고, 접근 로그만 남아 "요청은 200 인데 무슨 일이
+    있었는지는 모르는" 상태가 된다. 실제로 이번에 캘리브레이션 저장·`zone_updated`
+    발행·클립 예약 로그가 전부 사라져 있었다 — 가드가 조용히 꺼진 것과 같다(절대규칙 9).
+
+    이미 핸들러가 있으면(테스트 러너 · 직접 설정) 건드리지 않는다.
+    """
+    if logging.getLogger().handlers:
+        return
+    # 한글 Windows 의 콘솔 인코딩(cp949)으로는 로그의 한글과 '—' 가 깨진다. 파일로
+    # 넘길 때도 마찬가지라 나중에 읽을 수 없는 로그가 남는다. `tasks.py` · 시드
+    # 스크립트와 같은 처리를 서버에도 둔다.
+    for stream in (sys.stdout, sys.stderr):
+        if isinstance(stream, io.TextIOWrapper):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)-7s %(name)s | %(message)s",
+    )
+    # HTTP 클라이언트의 INFO 는 **요청 한 줄씩**이다. 스트림 감시가 mediamtx 를 초당
+    # 한 번 폴링하므로(FN-SYS-01) 그대로 두면 우리 로그가 그 줄에 파묻힌다 — M5 에서
+    # 접근 로그가 덮어버린 것과 같은 문제다. 실패는 WARNING 이상이라 그대로 보인다.
+    logging.getLogger("httpx2").setLevel(logging.WARNING)
 
 
 class StreamObserver(Protocol):
@@ -105,6 +141,8 @@ def create_app(
     zones: object | None = None,
     policies: PolicyReader | None = None,
     sounds: SoundReader | None = None,
+    cameras: object | None = None,
+    vehicle_classes: object | None = None,
     alerts: AlertService | None = None,
     clips: ClipService | None = None,
     mqtt: MqttAlertClient | None = None,
@@ -156,7 +194,6 @@ def create_app(
         mcu=mcu,
         mqtt=mqtt_client,
         publish=hub.broadcast,
-        alert_duration_s=resolved.alert_duration_s,
     )
     # FN-REC-03 — 예약 큐는 DB 의 `clip_status = pending` 이다. 메모리 타이머를 쓰지
     # 않으므로 재시작해도 예약이 남는다.
@@ -168,7 +205,6 @@ def create_app(
             clock=ticker,
             media_root=resolved.media_root,
             publish=hub.broadcast,
-            margin_s=resolved.clip_margin_s,
         )
     # 임계값은 기동 직후 DB 에서 덮어쓴다(`EventService.start`). 여기 있는 `Policies()`
     # 는 계약 기본값이며 DB 시드의 원천이기도 하다(절대규칙 6).
@@ -214,7 +250,9 @@ def create_app(
         if clip_service is not None:
             clip_service.set_policies(event_service.machine.policies)
         tasks = [
-            asyncio.create_task(_watch_storage(storage, hub, ticker), name="storage-watch"),
+            asyncio.create_task(
+                _watch_storage(storage, hub, ticker, clip_service), name="storage-watch"
+            ),
             asyncio.create_task(
                 _tick_events(event_service, alert_service, clip_service), name="event-tick"
             ),
@@ -277,6 +315,14 @@ def create_app(
     application.state.alerts = alert_service
     application.state.clips = clip_service
     application.state.zones = zones or (DbZoneRepository(engine) if engine else None)
+    # FN-CFG-03 — 설정 화면이 음원 매핑을 읽고 고치는 통로(§4.5). 경고 경로가 쓰는
+    # `SoundLibrary` 와 같은 테이블을 본다.
+    application.state.sounds = sounds or (DbSoundRepository(engine) if engine else None)
+    # FN-CFG-01 · 05 — 캘리브레이션과 위험 반경. 설정 화면이 쓰는 저장소들이다.
+    application.state.cameras = cameras or (DbCameraRepository(engine) if engine else None)
+    application.state.vehicle_classes = vehicle_classes or (
+        DbVehicleClassRepository(engine) if engine else None
+    )
     application.state.policies = policy_reader
 
     application.include_router(system_routes.router, prefix=API_PREFIX)
@@ -285,6 +331,9 @@ def create_app(
     application.include_router(alert_routes.router, prefix=API_PREFIX)
     application.include_router(zone_routes.router, prefix=API_PREFIX)
     application.include_router(policy_routes.router, prefix=API_PREFIX)
+    application.include_router(sound_routes.router, prefix=API_PREFIX)
+    application.include_router(camera_routes.router, prefix=API_PREFIX)
+    application.include_router(vehicle_routes.router, prefix=API_PREFIX)
 
     # §5 「경로 규약」 — 클라이언트에는 URL 만 나가고(`clip_url` · `keyframe_urls`),
     # 그 URL 이 가리키는 곳이 여기다. 파일시스템 경로는 응답에 실리지 않는다.
@@ -412,16 +461,27 @@ async def _tick_events(
             service.machine.set_severity(alerts.severity_map())
 
 
-async def _watch_storage(client: StorageReader, hub: DashboardHub, clock: Clock) -> None:
+async def _watch_storage(
+    client: StorageReader,
+    hub: DashboardHub,
+    clock: Clock,
+    clips: ClipService | None = None,
+) -> None:
     """REC 생존 확인. 상태가 **변할 때만** `system` 을 발행한다(§5.3).
 
     REC 이 죽으면 7일 녹화가 멈춘다 — 이벤트가 나도 클립을 뽑을 원본이 없다.
     `GET /system/status` 의 `storage` 가 `null` 이 되는 것과 짝을 이루는 통지다.
+
+    **세그먼트 길이도 여기서 흘려보낸다.** 같은 응답 안에 있으므로(§4.7 `recording`)
+    요청을 한 번 더 보낼 이유가 없고, 클립 예약 실행 시각은 그 값 없이 계산할 수 없다
+    (기능명세서 §4.4).
     """
     state: ComponentState | None = None
     while True:
         try:
-            await client.status()
+            status = await client.status()
+            if clips is not None:
+                clips.set_segment_seconds(float(status.recording.segment_seconds))
             observed: ComponentState = "ok"
             detail = "REC 정상"
         except RecUnavailableError as exc:
@@ -442,4 +502,5 @@ async def _watch_storage(client: StorageReader, hub: DashboardHub, clock: Clock)
         await asyncio.sleep(_STORAGE_POLL_SECONDS)
 
 
+_configure_logging()
 app = create_app()

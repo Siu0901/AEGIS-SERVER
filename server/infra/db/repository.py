@@ -30,31 +30,37 @@ from sqlalchemy import select as sa_select
 from sqlmodel import Session, col, func, select
 
 from aegis_contracts import (
+    AlertSound,
     EventDetail,
     EventListQuery,
     EventStatus,
     EventSummary,
     Policies,
     TimelineEntry,
+    VehicleClass,
     ViolationType,
     Zone,
 )
 from aegis_contracts.enums import AlertLevel
-from server.domain.alerts import SoundEntry
+from server.domain.alerts import MINIMUM_LEVEL, LevelFloorError, SoundEntry, check_level
 from server.domain.event_machine import format_event_id
 from server.domain.metrics import MetricsRow
 from server.infra.db.models import AlertSound as SoundRow
+from server.infra.db.models import Camera as CameraRow
 from server.infra.db.models import Event as EventRow
 from server.infra.db.models import Policy as PolicyRow
+from server.infra.db.models import VehicleClassRow
 from server.infra.db.models import Zone as ZoneRow
 
 __all__ = [
     "DEFAULT_PAGE_SIZE",
     "MAX_PAGE_SIZE",
     "OPEN_STATUSES",
+    "DbCameraRepository",
     "DbEventRepository",
     "DbPolicyRepository",
     "DbSoundRepository",
+    "DbVehicleClassRepository",
     "DbZoneRepository",
 ]
 
@@ -434,6 +440,19 @@ class DbZoneRepository:
             row = session.get(ZoneRow, zone_id)
             return _zone(row) if row else None
 
+    async def delete(self, zone_id: str) -> bool:
+        """구역 삭제. 없던 구역이면 `False`(§5.4 `action: "delete"`)."""
+        return await asyncio.to_thread(self._delete, zone_id)
+
+    def _delete(self, zone_id: str) -> bool:
+        with Session(self._engine) as session:
+            row = session.get(ZoneRow, zone_id)
+            if row is None:
+                return False
+            session.delete(row)
+            session.commit()
+            return True
+
     async def upsert(self, zone: Zone) -> None:
         await asyncio.to_thread(self._upsert, zone)
 
@@ -449,6 +468,111 @@ class DbZoneRepository:
             row.active = zone.active
             session.add(row)
             session.commit()
+
+
+class DbCameraRepository:
+    """`server.domain.repository.CameraRepository` 구현. 기능명세서 §6 `cameras`
+
+    캘리브레이션 결과(호모그래피)가 여기 산다. **카메라를 물리적으로 움직이면 다시
+    찍어야 한다**(API명세서 §6.2) — 그 사실이 `calibrated_at` 으로 드러난다.
+    """
+
+    def __init__(self, engine: Engine) -> None:
+        self._engine = engine
+
+    async def list_cameras(self) -> list[dict[str, Any]]:
+        return await asyncio.to_thread(self._list_cameras)
+
+    def _list_cameras(self) -> list[dict[str, Any]]:
+        statement = select(CameraRow).order_by(col(CameraRow.cam_id))
+        with Session(self._engine) as session:
+            return [row.model_dump() for row in session.exec(statement)]
+
+    async def get_homography(self, cam_id: int) -> list[list[float]] | None:
+        return await asyncio.to_thread(self._get_homography, cam_id)
+
+    def _get_homography(self, cam_id: int) -> list[list[float]] | None:
+        with Session(self._engine) as session:
+            row = session.get(CameraRow, cam_id)
+            return None if row is None else row.homography
+
+    async def save_calibration(
+        self,
+        cam_id: int,
+        homography: list[list[float]],
+        ref_height_px_at_m: dict[str, Any] | None,
+        calibrated_at: datetime,
+    ) -> None:
+        await asyncio.to_thread(
+            self._save_calibration, cam_id, homography, ref_height_px_at_m, calibrated_at
+        )
+
+    def _save_calibration(
+        self,
+        cam_id: int,
+        homography: list[list[float]],
+        ref_height_px_at_m: dict[str, Any] | None,
+        calibrated_at: datetime,
+    ) -> None:
+        with Session(self._engine) as session:
+            row = session.get(CameraRow, cam_id)
+            if row is None:
+                # 카메라 행이 없으면 만들지 않는다 — `rtsp_main`·`rtsp_sub` 를 지어낼 수
+                # 없고, 지어낸 주소로는 아무 영상도 오지 않는다. 라우터가 404 로 알린다.
+                msg = f"등록되지 않은 카메라다: {cam_id}"
+                raise LookupError(msg)
+            row.homography = homography
+            row.ref_height_px_at_m = ref_height_px_at_m
+            row.calibrated_at = calibrated_at
+            session.add(row)
+            session.commit()
+
+
+class DbVehicleClassRepository:
+    """`server.domain.repository.VehicleClassRepository` 구현. FN-CFG-05
+
+    위험 반경은 장비를 따라다니는 **동적 영역**이고 근접 임계값(`proximity_threshold_m`)은
+    **즉시 경고 기준**이다. 둘은 2단계로 동작하므로 저장 위치도 다르다(§4.5).
+    """
+
+    def __init__(self, engine: Engine) -> None:
+        self._engine = engine
+
+    async def list_vehicle_classes(self) -> list[VehicleClass]:
+        return await asyncio.to_thread(self._list_vehicle_classes)
+
+    def _list_vehicle_classes(self) -> list[VehicleClass]:
+        statement = select(VehicleClassRow).order_by(col(VehicleClassRow.class_name))
+        with Session(self._engine) as session:
+            return [
+                VehicleClass(
+                    class_name=row.class_name,
+                    danger_radius_m=row.danger_radius_m,
+                    active=row.active,
+                )
+                for row in session.exec(statement)
+            ]
+
+    async def patch(self, class_name: str, changes: dict[str, Any]) -> VehicleClass | None:
+        """없는 클래스면 `None`. **새로 만들지 않는다** — 감지 클래스는 2종 고정이고
+        (절대규칙 11) 런타임에 추가하는 경로가 있으면 그 규칙이 무너진다."""
+        return await asyncio.to_thread(self._patch_vehicle_class, class_name, changes)
+
+    def _patch_vehicle_class(self, class_name: str, changes: dict[str, Any]) -> VehicleClass | None:
+        with Session(self._engine) as session:
+            row = session.get(VehicleClassRow, class_name)
+            if row is None:
+                return None
+            for key, value in changes.items():
+                setattr(row, key, value)
+            session.add(row)
+            session.commit()
+            session.refresh(row)
+            return VehicleClass(
+                class_name=row.class_name,
+                danger_radius_m=row.danger_radius_m,
+                active=row.active,
+            )
 
 
 class DbSoundRepository:
@@ -468,6 +592,39 @@ class DbSoundRepository:
         statement = select(SoundRow).where(col(SoundRow.active).is_(True))
         with Session(self._engine) as session:
             return {row.violation_type: _sound_entry(row) for row in session.exec(statement)}
+
+    async def list_sounds(self) -> list[AlertSound]:
+        """`GET /alert-sounds`(§4.5) — **꺼진 항목도 포함한 전량**.
+
+        `load_sounds` 와 다른 이유: 경고 경로는 켜진 것만 알면 되지만, 설정 화면은 꺼진
+        항목을 다시 켤 수 있어야 한다. 꺼진 것을 감추면 화면에서 되살릴 방법이 없다.
+        """
+        return await asyncio.to_thread(self._list_sounds)
+
+    def _list_sounds(self) -> list[AlertSound]:
+        statement = select(SoundRow).order_by(col(SoundRow.violation_type))
+        with Session(self._engine) as session:
+            return [_alert_sound(row) for row in session.exec(statement)]
+
+    async def patch_sound(self, violation_type: str, changes: dict[str, Any]) -> AlertSound | None:
+        """`PUT /alert-sounds/{violation_type}`(§4.5). 없는 유형이면 `None`.
+
+        **행을 새로 만들지 않는다.** 등록되지 않은 이름으로 만들 수 있게 하면 오타가
+        그대로 새 음원 키가 되고, 그 키는 아무도 재생하지 않는다.
+        """
+        return await asyncio.to_thread(self._patch_sound, violation_type, changes)
+
+    def _patch_sound(self, violation_type: str, changes: dict[str, Any]) -> AlertSound | None:
+        with Session(self._engine) as session:
+            row = session.get(SoundRow, violation_type)
+            if row is None:
+                return None
+            for key, value in changes.items():
+                setattr(row, key, value)
+            session.add(row)
+            session.commit()
+            session.refresh(row)
+            return _alert_sound(row)
 
 
 class DbPolicyRepository:
@@ -633,11 +790,35 @@ def _zone(row: ZoneRow) -> Zone:
 
 
 def _sound_entry(row: SoundRow) -> SoundEntry:
-    """`alert_sounds` 한 행 → 도메인 값.
+    """`alert_sounds` 한 행 → 도메인 값."""
+    return SoundEntry(
+        file_path=row.file_path,
+        level=_level(row),
+        label=row.label,
+    )
 
-    `level` 은 §3 이 `1|2|3` 으로 좁혀 둔 값인데 DB 컬럼은 `int` 다. 범위를 벗어난
-    값이 들어 있으면 **조용히 고치지 않고** 기본 「경고」 급으로 낮추고 로그를 남긴다 —
-    ESP32 가 모르는 등급을 받으면 아무 패턴도 켜지 않아 경보가 사라진다.
+
+def _alert_sound(row: SoundRow) -> AlertSound:
+    """`alert_sounds` 한 행 → §4.5 응답 모델."""
+    return AlertSound(
+        violation_type=row.violation_type,
+        file_path=row.file_path,
+        level=_level(row),
+        label=row.label,
+        active=row.active,
+    )
+
+
+def _level(row: SoundRow) -> AlertLevel:
+    """`alert_sounds.level` 을 §3 이 허용하는 값으로 좁힌다.
+
+    §3 은 `1|2|3` 만 허용하는데 DB 컬럼은 `int` 다. 범위를 벗어난 값이 들어 있으면
+    **조용히 고치지 않고** 기본 「경고」 급으로 낮추고 로그를 남긴다 — ESP32 가 모르는
+    등급을 받으면 아무 패턴도 켜지 않아 경보가 사라진다.
+
+    **안전 하한(§3)도 여기서 다시 본다.** API 가 막지만(`check_level`) DB 를 직접 고칠
+    수도 있고, 그렇게 들어온 `fall` = 2 를 그대로 쓰면 긴급 상황에서 부저가 울리지
+    않는다. 읽는 쪽에서 하한으로 끌어올리고 그 사실을 남긴다.
     """
     level = row.level
     if level not in (1, 2, 3):
@@ -647,11 +828,13 @@ def _sound_entry(row: SoundRow) -> SoundEntry:
             level,
         )
         level = 2
-    return SoundEntry(
-        file_path=row.file_path,
-        level=cast("AlertLevel", level),
-        label=row.label,
-    )
+    try:
+        check_level(row.violation_type, cast("AlertLevel", level))
+    except LevelFloorError as exc:
+        floor = MINIMUM_LEVEL[ViolationType(row.violation_type)]
+        log.error("%s — %d 로 올려서 쓴다", exc, floor)
+        level = floor
+    return cast("AlertLevel", level)
 
 
 def _media_url(path: str | None) -> str | None:

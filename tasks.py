@@ -290,6 +290,10 @@ def task_migrate() -> int:
     run(alembic("upgrade", "head"))
     say("[migrate] policies 기본값 시드")
     run(uv("python", "-m", "scripts.seed_policies"))
+    # FN-CFG-01 — 구역보다 카메라가 먼저다. `zones.polygon_m` 은 지면 좌표라
+    # 캘리브레이션 없이는 화면에 그릴 수도 없다.
+    say("[migrate] cameras 개발용 캘리브레이션 시드")
+    run(uv("python", "-m", "scripts.seed_cameras"))
     say("[migrate] zones 개발용 기본값 시드")
     run(uv("python", "-m", "scripts.seed_zones"))
     # FN-ALM-01 · FN-CFG-03 — 음원 매핑은 코드가 아니라 DB 에서 읽는다. 파일이 없으면
