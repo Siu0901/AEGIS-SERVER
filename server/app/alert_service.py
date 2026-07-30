@@ -139,7 +139,6 @@ class AlertService:
         mcu: McuRuntime,
         mqtt: MqttSender | None = None,
         publish: Broadcaster | None = None,
-        alert_duration_s: int = 5,
     ) -> None:
         self._library = library
         self._player = player
@@ -147,10 +146,10 @@ class AlertService:
         self._mcu = mcu
         self._mqtt = mqtt
         self._publish = publish
-        self._alert_duration_s = alert_duration_s
         self._mutes: dict[int | None, MuteWindow] = {}
         """카메라별 일시중지 창. 키 `None` 은 전체 카메라(§4.5 `cam_id` 생략)."""
-        self._default_mute_s = Policies().mute_default_duration_s
+        self._policies = Policies()
+        """정책 기본값. 기동 직후 `set_policies` 가 DB 값으로 갈아끼운다(절대규칙 6)."""
         self._latencies_ms: list[float] = []
         self.sound_failed = 0
         """소리를 내지 못한 누적 건수. 0이 아니면 방송이 나가지 않은 이벤트가 있다."""
@@ -170,8 +169,13 @@ class AlertService:
         await self._library.refresh()
 
     def set_policies(self, policies: Policies) -> None:
-        """`mute_default_duration_s`(§4.5)를 DB 값으로 갈아끼운다(절대규칙 6)."""
-        self._default_mute_s = policies.mute_default_duration_s
+        """`mute_default_duration_s` 와 `alert_duration_s`(§4.5)를 DB 값으로 갈아끼운다.
+
+        CLAUDE.md 절대규칙 6. `alert_duration_s` 는 서버 설정에 있던 것을 명세서가
+        정책 키로 올렸다 — 경광등을 몇 초 켤지는 현장에서 조정하는 값이라 배포가 아니라
+        설정이어야 한다(§3).
+        """
+        self._policies = policies
 
     def severity_map(self) -> Mapping[ViolationType, AlertLevel]:
         """DB `alert_sounds.level` 이 정한 유형별 위험 등급(§6 · FN-CFG-03).
@@ -217,7 +221,9 @@ class AlertService:
             return False
 
         await self._play(intent.violation_type.value, event_id=intent.event_id, since=intent.at)
-        await self._signal(_command(intent, duration_s=self._alert_duration_s), intent.event_id)
+        await self._signal(
+            _command(intent, duration_s=self._policies.alert_duration_s), intent.event_id
+        )
         return True
 
     # -- 수동 방송 (FN-ALM-04) --------------------------------------------
@@ -231,12 +237,9 @@ class AlertService:
         * `event_id` = `MANUAL-cam{N}-{ISO8601}` — 이벤트 테이블에 없다는 것이 드러나는
           형태여야 한다. `EV-` 접두사를 쓰면 ESP32 와 대시보드가 조회 가능한 이벤트로
           오해한다.
-        * `type` = `zone_intrusion` — §3 `type` 은 `ViolationType` 이고 수동 방송에는
-          위반 유형이 없다. **점멸 패턴을 고르는 값**이므로 아무 것이나 될 수 없어,
-          「지금 그 구역을 주목하라」에 가장 가까운 일반 경보를 쓴다.
-
-        `type` 을 지어내는 것 자체가 §3 에 수동 방송의 자리가 없다는 뜻이므로
-        `docs/INDEX.md` 「명세서 확인 필요」에 남겨 두었다.
+        * `type` = `manual` — §3 이 수동 방송을 위해 만든 값이다. ESP32 는 이것을 일반
+          주의 환기 패턴으로 처리한다. **위반 유형 값을 빌려 쓰지 않는다** — 그러면
+          장치가 실제 위반이 감지된 것처럼 동작한다.
 
         **일시중지를 무시한다.** 사람이 지금 누른 방송이므로, 정비 중이라도 그 사람이
         의도한 것이다. 자동 경고를 멈춘 것과 관리자가 직접 말하는 것은 다른 행위다.
@@ -256,10 +259,10 @@ class AlertService:
             await self._signal(
                 AlertCommand(
                     event_id=event_id,
-                    type=ViolationType.ZONE_INTRUSION,
+                    type="manual",
                     level=request.level,
                     zone_id=None,
-                    duration_s=self._alert_duration_s,
+                    duration_s=self._policies.alert_duration_s,
                     repeat=False,
                 ),
                 event_id,
@@ -369,7 +372,7 @@ class AlertService:
         """
         if requested is not None:
             return requested
-        return max(1, math.ceil(self._default_mute_s / 60.0))
+        return max(1, math.ceil(self._policies.mute_default_duration_s / 60.0))
 
     # -- 실측 (FN-ALM-01 요구: 1초 이내) -----------------------------------
 
@@ -442,7 +445,7 @@ class AlertService:
         log.info(
             "경광등 경고 발행 — %s type=%s level=%s repeat=%s",
             event_id,
-            command.type.value,
+            command.type,
             command.level,
             command.repeat,
         )

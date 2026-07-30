@@ -18,7 +18,38 @@ from datetime import datetime
 from aegis_contracts import ViolationType
 from aegis_contracts.enums import AlertLevel
 
-__all__ = ["AlertIntent", "SoundEntry"]
+__all__ = ["MINIMUM_LEVEL", "AlertIntent", "LevelFloorError", "SoundEntry", "check_level"]
+
+#: 위반 유형별 **위험 등급 하한**. API명세서 §3
+#:
+#: `fall` 만 있다. 쓰러짐은 대상자가 스스로 시정할 수 없는 유일한 유형이고, 등급을
+#: 낮추면 긴급 상황에서 부저가 울리지 않는다. **안전 하한은 설정 대상이 아니다** —
+#: 관리자가 다른 유형의 등급을 조정하는 것은 현장 판단이지만 이것은 아니다.
+MINIMUM_LEVEL: dict[ViolationType, AlertLevel] = {ViolationType.FALL: 3}
+
+
+class LevelFloorError(ValueError):
+    """안전 하한보다 낮은 등급을 설정하려 했다. API 는 이것을 422 로 돌려준다(§4.5)."""
+
+
+def check_level(violation_type: str, level: AlertLevel) -> None:
+    """등급이 하한 이상인지. 미달이면 `LevelFloorError`.
+
+    **순수 함수다.** 설정 API(FN-CFG-03)와 DB 읽기 경로가 같은 규칙을 쓰도록 여기 둔다 —
+    한쪽에만 두면 다른 경로로 들어온 값이 규칙을 비켜 간다.
+    """
+    try:
+        floor = MINIMUM_LEVEL.get(ViolationType(violation_type))
+    except ValueError:
+        # 수동 방송용 키(`custom_notice` 등)다. 위반 유형이 아니므로 하한이 없다.
+        return
+    if floor is not None and level < floor:
+        msg = (
+            f"{violation_type} 의 위험 등급은 {floor} 미만으로 설정할 수 없다"
+            f"(요청 {level}). 쓰러짐은 대상자가 스스로 시정할 수 없어 "
+            "등급을 낮추면 긴급 상황에서 부저가 울리지 않는다(API명세서 §3)"
+        )
+        raise LevelFloorError(msg)
 
 
 @dataclass(frozen=True, slots=True)
