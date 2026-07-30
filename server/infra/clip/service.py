@@ -1,17 +1,24 @@
 """이벤트 클립·키프레임 예약 추출. FN-REC-03 (기능명세서 §4.4 · API명세서 §4.7)
 
 ```
-confirmed_at              키프레임 즉시 추출 (링버퍼에 이미 있다)
-                          clip_status = pending  · 예약 등록
-confirmed_at + post_roll  사후 세그먼트 기록 완료
-        + margin          예약 실행 → POST /clips → 서버 저장소에 영구 보관
-                          clip_status = ready · §5.2 event_updated 로 clip_url 발행
+confirmed_at                 키프레임 즉시 추출 (REC 스냅샷 버퍼에서 나온다)
+                             clip_status = pending  · 예약 등록
++ clip_post_roll_s           사후 구간이 스트림에는 흘렀으나 그 구간을 담은
+                             세그먼트 파일은 아직 열려 있다
++ rec_segment_seconds        해당 세그먼트가 닫힌다  ← REC 의 GET /status 가 보고
++ clip_extract_margin_s      예약 실행 → POST /clips → 서버 저장소에 영구 보관
+                             clip_status = ready · §5.2 event_updated 로 clip_url 발행
 ```
 
 **확정 즉시 추출하지 않는다.** 그 순간에는 사후 구간이 아직 녹화되지 않아 앞부분만
 담긴 클립이 나오고, 그 실패는 되돌릴 수 없다 — 시간이 지난 뒤 다시 뽑으려 해도 이미
-`ready` 로 기록되어 아무도 다시 부르지 않는다. `margin` 은 세그먼트 파일이 닫히기 전에
-잘라내 파일 끝이 손상되는 것을 막는다(§4.4).
+`ready` 로 기록되어 아무도 다시 부르지 않는다.
+
+**세그먼트 길이를 반드시 더한다.** REC 은 벽시계 격자로 세그먼트를 닫으므로
+(`-segment_atclocktime`), `confirmed_at + post_roll` 시점을 담은 파일은 그때 아직
+기록 중이다. 이 항을 빼면 뒤쪽 구간이 잘려 `partial` 이 된다 — 실측으로 세그먼트 10초
+환경에서 margin 2초만 두었을 때 뒤 2.9초가 비었다. 그리고 그 길이는 **서버가 상수로
+들고 있지 않는다.** REC 설정을 바꿨을 때 서버가 모른 채 잘못된 시각에 추출하기 때문이다.
 
 **큐를 메모리에 두지 않는다.** 예약의 유일한 표현은 DB 의 `clip_status = pending` 이고,
 실행 시각은 `confirmed_at + post_roll + margin` 으로 계산된다. 그래서 **서버가 죽어도
@@ -44,7 +51,6 @@ from server.infra.rec_client import ClipExtractor, RecUnavailableError
 
 __all__ = [
     "CLIP_POLL_SECONDS",
-    "DEFAULT_MARGIN_S",
     "KEYFRAME_COUNT",
     "ClipService",
     "ClipStore",
@@ -57,16 +63,6 @@ log = logging.getLogger("server.clips")
 #: `margin` 이 2초이므로 그보다 촘촘히 돌 이유가 없다. 클립이 몇 초 늦게 준비되는 것은
 #: 문제가 아니다 — 대시보드는 그동안 키프레임을 보여준다(§4.2).
 CLIP_POLL_SECONDS = 2.0
-
-#: 사후 구간 뒤에 더 기다리는 여유(초)의 **대비값**. 기능명세서 §4.4 「추출 타이밍」.
-#:
-#: 세그먼트가 10초 단위로 닫히므로, 사후 구간이 끝나는 순간에는 마지막 세그먼트가 아직
-#: 열려 있을 수 있다. 그 파일을 잘라내면 끝이 손상된다.
-#:
-#: **런타임 원천은 정책 키 `clip_extract_margin_s` 다**(§4.5 · 절대규칙 6). 서버 설정에만
-#: 있던 값을 명세서가 정책으로 올렸다 — `clip_pre_roll_s` · `clip_post_roll_s` 와 같은
-#: 성격인데 이것만 다른 곳에 있는 것이 어색했다.
-DEFAULT_MARGIN_S = 2.0
 
 #: 확정 시 뽑는 키프레임 수. 기능명세서 §4.4 「고화질 키프레임 2~3장」.
 KEYFRAME_COUNT = 2
@@ -100,7 +96,6 @@ class ClipService:
         media_root: Path,
         policies: Policies | None = None,
         publish: Broadcaster | None = None,
-        margin_s: float = DEFAULT_MARGIN_S,
     ) -> None:
         self._rec = rec
         self._store = store
@@ -108,7 +103,12 @@ class ClipService:
         self._media_root = media_root
         self._policies = policies or Policies()
         self._publish = publish
-        self._margin_s = margin_s
+        self._segment_s: float | None = None
+        """REC 이 보고한 세그먼트 길이(초). **서버가 정하지 않는다**(기능명세서 §4.4).
+
+        아직 한 번도 못 들었으면 `None` 이고, 그동안 예약은 실행하지 않는다 — 모르는
+        값을 그럴듯한 기본값(10초)으로 메우면 REC 설정이 다를 때 조용히 뒤가 잘린
+        클립이 `ready` 로 기록된다."""
         self._tasks: set[asyncio.Task[None]] = set()
         """뒤로 넘긴 키프레임 추출들. 참조를 놓으면 GC 가 중간에 회수한다."""
 
@@ -120,12 +120,40 @@ class ClipService:
         시점의 값으로 섞여 계산된다.
         """
         self._policies = policies
-        self._margin_s = policies.clip_extract_margin_s
+
+    def set_segment_seconds(self, seconds: float) -> None:
+        """REC 의 `GET /status`(§4.7 `recording.segment_seconds`)가 보고한 값.
+
+        상태 폴링이 이미 10초마다 REC 을 부르므로 그 응답을 여기로 흘려보낸다 —
+        같은 값을 얻자고 요청을 한 번 더 보내지 않는다.
+        """
+        if seconds <= 0:
+            log.warning("REC 이 보고한 세그먼트 길이가 %.1f초다 — 무시한다", seconds)
+            return
+        if self._segment_s != seconds:
+            log.info(
+                "세그먼트 길이 %.1f초 — 클립 예약 실행은 확정 %.1f초 뒤다",
+                seconds,
+                self._delay(seconds),
+            )
+        self._segment_s = seconds
 
     @property
-    def delay_s(self) -> float:
-        """확정 → 예약 실행까지의 대기. `clip_post_roll_s + clip_extract_margin_s`."""
-        return self._policies.clip_post_roll_s + self._margin_s
+    def segment_seconds(self) -> float | None:
+        return self._segment_s
+
+    @property
+    def delay_s(self) -> float | None:
+        """확정 → 예약 실행까지의 대기.
+
+        `clip_post_roll_s + rec_segment_seconds + clip_extract_margin_s`(기능명세서 §4.4).
+        세그먼트 길이를 아직 못 들었으면 `None` 이다.
+        """
+        return None if self._segment_s is None else self._delay(self._segment_s)
+
+    def _delay(self, segment_s: float) -> float:
+        post_roll = self._policies.clip_post_roll_s
+        return post_roll + segment_s + self._policies.clip_extract_margin_s
 
     @property
     def clips_dir(self) -> Path:
@@ -188,12 +216,15 @@ class ClipService:
         except Exception:
             log.exception("클립 예약을 기록하지 못했다 — %s 의 클립이 뽑히지 않는다", event_id)
             return
+        segment = "?" if self._segment_s is None else f"{self._segment_s:.0f}"
+        delay = self.delay_s
         log.info(
-            "클립 예약 — %s (%.0f초 뒤 실행: 사후 %.0fs + 여유 %.0fs)",
+            "클립 예약 — %s (%s초 뒤 실행: 사후 %.0fs + 세그먼트 %ss + 여유 %.0fs)",
             event_id,
-            self.delay_s,
+            "?" if delay is None else f"{delay:.0f}",
             self._policies.clip_post_roll_s,
-            self._margin_s,
+            segment,
+            self._policies.clip_extract_margin_s,
         )
 
     async def _grab_keyframes(self, event_id: str, cam_id: int, confirmed_at: datetime) -> None:
@@ -234,8 +265,14 @@ class ClipService:
         서버가 죽어 있는 동안 실행 시각이 지난 잡도 여기서 함께 집힌다.
         """
         at = now if now is not None else self._clock.now()
+        delay = self.delay_s if self.delay_s is not None else await self._ask_segment_seconds()
+        if delay is None:
+            # 세그먼트 길이를 모르면 **실행하지 않는다.** 예약은 DB 에 남아 있으므로
+            # REC 이 살아나는 순간 다음 주기에 집힌다. 기본값으로 추측해 뽑으면 뒤가
+            # 잘린 클립이 `ready` 로 굳어 되돌릴 수 없다.
+            return []
         try:
-            due = await self._store.find_due_clip_jobs(at, self.delay_s)
+            due = await self._store.find_due_clip_jobs(at, delay)
         except Exception:
             log.exception("클립 예약 목록을 읽지 못했다 — 다음 주기에 다시 시도한다")
             return []
@@ -244,6 +281,20 @@ class ClipService:
             if await self._extract(event_id):
                 done.append(event_id)
         return done
+
+    async def _ask_segment_seconds(self) -> float | None:
+        """상태 폴링이 아직 값을 주지 않았으면 직접 묻는다(§4.7 `GET /status`).
+
+        기동 직후 첫 이벤트가 이 경로를 탄다. REC 에 닿지 못하면 `None` 을 돌려주고
+        예약은 그대로 남는다 — REC 이 없으면 어차피 추출도 못 한다.
+        """
+        try:
+            status = await self._rec.status()
+        except RecUnavailableError as exc:
+            log.warning("세그먼트 길이를 아직 모른다 — 클립 예약을 미룬다: %s", exc)
+            return None
+        self.set_segment_seconds(float(status.recording.segment_seconds))
+        return self.delay_s
 
     async def _extract(self, event_id: str) -> bool:
         event = await self._store.get(event_id)

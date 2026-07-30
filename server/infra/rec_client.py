@@ -8,9 +8,9 @@
 
 | 호출 | 언제 | FN |
 |---|---|---|
-| `GET /status` | 10초 주기 · `GET /system/status` | FN-SYS-01 |
-| `GET /keyframe` | 확정 **즉시** (링버퍼에 이미 있다) | FN-REC-03 |
-| `POST /clips` | `confirmed_at + clip_post_roll_s + margin` **예약 실행** | FN-REC-03 |
+| `GET /status` | 10초 주기 · `GET /system/status` · **세그먼트 길이 조회** | FN-SYS-01 |
+| `GET /keyframe` | 확정 **즉시** (스냅샷 버퍼에서 나온다) | FN-REC-03 |
+| `POST /clips` | `confirmed_at + post_roll + 세그먼트 길이 + margin` **예약 실행** | FN-REC-03 |
 
 **클립은 확정 즉시 뽑지 않는다.** 그 순간에는 사후 구간이 아직 녹화되지 않았다
 (기능명세서 §4.4). 예약과 상태 관리는 `server/infra/clip/` 이 한다.
@@ -53,8 +53,12 @@ class ClipExtractor(Protocol):
     """클립 예약 추출(FN-REC-03)이 요구하는 REC 능력. §4.7
 
     `StorageReader` 와 나눈 이유는 부르는 시점이 다르기 때문이다 — 상태는 10초마다
-    폴링하고, 이쪽은 이벤트가 났을 때만 부른다.
+    폴링하고, 이쪽은 이벤트가 났을 때만 부른다. `status()` 가 양쪽에 다 있는 이유는
+    **세그먼트 길이가 예약 실행 시각의 한 항**이기 때문이다(기능명세서 §4.4) — 상태
+    폴링이 아직 한 번도 성공하지 않았어도 예약을 실행하려면 그 값을 알아야 한다.
     """
+
+    async def status(self) -> RecStatusResponse: ...
 
     async def keyframe(self, cam_id: int, at: datetime) -> bytes: ...
 
@@ -118,8 +122,9 @@ class RecClient:
     async def keyframe(self, cam_id: int, at: datetime) -> bytes:
         """`GET /keyframe` — JPEG 한 장. FN-REC-03
 
-        확정 **즉시** 부른다. 그 시각의 프레임은 이미 링버퍼에 있으므로 사후 구간을
-        기다릴 필요가 없고(§4.7), 클립이 준비될 때까지 대시보드가 대신 보여줄 그림이다.
+        확정 **즉시** 부른다. 그 시각의 프레임은 REC 의 스냅샷 버퍼(최근 60초)에 있으므로
+        사후 구간을 기다릴 필요가 없고(기능명세서 §4.4), 클립이 준비될 때까지 대시보드가
+        대신 보여줄 그림이다.
         """
         try:
             response = await self._client.get(

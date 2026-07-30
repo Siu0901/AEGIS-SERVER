@@ -16,13 +16,20 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from aegis_contracts import ClipRequest, ClipResponse, EventStatus, EventUpdatedMsg, SpecModel
+from aegis_contracts import (
+    ClipRequest,
+    ClipResponse,
+    EventStatus,
+    EventUpdatedMsg,
+    RecStatusResponse,
+    SpecModel,
+)
 from aegis_contracts.enums import ClipExtractStatus
 from aegis_vision.clock import FakeClock
-from server.infra.clip import DEFAULT_MARGIN_S, ClipService
+from server.infra.clip import ClipService
 from server.infra.rec_client import RecUnavailableError
 
-from .conftest import FakeEventStore
+from .conftest import REC_STATUS, FakeEventStore
 from .test_metrics_api import event
 
 NOW = datetime(2026, 8, 14, 5, 37, 0, tzinfo=UTC)
@@ -39,16 +46,25 @@ class StubRec:
     def __init__(
         self,
         *,
-        status: ClipExtractStatus = "ready",
+        extract_status: ClipExtractStatus = "ready",
         available: bool = True,
         reason: str | None = None,
     ) -> None:
-        self.status = status
+        self.extract_status = extract_status
         self.available = available
         self.reason = reason
         self.keyframes: list[tuple[int, datetime]] = []
         self.clips: list[ClipRequest] = []
         self.downloads: list[str] = []
+        self.status_calls = 0
+
+    async def status(self) -> RecStatusResponse:
+        """§4.7 — 세그먼트 길이는 REC 이 보고한다(기능명세서 §4.4)."""
+        self.status_calls += 1
+        if not self.available:
+            msg = "REC 에 닿지 못했다 (테스트)"
+            raise RecUnavailableError(msg)
+        return REC_STATUS
 
     async def keyframe(self, cam_id: int, at: datetime) -> bytes:
         if not self.available:
@@ -62,8 +78,8 @@ class StubRec:
             msg = "REC 에 닿지 못했다 (테스트)"
             raise RecUnavailableError(msg)
         self.clips.append(request)
-        if self.status != "ready":
-            return ClipResponse(status=self.status, reason=self.reason or "사유 (테스트)")
+        if self.extract_status != "ready":
+            return ClipResponse(status=self.extract_status, reason=self.reason or "사유 (테스트)")
         return ClipResponse(
             status="ready",
             size_bytes=4,
@@ -131,25 +147,59 @@ def test_confirmation_marks_pending_and_grabs_keyframes_immediately(tmp_path: Pa
     assert (tmp_path / "keyframes" / "EV-1_0.jpg").is_file()
 
 
-def test_the_job_does_not_run_before_the_post_roll_has_been_recorded(tmp_path: Path) -> None:
-    """`confirmed_at + clip_post_roll_s + margin` 전에는 실행되지 않는다.
+def test_the_job_waits_for_the_segment_to_close(tmp_path: Path) -> None:
+    """★ `confirmed_at + post_roll + 세그먼트 길이 + margin` 전에는 실행되지 않는다.
 
-    더 일찍 부르면 사후 구간이 비어 있는 클립이 `ready` 로 기록되고, 그 뒤로는 아무도
-    다시 뽑지 않는다.
+    세그먼트 길이 항이 빠지면 사후 구간을 담은 파일이 **아직 열려 있는** 동안 잘라내게
+    되고, 그 클립은 뒤가 비어 `partial` 이 된다(기능명세서 §4.4 · 실측 뒤 2.9초 없음).
     """
     store, rec = confirmed_store(), StubRec()
     clock = FakeClock(CONFIRMED)
     service, _ = build(tmp_path, store, rec, clock)
     run(service.on_confirmed("EV-1", cam_id=1, confirmed_at=CONFIRMED))
 
-    # 사후 구간(10초)은 지났지만 여유(2초)가 남았다.
-    clock.set(CONFIRMED + timedelta(seconds=10.5))
+    # 사후 구간(10초) + 여유(2초)만 지났다. 세그먼트(10초)는 아직 닫히지 않았다.
+    clock.set(CONFIRMED + timedelta(seconds=12))
     assert run(service.run_due()) == []
     assert rec.clips == []
 
-    clock.set(CONFIRMED + timedelta(seconds=10 + DEFAULT_MARGIN_S))
+    # 10 + 10 + 2 = 22초.
+    clock.set(CONFIRMED + timedelta(seconds=22))
     assert run(service.run_due()) == ["EV-1"]
     assert len(rec.clips) == 1
+    assert service.delay_s == 22.0
+
+
+def test_the_segment_length_comes_from_rec_not_from_a_constant(tmp_path: Path) -> None:
+    """REC 이 다른 길이를 보고하면 실행 시각이 따라 움직인다(기능명세서 §4.4).
+
+    서버에 상수로 두면 REC 설정을 바꿨을 때 서버가 모른 채 잘못된 시각에 추출한다.
+    """
+    store, rec = confirmed_store(), StubRec()
+    service, _ = build(tmp_path, store, rec, FakeClock(CONFIRMED))
+    service.set_segment_seconds(4.0)
+    assert service.delay_s == 16.0
+
+
+def test_an_unknown_segment_length_defers_instead_of_guessing(tmp_path: Path) -> None:
+    """REC 에 닿지 못해 세그먼트 길이를 모르면 **실행하지 않는다.**
+
+    기본값으로 추측해 뽑으면 뒤가 잘린 클립이 `ready` 로 굳어 되돌릴 수 없다. 예약은
+    DB 에 남아 있으므로 REC 이 살아나는 순간 다음 주기에 집힌다.
+    """
+    store = confirmed_store()
+    rec = StubRec(available=False)
+    clock = FakeClock(CONFIRMED + timedelta(seconds=60))
+    service, _ = build(tmp_path, store, rec, clock)
+    run(service.on_confirmed("EV-1", cam_id=1, confirmed_at=CONFIRMED))
+
+    assert service.delay_s is None
+    assert run(service.run_due()) == []
+    assert store.clip_status["EV-1"] == "pending"
+
+    rec.available = True
+    assert run(service.run_due()) == ["EV-1"]
+    assert service.segment_seconds == 10.0
 
 
 def test_the_requested_window_is_pre_roll_to_post_roll_around_the_confirmation(
@@ -157,7 +207,7 @@ def test_the_requested_window_is_pre_roll_to_post_roll_around_the_confirmation(
 ) -> None:
     """§4.7 `POST /clips` — 확정 시각 기준 앞 10초 · 뒤 10초."""
     store, rec = confirmed_store(), StubRec()
-    clock = FakeClock(CONFIRMED + timedelta(seconds=20))
+    clock = FakeClock(CONFIRMED + timedelta(seconds=25))
     service, _ = build(tmp_path, store, rec, clock)
     run(service.on_confirmed("EV-1", cam_id=1, confirmed_at=CONFIRMED))
     run(service.run_due())
@@ -174,7 +224,7 @@ def test_a_ready_clip_is_stored_and_broadcast(tmp_path: Path) -> None:
     REC 의 7일 원본은 사라지므로, 옮겨 적지 않으면 증거가 보존 기간과 함께 없어진다.
     """
     store, rec = confirmed_store(), StubRec()
-    clock = FakeClock(CONFIRMED + timedelta(seconds=20))
+    clock = FakeClock(CONFIRMED + timedelta(seconds=25))
     service, published = build(tmp_path, store, rec, clock)
     run(service.on_confirmed("EV-1", cam_id=1, confirmed_at=CONFIRMED))
     run(service.run_due())
@@ -193,8 +243,8 @@ def test_a_not_found_response_fails_the_job_and_records_the_reason(tmp_path: Pat
     않는데 대응이 다르다.
     """
     store = confirmed_store()
-    rec = StubRec(status="not_found", reason="보존 기간 경과")
-    clock = FakeClock(CONFIRMED + timedelta(seconds=20))
+    rec = StubRec(extract_status="not_found", reason="보존 기간 경과")
+    clock = FakeClock(CONFIRMED + timedelta(seconds=25))
     service, published = build(tmp_path, store, rec, clock)
     run(service.on_confirmed("EV-1", cam_id=1, confirmed_at=CONFIRMED))
     run(service.run_due())
@@ -222,7 +272,7 @@ def test_an_unreachable_rec_leaves_the_job_pending_for_the_next_round(tmp_path: 
     service, _ = build(tmp_path, store, rec, clock)
     run(service.on_confirmed("EV-1", cam_id=1, confirmed_at=CONFIRMED))
 
-    clock.set(CONFIRMED + timedelta(seconds=20))
+    clock.set(CONFIRMED + timedelta(seconds=25))
     assert run(service.run_due()) == []
     assert store.clip_status["EV-1"] == "pending"
 
@@ -256,7 +306,7 @@ def test_a_pending_job_survives_a_restart(tmp_path: Path) -> None:
 def test_a_finished_job_is_not_run_twice(tmp_path: Path) -> None:
     """`ready` 로 넘어간 잡은 다시 집히지 않는다. 같은 클립을 계속 다시 받으면 안 된다."""
     store, rec = confirmed_store(), StubRec()
-    clock = FakeClock(CONFIRMED + timedelta(seconds=20))
+    clock = FakeClock(CONFIRMED + timedelta(seconds=25))
     service, _ = build(tmp_path, store, rec, clock)
     run(service.on_confirmed("EV-1", cam_id=1, confirmed_at=CONFIRMED))
 

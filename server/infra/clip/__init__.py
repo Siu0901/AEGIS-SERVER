@@ -2,7 +2,6 @@
 
 from server.infra.clip.service import (
     CLIP_POLL_SECONDS,
-    DEFAULT_MARGIN_S,
     KEYFRAME_COUNT,
     ClipService,
     ClipStore,
@@ -10,7 +9,6 @@ from server.infra.clip.service import (
 
 __all__ = [
     "CLIP_POLL_SECONDS",
-    "DEFAULT_MARGIN_S",
     "KEYFRAME_COUNT",
     "ClipService",
     "ClipStore",
