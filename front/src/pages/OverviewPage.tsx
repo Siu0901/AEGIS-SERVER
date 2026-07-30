@@ -80,16 +80,29 @@ export default function OverviewPage() {
     return () => controller.abort()
   }, [load])
 
-  // §5.3 `metric` 과 §5.2 `event_*` 가 오면 다시 읽는다. `metric` 에는 `suppressed` 가
-  // 없으므로(§5.3 은 §4.2 의 부분집합) 메시지 값만으로 갱신하면 그 칸이 낡는다.
+  // §5.3 `metric` 은 **그 자체로 완결이다.** `suppressed` 가 실리면서 §4.2 응답과
+  // 같은 칸을 전부 갖게 됐으므로, 받은 값을 그대로 쓰고 지표를 다시 읽지 않는다 —
+  // 종결 전이마다 나가던 요청 하나가 사라졌다.
   //
-  // 한 전이가 `event_updated` 와 `metric` 을 함께 만들고 이 화면은 두 요청(지표 + 목록)을
-  // 보내므로, 접지 않으면 전이 하나에 네 요청이 붙는다.
-  const merged = useMergedRefresh(() => load())
+  // 목록(`GET /events`)은 여전히 다시 읽어야 한다. `event_*` 는 이벤트 하나의 변화만
+  // 알려주고 최근 목록의 정렬까지는 담고 있지 않다. 한 전이가 여러 메시지를 만들므로
+  // 그 요청은 병합한다.
+  const merged = useMergedRefresh(() => {
+    void fetchEvents({ limit: SAMPLE_LIMIT })
+      .then((list) => setRecent(list.items))
+      .catch((cause: unknown) => {
+        setError(cause instanceof Error ? cause.message : String(cause))
+      })
+  })
   useEffect(() => {
     return subscribeDashboard({
       onMessage: (message) => {
-        if (isMetricMsg(message) || isEventCreatedMsg(message) || isEventUpdatedMsg(message)) {
+        if (isMetricMsg(message)) {
+          const { type: _type, ...metrics } = message
+          setSummary(metrics)
+          return
+        }
+        if (isEventCreatedMsg(message) || isEventUpdatedMsg(message)) {
           merged()
         }
       },

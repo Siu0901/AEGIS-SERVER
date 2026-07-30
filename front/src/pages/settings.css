@@ -1,0 +1,267 @@
+/* 설정 화면 (FN-UI-07). 시안 4페이지 — 캘리브레이션 · 구역 · 음원 · 임계값 · 반경.
+ *
+ * `.btn` · `.chip` · `.card` 는 events.css 가 이미 정의한 공통 클래스를 쓴다.
+ * 여기서 다시 정의하면 두 화면의 버튼이 조금씩 달라진다. */
+
+.settings {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+}
+
+.settings__error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.settings__notice {
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--ok);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.settings__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.settings__tabs {
+  display: flex;
+  gap: 8px;
+}
+
+/* --- 영상 위에서 찍기 ---------------------------------------------------- */
+
+.settings__stage {
+  position: relative;
+  margin: 10px 0;
+  aspect-ratio: 16 / 9;
+  background: #000;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+/* 찍는 중에는 커서로 그 사실을 알린다 — 클릭이 좌표가 되는 상태와 아닌 상태는 다르다. */
+.settings__stage--picking {
+  cursor: crosshair;
+  border-color: var(--accent);
+}
+
+.settings__video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+/* 오버레이는 `viewBox="0 0 100 100"` + `preserveAspectRatio="none"` 이라 정규화 좌표를
+   그대로 백분율로 쓸 수 있다. 영상과 같은 상자를 덮으므로 좌표계가 어긋나지 않는다. */
+.settings__overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* 저장된 금지구역 — 적색 점선 폴리곤(FN-UI-02 표시 규칙과 같은 표기). */
+.settings__zone {
+  fill: rgba(239, 68, 68, 0.12);
+  stroke: var(--danger);
+  stroke-width: 0.4;
+  stroke-dasharray: 1.6 1.2;
+  vector-effect: non-scaling-stroke;
+}
+
+/* 지금 그리는 중인 폴리곤은 강조색으로 구분한다. */
+.settings__drawing {
+  fill: rgba(59, 130, 246, 0.16);
+  stroke: var(--accent);
+  stroke-width: 0.4;
+  vector-effect: non-scaling-stroke;
+}
+
+.settings__point {
+  fill: var(--warn);
+  stroke: #000;
+  stroke-width: 0.2;
+}
+
+.settings__vertex {
+  fill: var(--accent);
+  stroke: #000;
+  stroke-width: 0.2;
+}
+
+.settings__badge,
+.settings__pick {
+  position: absolute;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.6);
+  color: var(--text);
+  font-size: 11px;
+}
+
+.settings__badge {
+  top: 8px;
+  right: 8px;
+  color: var(--text-muted);
+}
+
+.settings__pick {
+  left: 8px;
+  bottom: 8px;
+  border: 1px solid var(--accent);
+}
+
+.settings__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.settings__state {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* --- 입력 --------------------------------------------------------------- */
+
+.settings__form {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.settings__row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.settings__row label,
+.settings__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.settings input,
+.settings select {
+  padding: 6px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-content);
+  color: var(--text);
+  font-size: 12px;
+  font-family: inherit;
+  min-width: 88px;
+}
+
+.settings input:focus,
+.settings select:focus {
+  outline: 1px solid var(--accent);
+}
+
+.settings__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 12px;
+  margin: 10px 0 14px;
+}
+
+.settings__label {
+  color: var(--text);
+}
+
+.settings__label em {
+  color: var(--text-dim);
+  font-style: normal;
+}
+
+.settings__hintline {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+/* --- 표 ---------------------------------------------------------------- */
+
+.settings__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.settings__table th {
+  text-align: left;
+  padding: 6px 8px;
+  color: var(--text-muted);
+  font-weight: 500;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings__table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  vertical-align: middle;
+}
+
+.settings__table input[type='checkbox'] {
+  min-width: 0;
+}
+
+/* 지면 좌표는 길다. 줄바꿈을 허용하되 표가 밀리지 않게 폭을 준다. */
+.settings__polygon {
+  color: var(--text-muted);
+  max-width: 340px;
+  word-break: break-word;
+}
+
+.settings__facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.settings__facts dt {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.settings__facts dd {
+  margin: 2px 0 0;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.settings__ok {
+  margin: 10px 0 0;
+  color: var(--ok);
+  font-size: 13px;
+}
+
+.settings__warn {
+  margin: 10px 0 0;
+  color: var(--warn);
+  font-size: 13px;
+}
