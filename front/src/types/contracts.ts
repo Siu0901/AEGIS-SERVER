@@ -63,11 +63,32 @@ export type ZoneAction = 'upsert' | 'delete'
  */
 export interface AlertCommand {
   event_id: string
-  type: ViolationType
+  type: ViolationType | 'manual'
   level: 1 | 2 | 3
   zone_id: string | null
   duration_s: number
   repeat: boolean
+}
+
+/**
+ * 경고 음원 매핑 한 줄. `GET /alert-sounds`. API명세서 §4.5 · 기능명세서 §6
+ */
+export interface AlertSound {
+  violation_type: string
+  file_path: string
+  level: 1 | 2 | 3
+  label: string | null
+  active: boolean
+}
+
+/**
+ * `PUT /alert-sounds/{violation_type}` 요청. API명세서 §4.5
+ */
+export interface AlertSoundPatch {
+  file_path: string | null
+  level: 1 | 2 | 3 | null
+  label: string | null
+  active: boolean | null
 }
 
 /**
@@ -121,6 +142,17 @@ export interface CalibrationResponse {
   homography: number[][]
   reprojection_error_m: number
   ref_height_calibrated: boolean
+}
+
+/**
+ * 카메라 한 대의 캘리브레이션 상태. `GET /cameras`
+ */
+export interface CameraCalibration {
+  cam_id: number
+  name: string
+  homography: number[][] | null
+  ref_height_calibrated: boolean
+  calibrated_at: string | null
 }
 
 /**
@@ -555,6 +587,7 @@ export interface MetricMsg {
   resolved_late: number
   unresolved: number
   undetermined: number
+  suppressed: number
   avg_resolution_sec: number
   fall_events: number
   anomaly_flags: number
@@ -753,6 +786,7 @@ export interface Policies {
   clip_pre_roll_s: number
   clip_post_roll_s: number
   clip_extract_margin_s: number
+  alert_duration_s: number
   mute_default_duration_s: number
   overlay_buffer_webrtc_ms: number
   overlay_buffer_hls_ms: number
@@ -788,6 +822,7 @@ export interface PolicyPatch {
   clip_pre_roll_s: number | null
   clip_post_roll_s: number | null
   clip_extract_margin_s: number | null
+  alert_duration_s: number | null
   mute_default_duration_s: number | null
   overlay_buffer_webrtc_ms: number | null
   overlay_buffer_hls_ms: number | null
@@ -808,11 +843,21 @@ export interface RecCameraStatus {
 }
 
 /**
+ * `GET /status` 의 녹화 절. API명세서 §4.7 · 기능명세서 §4.4
+ */
+export interface RecRecordingStatus {
+  segment_seconds: number
+  snapshot_fps: number
+  snapshot_window_s: number
+}
+
+/**
  * `GET /status`. API명세서 §4.7
  */
 export interface RecStatusResponse {
   cameras: RecCameraStatus[]
   storage: RecStorageStatus
+  recording: RecRecordingStatus
 }
 
 /**
@@ -1043,4 +1088,17 @@ export interface ZoneUpdatedPayload {
   polygon_m: ([number, number])[] | null
   buffer_m: number | null
   active: boolean | null
+}
+
+/**
+ * `POST /zones` 요청. API명세서 §4.5
+ */
+export interface ZoneUpsertRequest {
+  zone_id: string
+  cam_id: number
+  name: string
+  polygon: ([number, number])[] | null
+  polygon_m: ([number, number])[] | null
+  buffer_m: number
+  active: boolean
 }

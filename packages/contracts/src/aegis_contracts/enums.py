@@ -7,6 +7,7 @@ from enum import StrEnum
 from typing import Literal
 
 __all__ = [
+    "AlertCommandType",
     "AlertLevel",
     "AlertState",
     "AttachmentKind",
@@ -104,6 +105,13 @@ StreamState = Literal["ok", "reconnecting", "down"]
 #: `candidate` 를 **위반 색(적색)으로 그리지 않는다** — 확정 전이므로 위반으로 단정할
 #: 수 없다. 다만 확정 진행 중임은 구분 가능하게 표시한다(§5.1).
 AlertState = Literal["candidate", "active", "alerted", "re_alerted", "lost"]
+
+#: §3 `AlertCommand.type` — ESP32 의 **점멸 패턴 선택자**.
+#:
+#: 위반 유형 넷에 `manual` 이 더해진다. 수동 방송(`POST /alerts/manual`)에는 위반 유형이
+#: 없는데, 여기에 위반 유형 값을 빌려 쓰면 **장치가 실제 위반이 감지된 것처럼 동작한다**
+#: (§3). ESP32 는 `manual` 을 일반 주의 환기 패턴으로 처리한다.
+AlertCommandType = ViolationType | Literal["manual"]
 
 #: 위험 등급. API명세서 §3 `AlertCommand.level` · §5.2 `severity` — **같은 척도, 같은 값**.
 #: 1=주의(부저 없음) / 2=경고 / 3=긴급(연속 부저). **`fall` 은 항상 3** 이다.

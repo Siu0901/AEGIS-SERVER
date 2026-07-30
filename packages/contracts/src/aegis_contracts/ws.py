@@ -231,6 +231,9 @@ class MetricMsg(SpecModel):
     `resolved_late`(§4.2 · §6.7)도 함께 실린다. 이것이 없으면 화면이 받은 숫자만으로
     `correction_rate = resolved / (resolved + resolved_late + unresolved)` 를 확인할 수
     없어, 서버가 보낸 비율을 검산 없이 믿어야 한다.
+
+    `suppressed` 가 들어오면서 **화면이 이 메시지를 받고 `GET /metrics/summary` 를 다시
+    부를 이유가 사라졌다.** 종결 전이마다 요청 한 번이 나가던 것을 없앴다.
     """
 
     type: Literal["metric"] = "metric"
@@ -245,6 +248,11 @@ class MetricMsg(SpecModel):
     """해소됐으나 `resolve_window_s` 를 넘긴 건수. **분모에만** 들어간다(§6.7)."""
     unresolved: int
     undetermined: int
+    suppressed: int
+    """경고 일시중지 중에 확정되어 **방송이 나가지 않은** 건수(§4.8).
+
+    분모·분자 어디에도 들지 않는다. 이 칸이 없으면 화면은 「방송 후」 시정률에서 왜
+    이벤트가 빠졌는지 설명할 수 없다."""
     avg_resolution_sec: int
     fall_events: int
     """쓰러짐은 자력 시정이 불가능하므로 시정률에서 빼고 별도로 센다."""

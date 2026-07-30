@@ -29,6 +29,7 @@ from .edge import (
     TrackLostMsg,
 )
 from .enums import (
+    AlertCommandType,
     AlertLevel,
     AlertState,
     AttachmentKind,
@@ -57,11 +58,14 @@ from .enums import (
 from .mqtt import ALERT_TOPIC, DEVICE_STATUS_TOPIC, AlertCommand, DeviceStatus
 from .policies import Policies, PolicyPatch
 from .rest import (
+    AlertSound,
+    AlertSoundPatch,
     BriefingRequest,
     BriefingResponse,
     CalibrationPoint,
     CalibrationRequest,
     CalibrationResponse,
+    CameraCalibration,
     CameraStatus,
     ChatAttachment,
     ChatRequest,
@@ -97,6 +101,7 @@ from .rest import (
     MuteAlertResponse,
     NearbySnapshot,
     RecCameraStatus,
+    RecRecordingStatus,
     RecStatusResponse,
     RecStorageStatus,
     ReferencePerson,
@@ -119,6 +124,7 @@ from .rest import (
     WeeklyReportRequest,
     WeeklyReportResponse,
     Zone,
+    ZoneUpsertRequest,
 )
 from .ws import (
     AnomalyMsg,
@@ -142,7 +148,10 @@ __all__ = [
     "ALERT_TOPIC",
     "DEVICE_STATUS_TOPIC",
     "AlertCommand",
+    "AlertCommandType",
     "AlertLevel",
+    "AlertSound",
+    "AlertSoundPatch",
     "AlertState",
     "AnomalyMsg",
     "AttachmentKind",
@@ -152,6 +161,7 @@ __all__ = [
     "CalibrationPoint",
     "CalibrationRequest",
     "CalibrationResponse",
+    "CameraCalibration",
     "CameraHealth",
     "CameraStatus",
     "CameraSystemMsg",
@@ -226,6 +236,7 @@ __all__ = [
     "PolicyPatch",
     "Posture",
     "RecCameraStatus",
+    "RecRecordingStatus",
     "RecStatusResponse",
     "RecStorageStatus",
     "ReferencePerson",
@@ -261,4 +272,5 @@ __all__ = [
     "ZoneAction",
     "ZoneUpdatedMsg",
     "ZoneUpdatedPayload",
+    "ZoneUpsertRequest",
 ]

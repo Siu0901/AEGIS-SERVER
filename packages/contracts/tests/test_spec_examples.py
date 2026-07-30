@@ -9,10 +9,11 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from aegis_contracts import (
     AlertCommand,
+    AlertSound,
     AnomalyMsg,
     CameraHealth,
     CameraStatus,
@@ -324,6 +325,41 @@ def test_alert_command_example_parses() -> None:
     assert msg.level == 2
 
 
+def test_manual_alert_command_uses_its_own_type() -> None:
+    """§3 — 수동 방송은 `type: "manual"` 이다.
+
+    위반 유형 값을 빌려 쓰면 ESP32 가 **실제 위반이 감지된 것처럼** 그 유형의 점멸
+    패턴을 켠다. `event_id` 도 조회 가능한 이벤트가 아님이 드러나는 형태다.
+    """
+    msg = AlertCommand.model_validate(
+        {
+            "event_id": "MANUAL-cam1-2026-08-14T05:37:03+00:00",
+            "type": "manual",
+            "level": 2,
+            "zone_id": None,
+            "duration_s": 5,
+            "repeat": False,
+        }
+    )
+    assert msg.type == "manual"
+    assert not isinstance(msg.type, ViolationType)
+
+
+def test_alert_command_rejects_unknown_type() -> None:
+    """`type` 은 점멸 패턴 선택자다 — 모르는 값을 받으면 장치가 아무것도 켜지 않는다."""
+    with pytest.raises(ValidationError):
+        AlertCommand.model_validate(
+            {
+                "event_id": "EV-20260814-0231",
+                "type": "custom_notice",
+                "level": 2,
+                "zone_id": None,
+                "duration_s": 5,
+                "repeat": False,
+            }
+        )
+
+
 def test_device_status_example_parses() -> None:
     msg = DeviceStatus.model_validate(
         {
@@ -396,15 +432,15 @@ METRICS_SUMMARY_EXAMPLE: dict[str, Any] = {
     "resolved_late": 1,
     "unresolved": 2,
     "undetermined": 1,
+    "suppressed": 1,
     "avg_resolution_sec": 41,
     "fall_events": 0,
     "anomaly_flags": 1,
 }
 
 
-#: 예시에 `suppressed` 가 없으므로 파싱용으로 0을 얹은 것. **예시 자체는 손대지 않는다** —
-#: 명세서에 적힌 것과 코드가 요구하는 것의 차이가 이 한 줄로만 드러나야 한다.
-SUMMARY_PAYLOAD: dict[str, Any] = METRICS_SUMMARY_EXAMPLE | {"suppressed": 0}
+#: 예시가 곧 요청 본문이다. `suppressed` 가 §4.2 에 실리면서 둘의 차이가 사라졌다.
+SUMMARY_PAYLOAD: dict[str, Any] = METRICS_SUMMARY_EXAMPLE
 
 
 def test_metrics_summary_example_parses() -> None:
@@ -430,18 +466,13 @@ def test_metrics_summary_example_is_internally_consistent() -> None:
     assert 0.0 < summary.undetermined_rate < 0.1
 
 
-#: 기능명세서 §4.8 이 「`suppressed` 로 별도 집계」를 요구하는데 §4.2 응답 예시에는
-#: 아직 그 칸이 없다. 예시에 없다는 이유로 계약에서 빼면 지표가 자기 정의를 못 지키므로
-#: 응답에 두고, 그 차이를 여기 한 곳에 적어 둔다(`docs/INDEX.md` 「명세서 확인 필요」).
-SUMMARY_FIELDS_BEYOND_EXAMPLE = {"suppressed"}
-
-
 def test_metrics_summary_field_set_matches_spec() -> None:
-    """§4.2 예시에 있는 칸이 전부 있고, 그 밖에는 §4.8 이 요구한 것만 있다."""
-    assert (
-        set(MetricsSummary.model_fields)
-        == set(METRICS_SUMMARY_EXAMPLE) | SUMMARY_FIELDS_BEYOND_EXAMPLE
-    )
+    """§4.2 예시에 있는 칸이 전부이고 그 밖은 없다.
+
+    `suppressed` 는 기능명세서 §4.8 이 요구해 응답에 먼저 두었던 칸이고, 그 뒤 §4.2
+    예시에 실리면서 예시와 계약의 차이가 사라졌다.
+    """
+    assert set(MetricsSummary.model_fields) == set(METRICS_SUMMARY_EXAMPLE)
 
 
 def test_suppressed_is_excluded_from_both_ratios() -> None:
@@ -749,9 +780,17 @@ def test_rec_status_example_parses() -> None:
                 "retention_days": 7,
                 "oldest_segment_at": "2026-08-07T05:37:00Z",
             },
+            "recording": {
+                "segment_seconds": 10,
+                "snapshot_fps": 1,
+                "snapshot_window_s": 60,
+            },
         }
     )
     assert set(response.storage.model_dump()) == set(SYSTEM_STATUS_EXAMPLE["storage"])
+    # 서버가 클립 예약 실행 시각에 더하는 항이다(기능명세서 §4.4). 상수로 두지 않는다.
+    assert response.recording.segment_seconds == 10
+    assert response.recording.snapshot_window_s == 60
 
 
 def test_clip_ready_example_parses() -> None:
@@ -825,6 +864,7 @@ POLICIES_EXAMPLE: dict[str, Any] = {
     "anomaly_sample_interval_min": 5,
     "mute_default_duration_s": 900,
     "clip_extract_margin_s": 2,
+    "alert_duration_s": 5,
 }
 
 
@@ -845,6 +885,27 @@ def test_durations_and_thresholds_accept_fractions() -> None:
     assert tuned.fall_stillness_s == 2.5
     assert tuned.fall_axis_angle_min_deg == 57.5
     assert tuned.confirm_duration_s == 2.5
+
+
+def test_alert_sound_example_parses() -> None:
+    """§4.5 `GET /alert-sounds` 예시 전량."""
+    entry = AlertSound.model_validate(
+        {
+            "violation_type": "no_helmet",
+            "file_path": "assets/audio/no_helmet.wav",
+            "level": 2,
+            "label": "안전모 착용 안내",
+            "active": True,
+        }
+    )
+    assert entry.level == 2
+    assert entry.label == "안전모 착용 안내"
+
+
+def test_alert_duration_is_a_policy_key() -> None:
+    """§3 `duration_s` 의 원천이 정책 키가 됐다 — 서버 설정이 아니다."""
+    assert Policies().alert_duration_s == 5
+    assert Policies.model_validate({"alert_duration_s": 8}).alert_duration_s == 8
 
 
 def test_pixel_count_stays_integral() -> None:
@@ -931,6 +992,7 @@ METRIC_EXAMPLE: dict[str, Any] = {
     "resolved_late": 1,
     "unresolved": 2,
     "undetermined": 1,
+    "suppressed": 1,
     "avg_resolution_sec": 41,
     "fall_events": 0,
     "anomaly_flags": 1,

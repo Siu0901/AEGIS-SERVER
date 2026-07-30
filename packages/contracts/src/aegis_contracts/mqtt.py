@@ -6,7 +6,7 @@
 from pydantic import AwareDatetime
 
 from ._base import SpecModel
-from .enums import AlertLevel, ViolationType
+from .enums import AlertCommandType, AlertLevel
 
 __all__ = ["ALERT_TOPIC", "DEVICE_STATUS_TOPIC", "AlertCommand", "DeviceStatus"]
 
@@ -25,11 +25,15 @@ class AlertCommand(SpecModel):
     """
 
     event_id: str
-    type: ViolationType
+    """자동 경고는 `EV-YYYYMMDD-NNNN`, 수동 방송은 `MANUAL-cam{N}-{ISO8601}` 다(§3).
+    후자는 **조회 가능한 이벤트가 아니다**."""
+    type: AlertCommandType
+    """점멸 패턴 선택자. 위반 유형 넷 + 수동 방송의 `manual`(§3)."""
     level: AlertLevel
     """§5.2 `event_created.severity` 와 **같은 척도이며 같은 값**을 쓴다."""
     zone_id: str | None = None
     duration_s: int
+    """경광등·부저 지속 시간. 정책 키 `alert_duration_s`(기본 5)에서 읽는다(§3)."""
     repeat: bool
 
 

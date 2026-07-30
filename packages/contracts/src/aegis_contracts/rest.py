@@ -28,11 +28,14 @@ from .enums import (
 )
 
 __all__ = [
+    "AlertSound",
+    "AlertSoundPatch",
     "BriefingRequest",
     "BriefingResponse",
     "CalibrationPoint",
     "CalibrationRequest",
     "CalibrationResponse",
+    "CameraCalibration",
     "CameraStatus",
     "ChatAttachment",
     "ChatRequest",
@@ -68,6 +71,7 @@ __all__ = [
     "MuteAlertResponse",
     "NearbySnapshot",
     "RecCameraStatus",
+    "RecRecordingStatus",
     "RecStatusResponse",
     "RecStorageStatus",
     "ReferencePerson",
@@ -90,6 +94,7 @@ __all__ = [
     "WeeklyReportRequest",
     "WeeklyReportResponse",
     "Zone",
+    "ZoneUpsertRequest",
 ]
 
 # --------------------------------------------------------------------------
@@ -229,9 +234,9 @@ class EventDetail(EventSummary):
     similar_incidents: list[SimilarIncident] = Field(default_factory=list)
     timeline: list[TimelineEntry] = Field(default_factory=list)
 
-    # ⚠ 아래 셋은 §6 `events` 컬럼이지만 §4.1 응답 예시에는 아직 칸이 없다.
-    # 세 값 모두 **다시 읽을 수 없으면 화면이 그릴 수 없는** 것들이라 상세 응답에 둔다.
-    # `docs/INDEX.md` 「명세서 확인 필요」에 올려 두었다(CLAUDE.md 절대규칙 8).
+    # 아래 셋은 §6 `events` 컬럼이면서 §4.1 응답에도 실린다. 셋 다 **다시 읽을 수
+    # 없으면 화면이 그릴 수 없는** 값이라, 임시로 두었던 것을 명세서가 정식 계약으로
+    # 확정했다.
     clip_status: ClipStatus | None
     """`pending` / `ready` / `failed`. 확정 전이면 `null`.
 
@@ -317,9 +322,6 @@ class MetricsSummary(SpecModel):
     방송이 없었던 이벤트는 모집단이 아니다 — 알린 적이 없으니 시정할 기회도 없었고,
     미시정으로 세면 시스템 성능을 부당하게 깎는다. `expired` 와 같은 원칙으로
     **제외하고 건수를 공개**한다.
-
-    ⚠ §4.2 응답 예시에는 아직 이 칸이 없다. §4.8 이 「`suppressed` 로 별도 집계」를
-    요구하므로 여기 둔다 — `docs/INDEX.md` 「명세서 확인 필요」 참조.
     """
     avg_resolution_sec: int
     fall_events: int
@@ -618,6 +620,23 @@ class CalibrationResponse(SpecModel):
     ref_height_calibrated: bool
 
 
+class CameraCalibration(SpecModel):
+    """카메라 한 대의 캘리브레이션 상태. `GET /cameras`
+
+    ⚠ **§4.5 에 이 조회 경로가 없다.** 설정 화면(FN-UI-07)은 저장된 구역을 영상 위에
+    다시 그려야 하는데, `zones.polygon_m` 은 지면 좌표라 화면에 그리려면 호모그래피가
+    필요하다. 캘리브레이션 직후의 `POST` 응답만으로는 **새로고침 뒤에 아무것도 그릴 수
+    없다.** `docs/INDEX.md` 「명세서 확인 필요」에 올려 두었다(CLAUDE.md 절대규칙 8).
+    """
+
+    cam_id: int
+    name: str
+    homography: Homography | None
+    """3×3 픽셀→지면 변환. 아직 캘리브레이션하지 않았으면 `null`."""
+    ref_height_calibrated: bool
+    calibrated_at: AwareDatetime | None
+
+
 class Zone(SpecModel):
     """금지구역. `GET /zones` / `POST /zones`. API명세서 §4.5"""
 
@@ -629,6 +648,36 @@ class Zone(SpecModel):
     buffer_m: float
     """경계 여유. 호모그래피 오차 흡수 및 사전 경고용."""
     active: bool
+
+
+class ZoneUpsertRequest(SpecModel):
+    """`POST /zones` 요청. API명세서 §4.5
+
+    §4.5 는 「화면에서 그린 **픽셀 좌표를 서버가 호모그래피로 변환해 저장**한다」고 적었다.
+    그래서 폴리곤을 두 방식으로 받는다.
+
+    | 필드 | 좌표 | 쓰임 |
+    |---|---|---|
+    | `polygon` | 정규화 픽셀(§1.2) | 설정 화면에서 그린 그대로 — 서버가 변환한다 |
+    | `polygon_m` | 지면 미터 | 실측값을 직접 넣을 때 · 시드 · 마이그레이션 |
+
+    **둘 중 정확히 하나만** 싣는다. 둘 다 오면 어느 쪽이 진짜인지 알 수 없고, 둘 다
+    없으면 구역이 없는 구역이 된다.
+
+    ⚠ §4.5 의 요청 예시에는 `polygon_m` 만 있다. 픽셀 폴리곤을 받을 자리가 없으면
+    **변환을 클라이언트가 해야 하고**, 그러면 호모그래피 적용 코드가 서버(`packages/vision`)와
+    프론트 두 곳에 생긴다. `docs/INDEX.md` 「명세서 확인 필요」 참조.
+    """
+
+    zone_id: str
+    cam_id: int
+    name: str
+    polygon: list[PointPx] | None = None
+    """화면에서 그린 폴리곤(정규화 픽셀). 서버가 카메라 호모그래피로 미터로 바꾼다."""
+    polygon_m: list[PointM] | None = None
+    """지면 실좌표 폴리곤. 변환이 필요 없는 경우에만 쓴다."""
+    buffer_m: float = 0.0
+    active: bool = True
 
 
 class VehicleClass(SpecModel):
@@ -643,6 +692,41 @@ class VehicleClassPatch(SpecModel):
     """`PATCH /vehicle-classes/{name}` 요청. API명세서 §4.5"""
 
     danger_radius_m: float | None = None
+    active: bool | None = None
+
+
+class AlertSound(SpecModel):
+    """경고 음원 매핑 한 줄. `GET /alert-sounds`. API명세서 §4.5 · 기능명세서 §6
+
+    `violation_type` 은 두 가지로 쓰인다 — 위반 유형 넷은 자동 경고(FN-ALM-01)의 음원,
+    그 밖의 이름(`custom_notice` 등)은 수동 방송(FN-ALM-04 `sound`)의 키다.
+    """
+
+    violation_type: str
+    file_path: str
+    """`assets/audio/` 기준 상대 경로. 음원 루트를 벗어날 수 없다."""
+    level: AlertLevel
+    """`1` | `2` | `3`. §3 `AlertCommand.level` · §5.2 `severity` 의 원천이다.
+
+    **`fall` 은 `3` 미만으로 내릴 수 없다**(§3 · §4.5). 쓰러짐은 대상자가 스스로 시정할
+    수 없는 유일한 유형이라 등급을 낮추면 긴급 상황에서 부저가 울리지 않는다.
+    """
+    label: str | None
+    """설정 화면 표시 이름. 미지정이면 `null`."""
+    active: bool
+    """꺼두면 그 유형은 방송하지 않는다."""
+
+
+class AlertSoundPatch(SpecModel):
+    """`PUT /alert-sounds/{violation_type}` 요청. API명세서 §4.5
+
+    §4.5 가 갱신 대상으로 정한 네 필드다. `violation_type` 은 경로에 있으므로 본문에
+    두지 않는다 — 두 곳에 있으면 서로 다른 값이 올 수 있다.
+    """
+
+    file_path: str | None = None
+    level: AlertLevel | None = None
+    label: str | None = None
     active: bool | None = None
 
 
@@ -912,8 +996,25 @@ class RecStorageStatus(SpecModel):
     oldest_segment_at: AwareDatetime | None = None
 
 
+class RecRecordingStatus(SpecModel):
+    """`GET /status` 의 녹화 절. API명세서 §4.7 · 기능명세서 §4.4
+
+    **서버가 클립 추출 시각을 계산하려면 세그먼트 길이를 알아야 한다.** 그 값을 서버에도
+    상수로 두면 REC 설정을 바꿨을 때 서버가 모른 채 아직 열려 있는 파일을 잘라낸다
+    (실측: 세그먼트 10초 환경에서 여유 2초만 두면 뒤 2.9초가 비었다).
+    """
+
+    segment_seconds: int
+    """세그먼트 길이(초). 클립 예약 실행 시각의 한 항이다(기능명세서 §4.4)."""
+    snapshot_fps: int
+    """스냅샷 버퍼 샘플링(초당 장수). 기본 1."""
+    snapshot_window_s: int
+    """스냅샷 버퍼 보관 구간(초). 기본 60. 이 안의 시각은 메모리에서 즉시 응답한다."""
+
+
 class RecStatusResponse(SpecModel):
     """`GET /status`. API명세서 §4.7"""
 
     cameras: list[RecCameraStatus]
     storage: RecStorageStatus
+    recording: RecRecordingStatus

@@ -95,15 +95,31 @@ class Policies(SpecModel):
     """이벤트 클립의 사후 구간(초)."""
 
     clip_extract_margin_s: float = 2.0
-    """사후 구간 기록 완료 후 클립 추출까지의 여유(초).
+    """**세그먼트가 닫힌 뒤** 클립 추출까지의 여유(초). 기본 2.
 
-    세그먼트 파일이 닫히기 전에 잘라내면 파일 끝이 손상된다(§4.5 · 기능명세서 §4.4).
-    예약 실행 시각은 `confirmed_at + clip_post_roll_s + 이 값` 이다.
-    `clip_pre_roll_s` · `clip_post_roll_s` 와 같은 성격인데 서버 설정에만 있던 값을
-    명세서가 정책 키로 올렸다.
+    예약 실행 시각은 다음과 같다(기능명세서 §4.4).
+
+    ```
+    confirmed_at + clip_post_roll_s + rec_segment_seconds + clip_extract_margin_s
+    ```
+
+    **세그먼트 길이는 이 값에 포함되지 않는다.** REC 은 벽시계 격자로 세그먼트를 닫으므로
+    (`-segment_atclocktime`) `confirmed_at + post_roll` 시점을 담은 파일은 그때 아직
+    기록 중이고, 닫히기까지 최대 세그먼트 길이가 더 걸린다. 그 항은 **REC 의
+    `GET /status`(§4.7)가 보고하는 값**을 서버가 읽어 더한다 — 양쪽에 상수로 두면 REC
+    설정을 바꿨을 때 서버가 모른 채 잘못된 시각에 추출한다.
     """
 
-    # --- 경고 (FN-ALM-05) ---
+    # --- 경고 (FN-ALM-02 · 05) ---
+    alert_duration_s: int = 5
+    """경광등·부저 지속 시간(초). §3 `AlertCommand.duration_s` 로 그대로 나간다.
+
+    **정책값 중 두 번째 `int` 다**(다른 하나는 `cls_min_crop_px`). §3 이 `duration_s` 를
+    `int` 로 못박았으므로 여기서 `float` 로 두면 장치로 나가는 순간 반올림되고, 화면에서
+    조정한 값과 실제 동작이 갈린다. 서버 설정(`ALERT_DURATION_S`)에 있던 것을 명세서가
+    정책 키로 올렸다 — 현장에서 조정하는 값이라 배포가 아니라 설정이어야 한다.
+    """
+
     mute_default_duration_s: float = 900.0
     """경고 일시중지 기본 지속시간(초). `POST /alerts/mute` 가 `minutes` 를 생략했을 때 쓴다.
 
@@ -170,6 +186,7 @@ class PolicyPatch(SpecModel):
     clip_pre_roll_s: float | None = None
     clip_post_roll_s: float | None = None
     clip_extract_margin_s: float | None = None
+    alert_duration_s: int | None = None
     mute_default_duration_s: float | None = None
     overlay_buffer_webrtc_ms: float | None = None
     overlay_buffer_hls_ms: float | None = None
