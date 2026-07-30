@@ -299,20 +299,22 @@ def task_migrate() -> int:
     return 0
 
 
-#: `dev` 가 한 터미널에서 함께 띄우는 것들.
-#:
-#: 카메라는 **모듈로**(`-m deploy.fake_cams`) 띄운다 — 파일 경로로 실행하면
-#: `sys.path[0]` 이 `deploy/` 가 되어 레포 루트 기준 import 가 깨진다.
-#:
-#: 카메라를 1·2 로 나눠 띄우는 이유: 한 대만 껐다 켜서 재연결을 확인하려면 프로세스가
-#: 나뉘어 있어야 한다. 하나로 묶으면 cam2 를 끄는 순간 cam1 까지 같이 내려간다.
-DEV_SERVICES: tuple[tuple[str, list[str]], ...] = (
-    ("cam1", [sys.executable, "-m", "deploy.fake_cams", "--cams", "1"]),
-    ("cam2", [sys.executable, "-m", "deploy.fake_cams", "--cams", "2"]),
+# 카메라를 1·2 로 나눠 띄우는 이유: 한 대만 껐다 켜서 재연결을 확인하려면 프로세스가
+# 나뉘어 있어야 한다. 하나로 묶으면 cam2 를 끄는 순간 cam1 까지 같이 내려간다.
+def dev_services() -> tuple[tuple[str, list[str]], ...]:
+    """`dev` 가 한 터미널에서 함께 띄우는 것들.
+
+    상수가 아니라 함수인 이유: 카메라 명령이 `cams_argv`(기본 `--copy`)에서 나오므로
+    그 함수보다 먼저 평가될 수 없다. 여기서 한 번 더 적으면 `cams` 와 `dev` 의 기본
+    동작이 갈릴 수 있고, 그러면 "cams 로는 가벼운데 dev 로는 무겁다"가 된다.
+    """
+    return (
+    ("cam1", cams_argv(cams="1")),
+    ("cam2", cams_argv(cams="2")),
     ("rec", ["uv", "run", "python", "-m", "recorder.main"]),
     ("server", [*uv("uvicorn", "server.app.main:app"), "--host", "127.0.0.1", "--port", "8000"]),
     ("front", ["npm", "--prefix", str(FRONT), "run", "dev"]),
-)  # fmt: skip
+    )  # fmt: skip
 
 
 def task_dev() -> int:
@@ -331,7 +333,7 @@ def task_dev() -> int:
     say("[dev] 프로세스 기동")
     processes: list[tuple[str, subprocess.Popen[bytes]]] = []
     try:
-        for name, argv in DEV_SERVICES:
+        for name, argv in dev_services():
             exe = executable(argv[0])
             say(f"      {name:<7} {shell_repr(argv)}")
             processes.append((name, subprocess.Popen([exe, *argv[1:]], cwd=str(ROOT))))
@@ -389,10 +391,27 @@ def _stop_dev(processes: Sequence[tuple[str, subprocess.Popen[bytes]]]) -> None:
     task_cams_stop()
 
 
-def task_cams(sources: Sequence[str], cams: str | None, marker: bool = False) -> int:
-    say("[cams] 가짜 RTSP 송출 (카메라당 main·sub 2경로)")
-    # **파일 경로가 아니라 모듈로 띄운다.** 파일 경로로 실행하면 `sys.path[0]` 이
-    # `deploy/` 가 되어 `deploy.marker_path`(marker 궤적 공유 정의)를 import 할 수 없다.
+def cams_argv(
+    sources: Sequence[str] = (),
+    cams: str | None = None,
+    *,
+    marker: bool = False,
+    timecode: bool = False,
+) -> list[str]:
+    """가짜 카메라 송출 명령. **기본은 `--copy`(재인코딩 없음)다.**
+
+    기본을 바꾼 이유는 실측이다 — 타임코드 모드는 네 경로가 이 노트북에서 CPU 405%
+    (논리 12코어 중 4개)를 먹고, 그러면 인코더가 실시간을 못 따라가 mediamtx 가
+    프레임을 버린다(`reader is too slow`). 평상시 개발·시연에서 그 대가를 치를 이유가
+    없다. 실물 카메라도 이미 h264 를 뱉으므로 `--copy` 가 그 상태에 더 가깝다.
+
+    **`--marker` 는 타임코드 모드를 강제한다.** marker 는 매 프레임 사각형을 다시
+    그리므로 재인코딩이 필요하다 — 조용히 한쪽을 무시하면 정합을 재는 줄 알고 아무
+    표시 없는 영상을 본다.
+
+    **파일 경로가 아니라 모듈로 띄운다.** 파일 경로로 실행하면 `sys.path[0]` 이
+    `deploy/` 가 되어 `deploy.marker_path`(marker 궤적 공유 정의)를 import 할 수 없다.
+    """
     argv = [sys.executable, "-m", "deploy.fake_cams"]
     for source in sources:
         argv += ["--source", source]
@@ -400,7 +419,21 @@ def task_cams(sources: Sequence[str], cams: str | None, marker: bool = False) ->
         argv += ["--cams", cams]
     if marker:
         argv += ["--marker"]
-    run(argv)
+    elif not timecode:
+        argv += ["--copy"]
+    return argv
+
+
+def task_cams(
+    sources: Sequence[str],
+    cams: str | None,
+    marker: bool = False,
+    timecode: bool = False,
+) -> int:
+    say("[cams] 가짜 RTSP 송출 (카메라당 main·sub 2경로)")
+    if marker or timecode:
+        say("      타임코드 모드 — 실시간 재인코딩이다. CPU 를 많이 먹는다(실측 405%).")
+    run(cams_argv(sources, cams, marker=marker, timecode=timecode))
     return 0
 
 
@@ -574,6 +607,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="궤적이 결정적인 사각형을 영상에 태운다 (오버레이 정합 검증 · uv run tasks.py marker)",
     )
+    cams.add_argument(
+        "--timecode",
+        action="store_true",
+        help=(
+            "영상에 벽시계 타임코드를 소성한다. 실시간 재인코딩이라 CPU 를 많이 먹는다"
+            " (실측 405%%). 기본은 재인코딩 없는 --copy 다"
+        ),
+    )
     cams_stop = sub.add_parser("cams-stop", help="cams 가 띄운 ffmpeg 종료")
     cams_stop.add_argument(
         "--cams",
@@ -617,7 +658,7 @@ def dispatch(args: argparse.Namespace) -> int:
         case "types":
             return task_types(args.check)
         case "cams":
-            return task_cams(args.source, args.cams, args.marker)
+            return task_cams(args.source, args.cams, args.marker, args.timecode)
         case "cams-stop":
             return task_cams_stop(args.cams)
         case "rec":

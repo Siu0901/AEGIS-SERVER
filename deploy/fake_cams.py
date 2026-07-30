@@ -1,13 +1,15 @@
 #!/usr/bin/env python
 """가짜 IP 카메라 2대를 mediamtx 로 무한 루프 송출한다.
 
-    uv run tasks.py cams                              # testsrc2 테스트 패턴
-    uv run tasks.py cams --copy                       # ★ 재인코딩 없이 (CPU 거의 0)
-    uv run tasks.py cams --copy --source a.mp4        # 그 파일을 무한 루프
-    uv run tasks.py cams --source a.mp4               # 카메라 1·2 모두 a.mp4
-    uv run tasks.py cams --source a.mp4 --source b.mp4  # 카메라별 다른 영상
-    uv run tasks.py cams --cams 2                     # 카메라 2만 (한 대만 끊어보려면)
-    uv run tasks.py cams-stop                         # 전부 종료
+    uv run tasks.py cams                       # media/sample.mp4 를 --copy 로 (기본)
+    uv run tasks.py cams --source a.mp4        # 다른 파일로
+    uv run tasks.py cams --timecode            # 타임코드 소성 (무겁다 · 정합 실측용)
+    uv run tasks.py cams --marker              # marker 정합 대조 (타임코드 모드)
+    uv run tasks.py cams --cams 2              # 카메라 2만 (한 대만 끊어보려면)
+    uv run tasks.py cams-stop                  # 전부 종료
+
+**기본이 `--copy` 다.** `python -m deploy.fake_cams` 를 직접 부를 때는 `--copy` 를 명시한다
+(이 모듈의 기본 동작은 타임코드 모드로 남겨 두었다 — 아래 「타임코드」 참조).
 
 **경로 하나당 ffmpeg 프로세스 하나**, 총 4개를 띄운다.
 
@@ -246,19 +248,37 @@ def input_args(source: str | None) -> list[str]:
 #: `--copy` 모드가 미리 인코딩해 두는 클립이 사는 곳. `media/` 는 git 에서 제외된다.
 PREPARED_DIR = Path(__file__).resolve().parent.parent / "media" / "run" / "prepared"
 
-#: `--copy` 모드에서 준비하는 클립 길이(초). 짧으면 루프가 자주 돌고, 길면 준비가 오래 걸린다.
+#: 소스 없이 `--copy` 를 쓸 때 굽는 testsrc2 클립 길이(초).
 PREPARED_SECONDS = int(os.environ.get("CAMS_CLIP_SECONDS", "30"))
+
+#: 소스 파일을 구울 때의 상한(초). **자르기 위한 값이 아니라 폭주를 막는 값**이다.
+#:
+#: 소스가 이보다 짧으면 `-t` 는 아무 일도 하지 않고 파일 전체가 그대로 담긴다.
+#: 소스 길이를 임의로 늘리거나 줄이지 않는 것이 요점이다 — 28초 영상을 30초로 채우면
+#: 마지막 2초가 앞부분의 반복이 되어 루프 이음새가 두 번 생긴다.
+PREPARED_MAX_SECONDS = int(os.environ.get("CAMS_CLIP_MAX_SECONDS", "180"))
+
+#: `--source` 를 주지 않았을 때 찾아보는 기본 영상.
+#:
+#: 있으면 이것을 쓰고 없으면 testsrc2 로 떨어진다. **어느 쪽을 골랐는지 반드시 로그에
+#: 적는다** — 준비된 영상이 있는 줄 알고 테스트 패턴을 보고 있으면 그 자체로 오해다.
+DEFAULT_SOURCE = ROOT / "media" / "sample.mp4"
+
+
+def default_source() -> str | None:
+    return str(DEFAULT_SOURCE) if DEFAULT_SOURCE.is_file() else None
 
 
 def prepared_path(stream: Stream, source: str | None) -> Path:
-    """스트림 규격별 캐시 파일. **소스가 다르면 다른 파일**이어야 한다.
+    """스트림 규격별 캐시 파일. **소스나 규격이 다르면 다른 파일**이어야 한다.
 
     소스를 바꿨는데 같은 캐시를 재사용하면 화면에는 옛 영상이 계속 나오고, 그 사실이
-    아무 데도 드러나지 않는다.
+    아무 데도 드러나지 않는다. `FPS` 를 파일명에 넣는 이유도 같다 — 해상도만 키에 넣으면
+    프레임률을 바꿨을 때 낡은 클립이 조용히 재사용된다.
     """
     tag = "testsrc2" if source is None else Path(source).stem
     safe = re.sub(r"[^A-Za-z0-9._-]", "_", tag)[:40]
-    return PREPARED_DIR / f"{safe}_{stream.kind}_{stream.size}.mp4"
+    return PREPARED_DIR / f"{safe}_{stream.kind}_{stream.size}_{FPS}fps.mp4"
 
 
 def require_no_b_frames(clip: Path, stream: Stream) -> None:
@@ -330,9 +350,15 @@ def prepare_clip(ffmpeg: str, stream: Stream, source: str | None, font: str) -> 
         "-nostdin",
         "-y",
         # 준비 단계에서는 실시간 페이싱을 걸지 않는다 — 최대 속도로 인코딩해 끝낸다.
-        *(["-stream_loop", "-1", "-i", source] if source else
+        #
+        # **소스가 있으면 `-stream_loop` 를 쓰지 않는다.** 파일 전체를 그대로 한 번 굽고
+        # 루프는 송출 단계가 한다. 여기서 길이를 늘리면(28초 소스를 30초로) 마지막 2초가
+        # 앞부분의 반복이 되어 루프 이음새가 한 바퀴에 두 번 생긴다.
+        *(["-i", source] if source else
           ["-f", "lavfi", "-i", f"testsrc2=size={MAIN_SIZE}:rate={FPS}"]),
-        "-t", str(PREPARED_SECONDS),
+        "-t", str(PREPARED_MAX_SECONDS if source else PREPARED_SECONDS),
+        # 규격에 맞춘다 — 소스 해상도·프레임률이 무엇이든 메인 1920×1080 · 서브 640×360 ·
+        # 15fps 로 만든다(§1.2 · §4.7). 이 변환이 `--copy` 가 준비 단계를 갖는 이유다.
         "-vf", f"scale={stream.size},fps={FPS}",
         "-an",
         "-c:v", "libx264",
@@ -561,14 +587,31 @@ def main(argv: list[str] | None = None) -> int:
             raise CamsError("--copy 와 --marker 는 함께 쓸 수 없다 (marker 는 재인코딩이 필요하다)")
 
         font = drawtext_font() if not args.copy else ""
-        per_cam = sources_for_cams(args.source, cam_ids)
-        if not args.source:
-            say("[fake_cams] --source 없음 - testsrc2 테스트 패턴을 송출한다")
+        # `--source` 가 없으면 `media/sample.mp4` 를 찾아 쓴다. **어느 쪽을 골랐는지
+        # 반드시 알린다** — 준비된 영상이 있는 줄 알고 테스트 패턴을 보고 있으면
+        # 그 자체로 오해이고, 화면만 보고는 구분하기 어렵다.
+        chosen = args.source
+        if not chosen:
+            fallback = default_source()
+            if fallback:
+                chosen = [fallback]
+                say(f"[fake_cams] --source 없음 - 기본 영상을 쓴다: {fallback}")
+            else:
+                say(
+                    "[fake_cams] --source 없음 · media/sample.mp4 도 없다"
+                    " - testsrc2 테스트 패턴을 송출한다"
+                )
+        per_cam = sources_for_cams(chosen, cam_ids)
 
         streams = planned_streams(cam_ids)
         clips: dict[str, Path] = {}
         if args.copy:
-            say(f"[fake_cams] --copy: 재인코딩 없이 송출한다 (클립 {PREPARED_SECONDS}초 루프)")
+            # 소스가 있으면 길이를 여기서 정하지 않는다(파일 전체를 쓴다). 30초라고
+            # 적어두면 28초 영상을 쓰면서 30초라고 믿게 된다.
+            length = (
+                f"{PREPARED_SECONDS}초 클립" if not per_cam.get(cam_ids[0]) else "소스 길이 그대로"
+            )
+            say(f"[fake_cams] --copy: 재인코딩 없이 송출한다 ({length} 루프)")
             say("            영상에 타임코드가 없다 — 정합 실측은 기본 모드나 --marker 로 한다")
             for stream in streams:
                 clips[stream.label] = prepare_clip(ffmpeg, stream, per_cam[stream.cam_id], font)
