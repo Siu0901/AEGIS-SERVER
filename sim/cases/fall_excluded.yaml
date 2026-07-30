@@ -27,13 +27,12 @@ timeline:
         helmet: "on"
         helmet_conf: 0.91
         foot_point: [0.225, 0.758]
-        foot_point_m: [3.10, 7.60]
         foot_conf: 0.72
         posture: fallen
         height_ratio: 0.41
         axis_angle_deg: 78.5
         stillness_s: 6.2
-        in_zone: null
+        in_zone: forklift_lane
       - class: person
         track_id: 5
         conf: 0.92
@@ -41,7 +40,6 @@ timeline:
         helmet: "off"
         helmet_conf: 0.89
         foot_point: [0.558, 0.760]
-        foot_point_m: [11.40, 7.90]
         foot_conf: 0.88
         posture: standing
         height_ratio: 0.97
@@ -54,10 +52,10 @@ timeline:
     cam_id: 1
     track_id: 3
     violation_type: fall
-    zone_id: null
+    zone_id: forklift_lane
     bbox: [0.120, 0.640, 0.330, 0.760]
     conf: 0.88
-    foot_point_m: [3.10, 7.60]
+    foot_point: [0.225, 0.76]
     posture: fallen
     observed_ms: 500
     nearby: []
@@ -70,7 +68,7 @@ timeline:
     zone_id: forklift_lane
     bbox: [0.520, 0.360, 0.596, 0.762]
     conf: 0.92
-    foot_point_m: [11.40, 7.90]
+    foot_point: [0.558, 0.762]
     foot_conf: 0.88
     helmet: "off"
     helmet_conf: 0.89
@@ -90,13 +88,12 @@ timeline:
         helmet: "on"
         helmet_conf: 0.90
         foot_point: [0.225, 0.758]
-        foot_point_m: [3.10, 7.60]
         foot_conf: 0.71
         posture: fallen
         height_ratio: 0.40
         axis_angle_deg: 79.1
         stillness_s: 11.8
-        in_zone: null
+        in_zone: forklift_lane
       - class: person
         track_id: 5
         conf: 0.93
@@ -104,7 +101,6 @@ timeline:
         helmet: "on"
         helmet_conf: 0.94
         foot_point: [0.578, 0.759]
-        foot_point_m: [11.90, 7.95]
         foot_conf: 0.89
         posture: standing
         height_ratio: 0.97
@@ -123,13 +119,12 @@ timeline:
         helmet: "on"
         helmet_conf: 0.90
         foot_point: [0.225, 0.758]
-        foot_point_m: [3.10, 7.60]
         foot_conf: 0.70
         posture: fallen
         height_ratio: 0.40
         axis_angle_deg: 79.4
         stillness_s: 22.8
-        in_zone: null
+        in_zone: forklift_lane
       - class: person
         track_id: 5
         conf: 0.92
@@ -137,7 +132,6 @@ timeline:
         helmet: "on"
         helmet_conf: 0.95
         foot_point: [0.597, 0.758]
-        foot_point_m: [12.40, 8.00]
         foot_conf: 0.88
         posture: standing
         height_ratio: 0.97

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts.seed_cameras import homography_for
 from sim.edge_sim.scripted import CASES_DIR, load_case
 
 START = datetime(2026, 8, 14, 5, 37, 0, tzinfo=UTC)
@@ -70,7 +71,6 @@ timeline:
         helmet: "off"
         helmet_conf: 0.80
         foot_point: [0.150, 0.700]
-        foot_point_m: [2.00, 8.00]
         foot_conf: 0.90
         posture: standing
         height_ratio: 0.90
@@ -88,7 +88,6 @@ timeline:
         helmet: "on"
         helmet_conf: 0.80
         foot_point: [0.350, 0.700]
-        foot_point_m: [4.00, 8.00]
         foot_conf: 0.90
         posture: standing
         height_ratio: 0.90
@@ -106,11 +105,32 @@ def test_frame_fps_fills_between_keyframes(tmp_path: Path) -> None:
 
 
 def test_tweened_coordinates_are_linear(tmp_path: Path) -> None:
+    """**픽셀만 보간한다.** 미터는 보간한 픽셀에서 호모그래피로 다시 계산된다(FN-DET-06).
+
+    미터를 직접 보간하면 화면에서 등속으로 걷는 사람이 지면에서는 등속이 아니게 된다 —
+    원근이 사라지기 때문이다.
+    """
     timeline = load_case(_write(tmp_path, _TWO_KEYFRAMES), START)
     middle = timeline[2].message.objects[0]
     assert middle.bbox == pytest.approx([0.2, 0.3, 0.3, 0.7])
     assert middle.foot_point == pytest.approx([0.25, 0.7])
-    assert middle.foot_point_m == pytest.approx([3.0, 8.0])
+
+    expected = homography_for(1).to_ground((0.25, 0.7))
+    assert middle.foot_point_m == pytest.approx([round(expected[0], 2), round(expected[1], 2)])
+    # 두 키프레임 사이에 있다 — 계산 경로가 바뀌어도 이 성질은 유지되어야 한다.
+    first = timeline[0].message.objects[0].foot_point_m
+    last = timeline[-1].message.objects[0].foot_point_m
+    assert first[0] < middle.foot_point_m[0] < last[0]
+
+
+def test_scenarios_may_not_write_meters(tmp_path: Path) -> None:
+    """★ 미터를 직접 적으면 오류다 — 픽셀과 미터가 어긋나도 아무도 모르게 된다."""
+    body = _TWO_KEYFRAMES.replace(
+        "        foot_point: [0.150, 0.700]\n",
+        "        foot_point: [0.150, 0.700]\n        foot_point_m: [2.00, 8.00]\n",
+    )
+    with pytest.raises(ValueError, match="foot_point_m"):
+        load_case(_write(tmp_path, body), START)
 
 
 def test_tweening_does_not_invent_judgements(tmp_path: Path) -> None:
@@ -139,7 +159,6 @@ def test_tweening_only_covers_tracks_present_in_both_keyframes(tmp_path: Path) -
         "        conf: 0.80\n"
         "        bbox: [0.600, 0.400, 0.800, 0.700]\n"
         "        anchor: [0.700, 0.700]\n"
-        "        anchor_m: [9.00, 9.00]\n"
         "        moving: false\n"
         "        danger_radius_m: 3.0\n",
     )

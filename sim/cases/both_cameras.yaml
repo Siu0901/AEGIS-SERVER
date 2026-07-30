@@ -46,7 +46,6 @@ timeline:
         helmet: "off"
         helmet_conf: 0.88
         foot_point: [0.720, 0.720]
-        foot_point_m: [8.28, 9.00]
         foot_conf: 0.88
         posture: standing
         height_ratio: 0.98
@@ -66,7 +65,6 @@ timeline:
         helmet: "on"
         helmet_conf: 0.94
         foot_point: [0.260, 0.740]
-        foot_point_m: [3.67, 8.46]
         foot_conf: 0.90
         posture: standing
         height_ratio: 0.99
@@ -80,7 +78,6 @@ timeline:
         helmet: "off"
         helmet_conf: 0.86
         foot_point: [0.620, 0.690]
-        foot_point_m: [7.35, 9.76]
         foot_conf: 0.87
         posture: standing
         height_ratio: 0.97
@@ -92,7 +89,6 @@ timeline:
         conf: 0.89
         bbox: [0.742, 0.375, 0.978, 0.660]
         anchor: [0.845, 0.668]
-        anchor_m: [10.10, 10.33]
         moving: true
         danger_radius_m: 3.0
 
@@ -104,7 +100,7 @@ timeline:
     zone_id: null
     bbox: [0.632, 0.341, 0.723, 0.724]
     conf: 0.91
-    foot_point_m: [7.83, 8.90]
+    foot_point: [0.6775, 0.724]
     foot_conf: 0.88
     helmet: "off"
     helmet_conf: 0.89
@@ -120,7 +116,7 @@ timeline:
     zone_id: null
     bbox: [0.571, 0.342, 0.654, 0.695]
     conf: 0.91
-    foot_point_m: [7.26, 9.63]
+    foot_point: [0.6125, 0.695]
     foot_conf: 0.87
     helmet: "off"
     helmet_conf: 0.87
@@ -151,7 +147,6 @@ timeline:
         helmet: "off"
         helmet_conf: 0.91
         foot_point: [0.550, 0.735]
-        foot_point_m: [6.49, 8.59]
         foot_conf: 0.90
         posture: standing
         height_ratio: 0.98
@@ -167,7 +162,7 @@ timeline:
     zone_id: forklift_lane
     bbox: [0.489, 0.339, 0.583, 0.736]
     conf: 0.93
-    foot_point_m: [6.36, 8.55]
+    foot_point: [0.536, 0.736]
     foot_conf: 0.90
     helmet: "off"
     helmet_conf: 0.91
@@ -183,7 +178,7 @@ timeline:
     zone_id: forklift_lane
     bbox: [0.489, 0.339, 0.583, 0.736]
     conf: 0.93
-    foot_point_m: [6.36, 8.55]
+    foot_point: [0.536, 0.736]
     foot_conf: 0.90
     helmet: "off"
     helmet_conf: 0.91
@@ -199,7 +194,7 @@ timeline:
     zone_id: null
     bbox: [0.545, 0.342, 0.632, 0.710]
     conf: 0.92
-    foot_point_m: [6.95, 9.27]
+    foot_point: [0.5885, 0.71]
     foot_conf: 0.88
     helmet: "off"
     helmet_conf: 0.88
@@ -221,7 +216,6 @@ timeline:
         helmet: "on"
         helmet_conf: 0.95
         foot_point: [0.330, 0.755]
-        foot_point_m: [4.42, 8.07]
         foot_conf: 0.91
         posture: standing
         height_ratio: 0.98
@@ -235,7 +229,6 @@ timeline:
         helmet: "off"
         helmet_conf: 0.88
         foot_point: [0.580, 0.715]
-        foot_point_m: [6.84, 9.11]
         foot_conf: 0.89
         posture: standing
         height_ratio: 0.98
@@ -247,7 +240,6 @@ timeline:
         conf: 0.90
         bbox: [0.594, 0.382, 0.846, 0.685]
         anchor: [0.706, 0.693]
-        anchor_m: [8.29, 9.68]
         moving: true
         danger_radius_m: 3.0
 
@@ -270,7 +262,7 @@ timeline:
     zone_id: forklift_lane
     bbox: [0.317, 0.334, 0.416, 0.754]
     conf: 0.94
-    foot_point_m: [4.76, 8.11]
+    foot_point: [0.3665, 0.754]
     foot_conf: 0.91
     helmet: "off"
     helmet_conf: 0.92
@@ -286,7 +278,7 @@ timeline:
     zone_id: forklift_lane
     bbox: [0.317, 0.334, 0.416, 0.754]
     conf: 0.94
-    foot_point_m: [4.76, 8.11]
+    foot_point: [0.3665, 0.754]
     foot_conf: 0.91
     helmet: "off"
     helmet_conf: 0.92
@@ -302,7 +294,7 @@ timeline:
     zone_id: null
     bbox: [0.522, 0.341, 0.613, 0.723]
     conf: 0.93
-    foot_point_m: [6.69, 8.88]
+    foot_point: [0.5675, 0.723]
     foot_conf: 0.90
     helmet: "off"
     helmet_conf: 0.89
@@ -324,7 +316,6 @@ timeline:
         helmet: "off"
         helmet_conf: 0.91
         foot_point: [0.315, 0.761]
-        foot_point_m: [4.29, 7.94]
         foot_conf: 0.90
         posture: standing
         height_ratio: 0.98
@@ -344,7 +335,6 @@ timeline:
         helmet: "on"
         helmet_conf: 0.96
         foot_point: [0.385, 0.767]
-        foot_point_m: [4.98, 7.76]
         foot_conf: 0.92
         posture: standing
         height_ratio: 0.99
@@ -358,7 +348,6 @@ timeline:
         helmet: "off"
         helmet_conf: 0.89
         foot_point: [0.556, 0.731]
-        foot_point_m: [6.56, 8.69]
         foot_conf: 0.90
         posture: standing
         height_ratio: 0.98
@@ -370,7 +359,6 @@ timeline:
         conf: 0.91
         bbox: [0.507, 0.384, 0.773, 0.705]
         anchor: [0.627, 0.713]
-        anchor_m: [7.35, 9.13]
         moving: true
         danger_radius_m: 3.0
 

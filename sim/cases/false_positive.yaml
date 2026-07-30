@@ -25,7 +25,6 @@ timeline:
         helmet: "off"
         helmet_conf: 0.88
         foot_point: [0.235, 0.762]
-        foot_point_m: [4.21, 7.85]
         foot_conf: 0.88
         posture: standing
         height_ratio: 0.97
@@ -39,13 +38,12 @@ timeline:
         helmet: "off"
         helmet_conf: 0.63
         foot_point: [0.654, 0.756]
-        foot_point_m: [14.20, 8.40]
         foot_conf: 0.74
         posture: standing
         height_ratio: 0.95
         axis_angle_deg: 9.8
         stillness_s: 1.2
-        in_zone: forklift_lane
+        in_zone: null
 
   - at: 0.5
     type: candidate
@@ -55,7 +53,7 @@ timeline:
     zone_id: forklift_lane
     bbox: [0.197, 0.364, 0.273, 0.764]
     conf: 0.91
-    foot_point_m: [4.21, 7.85]
+    foot_point: [0.235, 0.764]
     foot_conf: 0.88
     helmet: "off"
     helmet_conf: 0.88
@@ -68,10 +66,10 @@ timeline:
     cam_id: 1
     track_id: 5
     violation_type: no_helmet
-    zone_id: forklift_lane
+    zone_id: null
     bbox: [0.620, 0.372, 0.688, 0.758]
     conf: 0.79
-    foot_point_m: [14.20, 8.40]
+    foot_point: [0.654, 0.758]
     foot_conf: 0.74
     helmet: "off"
     helmet_conf: 0.63
@@ -90,7 +88,6 @@ timeline:
         helmet: "on"
         helmet_conf: 0.94
         foot_point: [0.300, 0.760]
-        foot_point_m: [6.02, 7.91]
         foot_conf: 0.89
         posture: standing
         height_ratio: 0.98
@@ -104,13 +101,12 @@ timeline:
         helmet: "off"
         helmet_conf: 0.62
         foot_point: [0.656, 0.756]
-        foot_point_m: [14.25, 8.42]
         foot_conf: 0.73
         posture: standing
         height_ratio: 0.95
         axis_angle_deg: 9.9
         stillness_s: 1.4
-        in_zone: forklift_lane
+        in_zone: null
 
   - at: 22.0
     type: frame
@@ -123,7 +119,6 @@ timeline:
         helmet: "on"
         helmet_conf: 0.95
         foot_point: [0.319, 0.759]
-        foot_point_m: [6.44, 7.93]
         foot_conf: 0.88
         posture: standing
         height_ratio: 0.98
@@ -137,13 +132,12 @@ timeline:
         helmet: "off"
         helmet_conf: 0.61
         foot_point: [0.658, 0.756]
-        foot_point_m: [14.30, 8.44]
         foot_conf: 0.72
         posture: standing
         height_ratio: 0.95
         axis_angle_deg: 10.1
         stillness_s: 1.6
-        in_zone: forklift_lane
+        in_zone: null
 
 # 관리자가 화면에서 오탐으로 표시한다 (PATCH /events/{id} · FN-EVT-05).
 manual:

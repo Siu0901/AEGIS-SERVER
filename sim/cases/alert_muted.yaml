@@ -33,7 +33,6 @@ timeline:
         helmet: "off"
         helmet_conf: 0.88
         foot_point: [0.235, 0.762]
-        foot_point_m: [4.21, 7.85]
         foot_conf: 0.88
         posture: standing
         height_ratio: 0.97
@@ -49,7 +48,7 @@ timeline:
     zone_id: forklift_lane
     bbox: [0.197, 0.364, 0.273, 0.764]
     conf: 0.91
-    foot_point_m: [4.21, 7.85]
+    foot_point: [0.235, 0.764]
     foot_conf: 0.88
     helmet: "off"
     helmet_conf: 0.88
@@ -69,7 +68,6 @@ timeline:
         helmet: "on"
         helmet_conf: 0.94
         foot_point: [0.300, 0.760]
-        foot_point_m: [6.02, 7.91]
         foot_conf: 0.89
         posture: standing
         height_ratio: 0.98
@@ -88,7 +86,6 @@ timeline:
         helmet: "on"
         helmet_conf: 0.95
         foot_point: [0.319, 0.759]
-        foot_point_m: [6.44, 7.93]
         foot_conf: 0.88
         posture: standing
         height_ratio: 0.98
@@ -97,6 +94,9 @@ timeline:
         in_zone: forklift_lane
 
 expect:
+  # 예약 실행은 확정(+3.5s)에서 22초 뒤다(사후 10 + 세그먼트 10 + 여유 2).
+  # 해소(+16.0s) 뒤이므로 늘려도 상태는 그대로다.
+  tail_s: 9.0
   events:
     - track_id: 3
       violation_type: no_helmet

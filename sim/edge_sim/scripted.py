@@ -31,6 +31,21 @@
 
 `candidate` · `track_lost` · `heartbeat` 는 보간 대상이 아니다 — 후보를 만들어내는
 것은 규칙 판정이고, 그건 시나리오 작성자의 몫이다.
+
+**미터는 시나리오가 적지 않는다 (M6).** 예전에는 `foot_point_m` · `anchor_m` 을 손으로
+적었는데, 그러면 픽셀과 미터가 각각 따로 쓰인 두 벌의 좌표가 되어 서로 어긋나도 아무도
+모른다(실제로 어긋나 있었다 — `docs/INDEX.md` M6 절). 이제 시나리오에는 **정규화 픽셀만**
+적고, `packages/vision` 의 호모그래피로 미터를 계산해 싣는다. 실물 엣지가 하는 일과 같다
+(FN-DET-06).
+
+| 시나리오가 적는 것 | 계산해서 싣는 것 |
+|---|---|
+| `frame` 사람의 `foot_point` | `foot_point_m` |
+| `frame` 지게차의 `anchor` | `anchor_m` |
+| `candidate` 의 `foot_point` | `foot_point_m` |
+
+카메라별 캘리브레이션은 `scripts/seed_cameras.py` 의 개발용 4점이며 **DB 시드와 같은
+상수**다 — 엣지와 서버가 다른 좌표계로 계산하면 거리도 구역도 어긋난다.
 """
 
 from __future__ import annotations
@@ -38,6 +53,7 @@ from __future__ import annotations
 import itertools
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from functools import cache
 from pathlib import Path
 from typing import Any, Final
 
@@ -45,6 +61,8 @@ import yaml
 from pydantic import TypeAdapter
 
 from aegis_contracts import EdgeMessage
+from aegis_vision import Homography
+from scripts.seed_cameras import homography_for
 
 __all__ = ["CASES_DIR", "ScheduledMessage", "load_case", "resolve_case_path", "retime"]
 
@@ -66,10 +84,12 @@ _LERP_SCALAR: Final[frozenset[str]] = frozenset(
 
 #: 키프레임 사이를 선형 보간하는 좌표 배열 필드. API명세서 §2.1
 #:
+#: **정규화 픽셀만 보간한다.** 미터는 시나리오가 적지 않고 호모그래피로 계산되므로
+#: (`_with_ground_coordinates`), 보간한 픽셀에서 다시 계산하면 원근이 그대로 반영된다.
+#: 미터를 직접 보간하면 화면에서 등속으로 걷는 사람이 지면에서는 등속이 아니게 된다.
+#:
 #: `danger_radius_m` 은 여기 없다 — 설정값이지 관측값이 아니라서 프레임마다 변하지 않는다.
-_LERP_VECTOR: Final[frozenset[str]] = frozenset(
-    {"bbox", "foot_point", "foot_point_m", "anchor", "anchor_m"}
-)
+_LERP_VECTOR: Final[frozenset[str]] = frozenset({"bbox", "foot_point", "anchor"})
 
 #: 보간 결과 자릿수. 정규화 좌표는 1e-4 면 1920px 에서 0.2px 미만이라 충분하다.
 _ROUND = 4
@@ -145,14 +165,74 @@ def load_case(case: str, start: datetime, speed: float = 1.0) -> list[ScheduledM
     entries += _tween_frames(_frame_fps(raw, path), entries)
     entries.sort(key=lambda item: item[0])
 
+    default_cam = int(raw.get("cam_id", 1))
     scheduled: list[ScheduledMessage] = []
     for at_s, payload in entries:
         played_at = at_s / speed
         # 시각은 시나리오가 적지 않는다. 시작 시각 + 경과로 주입한다.
-        body = dict(payload)
+        body = _with_ground_coordinates(dict(payload), default_cam)
         body[_TS_FIELD[str(body["type"])]] = start + timedelta(seconds=played_at)
         scheduled.append(ScheduledMessage(at_s=played_at, message=_ADAPTER.validate_python(body)))
     return scheduled
+
+
+def _with_ground_coordinates(payload: dict[str, Any], default_cam: int) -> dict[str, Any]:
+    """정규화 픽셀 → 지면 미터. FN-DET-06 (API명세서 §6.2)
+
+    **시나리오가 미터를 적으면 오류다.** 픽셀과 미터를 각각 적으면 두 벌의 좌표가 되어
+    서로 어긋나도 아무도 모른다 — 실제로 M6 이전 시나리오들이 그 상태였다. 미터의
+    출처는 호모그래피 하나뿐이어야 한다.
+    """
+    kind = str(payload.get("type"))
+    if kind not in {"frame", "candidate"}:
+        return payload
+    homography = _homography(int(payload.get("cam_id", default_cam)))
+
+    if kind == "candidate":
+        # `candidate` 에는 픽셀 접지점 자리가 없다(§2.2 는 `foot_point_m` 만 싣는다).
+        # 시나리오가 적은 `foot_point` 는 **변환 입력일 뿐**이므로 메시지에서 뺀다 —
+        # 남겨두면 계약에 없는 필드가 실려 나가고, 그건 엣지 결함과 같은 모양이다.
+        projected = _project(payload, homography, "foot_point", "foot_point_m")
+        return {key: value for key, value in projected.items() if key != "foot_point"}
+
+    objects = [_project(dict(obj), homography, *_fields(obj)) for obj in payload.get("objects", [])]
+    return payload | {"objects": objects}
+
+
+def _fields(obj: dict[str, Any]) -> tuple[str, str]:
+    """이 객체가 쓰는 (픽셀 필드, 미터 필드). 사람은 접지점, 지게차는 접점이다(§2.1)."""
+    if obj.get("class") == "person":
+        return ("foot_point", "foot_point_m")
+    return ("anchor", "anchor_m")
+
+
+def _project(
+    payload: dict[str, Any],
+    homography: Homography,
+    pixel_field: str,
+    ground_field: str,
+) -> dict[str, Any]:
+    if ground_field in payload:
+        msg = (
+            f"시나리오가 {ground_field} 를 직접 적었다 — 미터는 {pixel_field}(정규화 픽셀)에서 "
+            "호모그래피로 계산된다(FN-DET-06). 그 줄을 지워라"
+        )
+        raise ValueError(msg)
+    if pixel_field not in payload:
+        return payload
+    point = payload[pixel_field]
+    ground = homography.to_ground((float(point[0]), float(point[1])))
+    return payload | {ground_field: [round(ground[0], 2), round(ground[1], 2)]}
+
+
+@cache
+def _homography(cam_id: int) -> Homography:
+    """개발용 캘리브레이션. **DB 시드와 같은 상수**를 쓴다(`scripts/seed_cameras.py`).
+
+    실물 엣지는 이 값을 `edge/config.yaml` 에서 받는다. 시뮬레이터가 다른 값을 쓰면
+    서버가 계산하는 구역·거리와 엣지가 보내는 좌표가 서로 다른 평면 위에 놓인다.
+    """
+    return homography_for(cam_id)
 
 
 def retime(timeline: list[ScheduledMessage], start: datetime) -> list[ScheduledMessage]:

@@ -25,7 +25,6 @@ timeline:
         helmet: "off"
         helmet_conf: 0.88
         foot_point: [0.235, 0.762]
-        foot_point_m: [4.21, 7.85]
         foot_conf: 0.88
         posture: standing
         height_ratio: 0.97
@@ -41,7 +40,7 @@ timeline:
     zone_id: forklift_lane
     bbox: [0.197, 0.364, 0.273, 0.764]
     conf: 0.91
-    foot_point_m: [4.21, 7.85]
+    foot_point: [0.235, 0.764]
     foot_conf: 0.88
     helmet: "off"
     helmet_conf: 0.88
@@ -61,7 +60,6 @@ timeline:
         helmet: "on"
         helmet_conf: 0.94
         foot_point: [0.300, 0.760]
-        foot_point_m: [6.02, 7.91]
         foot_conf: 0.89
         posture: standing
         height_ratio: 0.98
@@ -80,7 +78,6 @@ timeline:
         helmet: "on"
         helmet_conf: 0.95
         foot_point: [0.319, 0.759]
-        foot_point_m: [6.44, 7.93]
         foot_conf: 0.88
         posture: standing
         height_ratio: 0.98
@@ -89,6 +86,9 @@ timeline:
         in_zone: forklift_lane
 
 expect:
+  # 예약 실행은 확정(+3.5s) + 사후 10s + 세그먼트 10s + 여유 2s = +25.5s 다.
+  # 이미 해소(+16.0s)된 뒤라 시간을 더 흘려보내도 이벤트 상태는 바뀌지 않는다.
+  tail_s: 9.0
   events:
     - track_id: 3
       violation_type: no_helmet
@@ -99,7 +99,7 @@ expect:
       alerted_at_s: 3.5
       resolved_at_s: 16.0
       resolution_sec: 12
-      # FN-REC-03 — 확정 +12초(사후 10 + 여유 2)에 예약이 실행되고 ready 로 간다.
+      # FN-REC-03 — 확정 +22초(사후 10 + 세그먼트 10 + 여유 2)에 실행되어 ready 로 간다.
       clip_status: ready
   alerts:
     # FN-ALM-01·02 — 확정과 같은 순간에 방송과 경광등이 나간다. 1건뿐이다.

@@ -38,7 +38,6 @@ timeline:
         helmet: "on"
         helmet_conf: 0.95
         foot_point: [0.800, 0.700]
-        foot_point_m: [9.28, 9.50]
         foot_conf: 0.90
         posture: standing
         height_ratio: 0.99
@@ -68,7 +67,6 @@ timeline:
         helmet: "on"
         helmet_conf: 0.96
         foot_point: [0.720, 0.745]
-        foot_point_m: [8.11, 8.33]
         foot_conf: 0.91
         posture: standing
         height_ratio: 0.98
@@ -109,7 +107,6 @@ timeline:
         helmet: "on"
         helmet_conf: 0.94
         foot_point: [0.680, 0.780]
-        foot_point_m: [7.54, 7.42]
         foot_conf: 0.90
         posture: standing
         height_ratio: 0.99
@@ -139,7 +136,6 @@ timeline:
         helmet: "on"
         helmet_conf: 0.93
         foot_point: [0.700, 0.800]
-        foot_point_m: [7.59, 6.90]
         foot_conf: 0.89
         posture: standing
         height_ratio: 0.98

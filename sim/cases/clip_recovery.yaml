@@ -34,7 +34,6 @@ timeline:
         helmet: "off"
         helmet_conf: 0.88
         foot_point: [0.235, 0.762]
-        foot_point_m: [4.21, 7.85]
         foot_conf: 0.88
         posture: standing
         height_ratio: 0.97
@@ -50,7 +49,7 @@ timeline:
     zone_id: forklift_lane
     bbox: [0.197, 0.364, 0.273, 0.764]
     conf: 0.91
-    foot_point_m: [4.21, 7.85]
+    foot_point: [0.235, 0.764]
     foot_conf: 0.88
     helmet: "off"
     helmet_conf: 0.88
@@ -70,7 +69,6 @@ timeline:
         helmet: "on"
         helmet_conf: 0.94
         foot_point: [0.300, 0.760]
-        foot_point_m: [6.02, 7.91]
         foot_conf: 0.89
         posture: standing
         height_ratio: 0.98
@@ -89,7 +87,6 @@ timeline:
         helmet: "on"
         helmet_conf: 0.95
         foot_point: [0.319, 0.759]
-        foot_point_m: [6.44, 7.93]
         foot_conf: 0.88
         posture: standing
         height_ratio: 0.98
@@ -98,8 +95,12 @@ timeline:
         in_zone: forklift_lane
 
 expect:
-  # 예약 실행 시각(+15.5s)은 마지막 프레임(+17.0s) 안쪽이라 tail 을 늘릴 필요가 없다.
-  # 늘리면 관측이 끊긴 뒤 트랙이 `lost` 로 가서 이 시나리오가 보려는 것이 흐려진다.
+  # 예약 실행 시각은 `확정 + 사후 10s + 세그먼트 + 여유 2s` 다(기능명세서 §4.4).
+  # 세그먼트 10초 환경이면 +25.5s 라 마지막 프레임(+17.0s)을 한참 넘고, 그만큼
+  # tail 을 늘리면 관측이 끊긴 트랙이 `lost` 로 가서 이 시나리오가 보려는 것이
+  # 흐려진다. 그래서 **REC 이 2초 세그먼트로 도는 환경**으로 두어 +17.5s 에 실행되게
+  # 한다 — 재시작을 넘어 pending → ready 로 가는지가 이 시나리오의 전부다.
+  tail_s: 1.0
   restarts: 1
   events:
     - track_id: 3
@@ -127,5 +128,9 @@ expect:
     undetermined: 0
     fall_events: 0
 
-# ★ 확정(+3.5s)과 예약 실행(+15.5s) 사이. 잡이 아직 pending 인 시점이다.
+# ★ 확정(+3.5s)과 예약 실행(+17.5s) 사이. 잡이 아직 pending 인 시점이다.
 restart_at: [8.0]
+
+# 세그먼트 길이는 서버가 정하지 않고 REC 의 `GET /status` 에서 읽는다(§4.7).
+rec:
+  segment_seconds: 2

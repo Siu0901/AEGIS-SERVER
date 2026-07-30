@@ -30,7 +30,6 @@ timeline:
         helmet: "off"
         helmet_conf: 0.88
         foot_point: [0.235, 0.762]
-        foot_point_m: [4.21, 7.85]
         foot_conf: 0.88
         posture: standing
         height_ratio: 0.97
@@ -46,7 +45,7 @@ timeline:
     zone_id: forklift_lane
     bbox: [0.197, 0.364, 0.273, 0.764]
     conf: 0.91
-    foot_point_m: [4.21, 7.85]
+    foot_point: [0.235, 0.764]
     foot_conf: 0.88
     helmet: "off"
     helmet_conf: 0.88
@@ -65,7 +64,6 @@ timeline:
         helmet: "off"
         helmet_conf: 0.86
         foot_point: [0.254, 0.761]
-        foot_point_m: [4.55, 7.90]
         foot_conf: 0.85
         posture: standing
         height_ratio: 0.96

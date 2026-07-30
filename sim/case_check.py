@@ -65,6 +65,9 @@ restart_at: [12.0]          # 선택 — 이 시각에 서버를 내렸다 올�
 rec:                        # 선택 — REC 응답을 바꿔 실패 경로를 본다 (§4.7)
   status: not_found         # ready(기본) | partial | not_found
   available: true           # false 면 REC 이 죽은 상황 (잡은 pending 으로 남아야 한다)
+  segment_seconds: 10       # REC 이 보고하는 세그먼트 길이. 클립 예약 실행 시각이
+                            # `확정 + 사후 10s + 이 값 + 여유 2s` 이므로(기능명세서 §4.4),
+                            # 짧은 시나리오는 이 값을 줄여 타임라인을 늘리지 않는다
 ```
 """
 
@@ -93,6 +96,9 @@ from aegis_contracts import (
     MetricsSummary,
     MuteAlertRequest,
     Policies,
+    RecRecordingStatus,
+    RecStatusResponse,
+    RecStorageStatus,
     SpecModel,
     TrackLostMsg,
     ViolationType,
@@ -301,22 +307,44 @@ class CaseSounds:
 class CaseRec:
     """`ClipExtractor` 대역 (§4.7).
 
-    `status` 를 바꾸면 `partial` · `not_found` 를 흉내 낼 수 있고, `available=False` 면
-    REC 이 죽은 상황이 된다 — 그때 잡은 `failed` 가 아니라 `pending` 으로 남아야 한다.
+    `extract_status` 를 바꾸면 `partial` · `not_found` 를 흉내 낼 수 있고,
+    `available=False` 면 REC 이 죽은 상황이 된다 — 그때 잡은 `failed` 가 아니라
+    `pending` 으로 남아야 한다.
     """
 
     def __init__(
         self,
         *,
-        status: ClipExtractStatus = "ready",
+        extract_status: ClipExtractStatus = "ready",
         available: bool = True,
         reason: str | None = None,
+        segment_seconds: int = 10,
     ) -> None:
-        self.status = status
+        self.extract_status = extract_status
         self.available = available
         self.reason = reason
+        self.segment_seconds = segment_seconds
         self.keyframes: list[tuple[int, datetime]] = []
         self.clips: list[ClipRequest] = []
+
+    async def status(self) -> RecStatusResponse:
+        """§4.7 `GET /status` — 서버는 여기서 세그먼트 길이를 읽어 예약 시각에 더한다.
+
+        **서버가 상수로 들고 있지 않다**(기능명세서 §4.4). 시나리오도 REC 역할이므로
+        같은 값을 보고한다.
+        """
+        if not self.available:
+            msg = "REC 에 닿지 못했다 (시나리오)"
+            raise RecUnavailableError(msg)
+        return RecStatusResponse(
+            cameras=[],
+            storage=RecStorageStatus(
+                total_gb=500, used_gb=0, free_gb=500, retention_days=7, oldest_segment_at=None
+            ),
+            recording=RecRecordingStatus(
+                segment_seconds=self.segment_seconds, snapshot_fps=1, snapshot_window_s=60
+            ),
+        )
 
     async def keyframe(self, cam_id: int, at: datetime) -> bytes:
         if not self.available:
@@ -330,10 +358,10 @@ class CaseRec:
             msg = "REC 에 닿지 못했다 (시나리오)"
             raise RecUnavailableError(msg)
         self.clips.append(request)
-        if self.status != "ready":
+        if self.extract_status != "ready":
             return ClipResponse(
-                status=self.status,
-                reason=self.reason or f"{self.status} (시나리오)",
+                status=self.extract_status,
+                reason=self.reason or f"{self.extract_status} (시나리오)",
             )
         return ClipResponse(
             status="ready",
@@ -454,8 +482,9 @@ async def run_case(case: str) -> CaseResult:
     player = CasePlayer(clock)
     mqtt = CaseMqtt(clock)
     rec = CaseRec(
-        status=str((raw.get("rec") or {}).get("status", "ready")),  # type: ignore[arg-type]
+        extract_status=str((raw.get("rec") or {}).get("status", "ready")),  # type: ignore[arg-type]
         available=bool((raw.get("rec") or {}).get("available", True)),
+        segment_seconds=int((raw.get("rec") or {}).get("segment_seconds", 10)),
     )
 
     manual = list(raw.get("manual") or [])
@@ -725,7 +754,7 @@ def _check_alerts(expected: list[Any], result: CaseResult) -> list[str]:
         for key in ("violation_type", "level", "repeat", "zone_id"):
             if key not in want:
                 continue
-            actual = command.type.value if key == "violation_type" else getattr(command, key)
+            actual = command.type if key == "violation_type" else getattr(command, key)
             if actual != want[key]:
                 problems.append(f"{label} {key}: 기대 {want[key]} · 실제 {actual}")
         if "at_s" in want:
