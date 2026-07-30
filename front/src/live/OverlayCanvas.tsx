@@ -72,6 +72,30 @@ export type OverlayDebug = {
   buffered: number
   /** 마지막 좌표가 낡은 정도(ms). `overlay_stale_ms` 초과면 흐리게 그린다. */
   ageMs: number | null
+  /**
+   * `requestVideoFrameCallback` 메타데이터에 **프레임 촬영 시각이 실려 오는가**.
+   *
+   * `captureTime` 이 있으면 고정 버퍼 없이 그 시각으로 직접 정합할 수 있다 — 지금 남아
+   * 있는 지터의 원인이 고정 버퍼이므로 그것이 되면 문제 자체가 사라진다. 다만 이 필드는
+   * WebRTC 경로에서 **송신 측이 `abs-capture-time` RTP 확장을 실어 보낼 때만** 채워지고,
+   * 그 값이 가리키는 순간이 카메라 센서인지 mediamtx 수신 지점인지에 따라 의미가 달라진다
+   * (후자면 영상 지연의 대부분인 카메라→mediamtx 0.27초가 빠져 고정 버퍼보다 나빠진다).
+   *
+   * 그래서 **읽어서 보여주기만 한다.** 정합 방식을 바꾸는 것은 이 값과
+   * `impliedOffsetMs` 를 실제 브라우저에서 확인한 뒤의 일이다.
+   */
+  captureTimeMs: number | null
+  /** `receiveTime`(수신 시각). 있으면 네트워크 몫을 분리해 볼 수 있다. */
+  receiveTimeMs: number | null
+  /** `rtpTimestamp`. 벽시계가 아니라 클럭레이트 카운터이므로 단독으로는 쓸 수 없다. */
+  rtpTimestamp: number | null
+  /**
+   * `captureTime` 이 있을 때 **표시 시각과 촬영 시각의 차이**(ms) = 실제 영상 경로 지연.
+   *
+   * 이 값이 적용 버퍼(`bufferMs`)와 같으면 고정 버퍼가 맞게 걸려 있다는 뜻이고,
+   * 다르면 그 차이가 곧 정합 오차다. **고정 버퍼를 대체할 값이 여기서 나온다.**
+   */
+  captureLagMs: number | null
 }
 
 type Props = {
@@ -147,6 +171,18 @@ export default function OverlayCanvas({ camId, videoRef, kind, policies, zones, 
         if (report && _now - lastDebugAt >= DEBUG_THROTTLE_MS) {
           lastDebugAt = _now
           const newest = bufferRef.current.newestAt
+          // §5 「구현 전제」 조사 — 브라우저가 **프레임 촬영 시각**을 주는가.
+          // 주면 고정 버퍼 없이 직접 정합할 수 있다. 지금은 읽어서 표시만 한다
+          // (정합 방식을 바꾸기 전에 실측이 있어야 한다 · `docs/INDEX.md` M5 절).
+          const extra = metadata as VideoFrameCallbackMetadata & {
+            captureTime?: number
+            receiveTime?: number
+            rtpTimestamp?: number
+          }
+          const captureAt =
+            extra.captureTime === undefined
+              ? null
+              : performance.timeOrigin + extra.captureTime
           report({
             displayAt,
             overlayTs: sample ? targetAt : null,
@@ -159,6 +195,13 @@ export default function OverlayCanvas({ camId, videoRef, kind, policies, zones, 
             arrivalLagMs: newest === null ? null : Date.now() - newest,
             buffered: bufferRef.current.size,
             ageMs: sample ? sample.ageMs : null,
+            captureTimeMs: captureAt,
+            receiveTimeMs:
+              extra.receiveTime === undefined
+                ? null
+                : performance.timeOrigin + extra.receiveTime,
+            rtpTimestamp: extra.rtpTimestamp ?? null,
+            captureLagMs: captureAt === null ? null : displayAt - captureAt,
           })
         }
       }

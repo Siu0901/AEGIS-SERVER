@@ -300,6 +300,39 @@ function DebugPanel({
           {probe.buffered}건 · {probe.ageMs === null ? '—' : `${Math.round(probe.ageMs)} ms`}
         </b>
       </div>
+      {/* ★ 고정 버퍼를 대체할 수 있는가 — 브라우저가 **프레임 촬영 시각**을 주는지 본다.
+          `captureTime` 이 있으면 그 값으로 직접 정합할 수 있고, 지금 남아 있는 지터의
+          원인(고정 버퍼)이 사라진다. 없으면 이 줄이 「없음」으로 남아 고정 버퍼를 쓰는
+          이유가 화면에 드러난다(§5 구현 전제 · docs/INDEX.md M5 절). */}
+      <div>
+        <span>촬영 시각(rVFC)</span>
+        <b>
+          {probe.captureTimeMs === null ? '없음 — 고정 버퍼 사용' : formatUtc(probe.captureTimeMs)}
+        </b>
+      </div>
+      {probe.captureLagMs !== null && (
+        <div
+          className={
+            Math.abs(probe.captureLagMs - probe.bufferMs) > 100 ? 'tile__debug--bad' : ''
+          }
+        >
+          {/* 이 값이 적용 버퍼와 100ms 이상 다르면 버퍼 기본값을 그만큼 고쳐야 한다. */}
+          <span>실제 영상 지연</span>
+          <b>
+            {Math.round(probe.captureLagMs)} ms (버퍼 대비{' '}
+            {Math.round(probe.captureLagMs - probe.bufferMs) >= 0 ? '+' : ''}
+            {Math.round(probe.captureLagMs - probe.bufferMs)} ms)
+          </b>
+        </div>
+      )}
+      {probe.rtpTimestamp !== null && (
+        <div>
+          <span>rtpTimestamp</span>
+          {/* 벽시계가 아니라 클럭레이트 카운터다. 단독으로는 정합에 쓸 수 없고,
+              `captureTime` 이 함께 있는지 확인하는 표시로만 둔다. */}
+          <b>{probe.rtpTimestamp}</b>
+        </div>
+      )}
     </div>
   )
 }
