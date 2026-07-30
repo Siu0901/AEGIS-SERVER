@@ -5,12 +5,15 @@
 
 기능명세서 §4.3 이 정한 음원은 넷이다.
 
-| 키 | 파일 | 안내 문구 |
-|---|---|---|
-| `no_helmet` | `no_helmet.wav` | "안전모를 착용해 주십시오" |
-| `zone_intrusion` | `zone_intrusion.wav` | "위험구역입니다. 즉시 이탈하십시오" |
-| `proximity` | `proximity.wav` | "중장비 작업 반경입니다. 물러나 주십시오" |
-| `fall` | `fall.wav` | 구조 안내 (**시정 유도 문구가 아니다** — §4.1) |
+| 키 | 파일 | 등급 | 안내 문구 |
+|---|---|---|---|
+| `no_helmet` | `no_helmet.wav` | 2 | "안전모를 착용해 주십시오" |
+| `zone_intrusion` | `zone_intrusion.wav` | 2 | "위험구역입니다. 즉시 이탈하십시오" |
+| `proximity` | `proximity.wav` | 2 | "지게차 작업 반경입니다. 물러나 주십시오" |
+| `fall` | `fall.wav` | **3** | 구조 안내 (**시정 유도 문구가 아니다** — §4.1) |
+
+등급(`level`)은 §3 `AlertCommand.level` 과 같은 값이며 **`fall` 만 3**(연속 부저)이다.
+§6 이 이 컬럼을 정의했으므로 위험 등급의 원천도 코드가 아니라 DB 다(절대규칙 6).
 
 `custom_notice` 는 수동 방송(FN-ALM-04 · §4.5 `sound`)의 예시 키다.
 
@@ -43,13 +46,18 @@ if isinstance(sys.stdout, io.TextIOWrapper):
 #: 음원 파일이 사는 곳. `assets/` 는 사람이 관리하는 자산 디렉토리다(CLAUDE.md 디렉토리 표).
 AUDIO_DIR = Path(__file__).resolve().parent.parent / "assets" / "audio"
 
-#: 기본 매핑. 기능명세서 §4.3 「음원 예」 그대로다.
-DEFAULT_SOUNDS: dict[str, str] = {
-    "no_helmet": "no_helmet.wav",
-    "zone_intrusion": "zone_intrusion.wav",
-    "proximity": "proximity.wav",
-    "fall": "fall.wav",
-    "custom_notice": "custom_notice.wav",
+#: 기본 매핑. 기능명세서 §4.3 「음원 예」 + §6 `alert_sounds` 컬럼(등급 · 표시 이름).
+#:
+#: **`level` 은 §3 이 정한 값이다** — `fall` 만 3(연속 부저)이고 나머지는 2(경고).
+#: 1(주의)은 위반이 아닌 이상 탐지(FN-AI-04)의 자리이며 이상 탐지는 방송을 발동하지
+#: 않는다. 이 표가 `server/domain/event_machine.py` 의 `SEVERITY` 대비값과 같아야
+#: 하고, `server/tests/test_alert_sounds.py` 가 그 일치를 잠근다.
+DEFAULT_SOUNDS: dict[str, tuple[str, int, str]] = {
+    "no_helmet": ("no_helmet.wav", 2, "안전모 미착용 안내"),
+    "zone_intrusion": ("zone_intrusion.wav", 2, "금지구역 이탈 안내"),
+    "proximity": ("proximity.wav", 2, "지게차 근접 경고"),
+    "fall": ("fall.wav", 3, "쓰러짐 구조 안내"),
+    "custom_notice": ("custom_notice.wav", 2, "일반 안내 방송"),
 }
 
 #: 자리를 채우는 무음의 길이(초). 실제 안내 음성이 대략 이 정도다.
@@ -65,7 +73,7 @@ def ensure_files(directory: Path = AUDIO_DIR) -> list[str]:
     """없는 음원 파일을 무음으로 만든다. **있는 파일은 덮어쓰지 않는다.**"""
     directory.mkdir(parents=True, exist_ok=True)
     made: list[str] = []
-    for filename in sorted(set(DEFAULT_SOUNDS.values())):
+    for filename in sorted({entry[0] for entry in DEFAULT_SOUNDS.values()}):
         path = directory / filename
         if path.exists():
             continue
@@ -81,18 +89,29 @@ def ensure_files(directory: Path = AUDIO_DIR) -> list[str]:
 def seed(*, force: bool) -> int:
     """매핑을 시드하고 반영된 행 수를 돌려준다(드라이버가 모르면 `-1`)."""
     rows = [
-        {"key": key, "filename": filename, "active": True}
-        for key, filename in DEFAULT_SOUNDS.items()
+        {
+            "violation_type": key,
+            "file_path": file_path,
+            "level": level,
+            "label": label,
+            "active": True,
+        }
+        for key, (file_path, level, label) in DEFAULT_SOUNDS.items()
     ]
     statement = insert(AlertSound).values(rows)
     if force:
         statement = statement.on_conflict_do_update(
-            index_elements=["key"],
-            set_={"filename": statement.excluded.filename, "active": statement.excluded.active},
+            index_elements=["violation_type"],
+            set_={
+                "file_path": statement.excluded.file_path,
+                "level": statement.excluded.level,
+                "label": statement.excluded.label,
+                "active": statement.excluded.active,
+            },
         )
     else:
-        # 현장에서 바꾼 매핑을 시드가 조용히 되돌리지 않는다(FN-CFG-03).
-        statement = statement.on_conflict_do_nothing(index_elements=["key"])
+        # 현장에서 바꾼 매핑·등급을 시드가 조용히 되돌리지 않는다(FN-CFG-03).
+        statement = statement.on_conflict_do_nothing(index_elements=["violation_type"])
 
     with create_db_engine().begin() as connection:
         return int(connection.execute(statement).rowcount)

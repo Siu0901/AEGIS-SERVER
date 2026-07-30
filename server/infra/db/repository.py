@@ -23,9 +23,10 @@ import logging
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from pathlib import PurePosixPath
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import Engine
+from sqlalchemy import select as sa_select
 from sqlmodel import Session, col, func, select
 
 from aegis_contracts import (
@@ -38,6 +39,8 @@ from aegis_contracts import (
     ViolationType,
     Zone,
 )
+from aegis_contracts.enums import AlertLevel
+from server.domain.alerts import SoundEntry
 from server.domain.event_machine import format_event_id
 from server.domain.metrics import MetricsRow
 from server.infra.db.models import AlertSound as SoundRow
@@ -241,26 +244,39 @@ class DbEventRepository:
         return await asyncio.to_thread(self._metrics_rows, from_, to)
 
     def _metrics_rows(self, from_: datetime | None, to: datetime | None) -> list[MetricsRow]:
-        statement = select(
-            EventRow.violation_type,
-            EventRow.status,
-            EventRow.resolution_sec,
-            EventRow.is_false_positive,
+        # **다섯 칸만 읽는다.** 이벤트 행에는 `embedding`(halfvec 3072)과 jsonb 가 여럿
+        # 붙어 있어 전량을 읽으면 지표 한 번에 그것들이 통째로 넘어온다.
+        #
+        # `sqlmodel.select` 가 아니라 `sqlalchemy.select` 를 쓰는 이유: 앞쪽 타입 스텁의
+        # 컬럼 오버로드가 **네 칸까지만** 있어 다섯째부터 반환 타입이 무너진다.
+        statement = sa_select(
+            col(EventRow.violation_type),
+            col(EventRow.status),
+            col(EventRow.resolution_sec),
+            col(EventRow.is_false_positive),
+            col(EventRow.alert_suppressed),
         )
         if from_ is not None:
             statement = statement.where(col(EventRow.detected_at) >= from_)
         if to is not None:
             statement = statement.where(col(EventRow.detected_at) <= to)
         with Session(self._engine) as session:
-            rows = list(session.exec(statement))
+            rows = list(session.execute(statement).all())
         return [
             MetricsRow(
                 violation_type=ViolationType(violation_type),
                 status=EventStatus(status),
                 resolution_sec=resolution_sec,
                 is_false_positive=is_false_positive,
+                alert_suppressed=alert_suppressed,
             )
-            for violation_type, status, resolution_sec, is_false_positive in rows
+            for (
+                violation_type,
+                status,
+                resolution_sec,
+                is_false_positive,
+                alert_suppressed,
+            ) in rows
         ]
 
     async def count_repeat_7d(
@@ -436,22 +452,22 @@ class DbZoneRepository:
 
 
 class DbSoundRepository:
-    """`server.domain.repository.SoundRepository` 구현. `alert_sounds` 테이블.
+    """`server.domain.repository.SoundRepository` 구현. 기능명세서 §6 `alert_sounds`
 
-    ⚠ 이 테이블은 **기능명세서 §6 에 없다**(FN-CFG-03 이 요구하는 매핑을 둘 자리가
-    정의되지 않았다). `docs/INDEX.md` 「명세서 확인 필요」 참조.
+    등급(`level`)까지 여기서 온다 — 관리자가 설정 화면에서 바꾸는 값이므로 코드에
+    박힌 표가 아니라 이 행이 §3 `AlertCommand.level` 의 원천이다(절대규칙 6).
     """
 
     def __init__(self, engine: Engine) -> None:
         self._engine = engine
 
-    async def load_sounds(self) -> dict[str, str]:
+    async def load_sounds(self) -> dict[str, SoundEntry]:
         return await asyncio.to_thread(self._load_sounds)
 
-    def _load_sounds(self) -> dict[str, str]:
+    def _load_sounds(self) -> dict[str, SoundEntry]:
         statement = select(SoundRow).where(col(SoundRow.active).is_(True))
         with Session(self._engine) as session:
-            return {row.key: row.filename for row in session.exec(statement)}
+            return {row.violation_type: _sound_entry(row) for row in session.exec(statement)}
 
 
 class DbPolicyRepository:
@@ -540,6 +556,9 @@ def _detail(row: EventRow, repeat_count_7d: int) -> EventDetail:
         regulation_refs=row.regulation_refs,  # type: ignore[arg-type]
         similar_incidents=row.similar_incidents,  # type: ignore[arg-type]
         timeline=_timeline(row),
+        clip_status=row.clip_status,  # type: ignore[arg-type]
+        clip_error=row.clip_error,
+        alert_suppressed=row.alert_suppressed,
     )
 
 
@@ -596,6 +615,9 @@ def _row(event: EventDetail) -> EventRow:
         similar_incidents=[item.model_dump() for item in event.similar_incidents],
         regulation_refs=[item.model_dump() for item in event.regulation_refs],
         llm_analysis=event.llm_analysis,
+        clip_status=event.clip_status,
+        clip_error=event.clip_error,
+        alert_suppressed=event.alert_suppressed,
     )
 
 
@@ -607,6 +629,28 @@ def _zone(row: ZoneRow) -> Zone:
         polygon_m=[(point[0], point[1]) for point in row.polygon_m],
         buffer_m=row.buffer_m,
         active=row.active,
+    )
+
+
+def _sound_entry(row: SoundRow) -> SoundEntry:
+    """`alert_sounds` 한 행 → 도메인 값.
+
+    `level` 은 §3 이 `1|2|3` 으로 좁혀 둔 값인데 DB 컬럼은 `int` 다. 범위를 벗어난
+    값이 들어 있으면 **조용히 고치지 않고** 기본 「경고」 급으로 낮추고 로그를 남긴다 —
+    ESP32 가 모르는 등급을 받으면 아무 패턴도 켜지 않아 경보가 사라진다.
+    """
+    level = row.level
+    if level not in (1, 2, 3):
+        log.error(
+            "alert_sounds.%s 의 level 이 %s 다 — §3 은 1|2|3 만 허용한다. 2 로 다룬다",
+            row.violation_type,
+            level,
+        )
+        level = 2
+    return SoundEntry(
+        file_path=row.file_path,
+        level=cast("AlertLevel", level),
+        label=row.label,
     )
 
 

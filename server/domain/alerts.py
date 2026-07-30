@@ -18,7 +18,27 @@ from datetime import datetime
 from aegis_contracts import ViolationType
 from aegis_contracts.enums import AlertLevel
 
-__all__ = ["AlertIntent"]
+__all__ = ["AlertIntent", "SoundEntry"]
+
+
+@dataclass(frozen=True, slots=True)
+class SoundEntry:
+    """`alert_sounds` 한 행. 기능명세서 §6 · FN-CFG-03
+
+    **위험 등급이 DB 에 있다는 것이 중요하다.** §6 이 "관리자가 설정 화면에서 유형별
+    음원과 **등급**을 바꿀 수 있다(절대규칙 6)"고 적었으므로, 코드에 박힌 표가 아니라
+    이 값이 §3 `AlertCommand.level` 과 §5.2 `severity` 의 원천이다. 상태머신은 이
+    매핑을 **주입받아** 순수성을 지킨다(절대규칙 2) — DB 를 직접 읽지 않는다.
+    """
+
+    file_path: str
+    """`assets/audio/` 기준 상대 경로. 루트를 벗어나는 값은 재생 단계에서 거부된다."""
+
+    level: AlertLevel
+    """`1` | `2` | `3`. `fall` 은 항상 3(§3)."""
+
+    label: str | None
+    """설정 화면 표시 이름. 미지정이면 `None` — `''`("빈 이름을 지정했다")와 다르다."""
 
 
 @dataclass(frozen=True, slots=True)

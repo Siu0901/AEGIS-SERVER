@@ -15,19 +15,17 @@ SPEC_TABLES = {
     "cameras",
     "vehicle_classes",
     "policies",
+    "alert_sounds",
     "normal_pool",
     "anomalies",
 }
 
-#: ⚠ **§6 에 없는데 서버가 만든 테이블.** 명세서가 요구하는 기능(FN-CFG-03 경고 음원
-#: 매핑 · P0)을 담을 자리가 데이터 모델에 정의되지 않아 추가한 것들이다.
+#: **§6 에 없는데 서버가 만든 테이블.** 지금은 비어 있다 — `alert_sounds` 가 §6 에
+#: 실리면서 여기서 `SPEC_TABLES` 로 옮겨갔다.
 #:
-#: 이 집합을 비워 두는 것이 목표다. 명세서 §6 에 반영되면 위 `SPEC_TABLES` 로 옮긴다.
-#: 여기 적지 않고 `SPEC_TABLES` 에 슬쩍 넣으면 "명세서에 있다"는 거짓이 된다
-#: (`docs/INDEX.md` 「명세서 확인 필요」 참조).
-EXTRA_TABLES = {
-    "alert_sounds",
-}
+#: 이 집합을 비워 두는 것이 목표다. 여기 적지 않고 `SPEC_TABLES` 에 슬쩍 넣으면
+#: "명세서에 있다"는 거짓이 된다(`docs/INDEX.md` 「명세서 확인 필요」 참조).
+EXTRA_TABLES: set[str] = set()
 
 #: 기능명세서 §6 `events` 컬럼 전량.
 SPEC_EVENT_COLUMNS = {
@@ -60,6 +58,8 @@ SPEC_EVENT_COLUMNS = {
     "clip_path",
     "keyframe_paths",
     "clip_status",
+    "clip_error",
+    "alert_suppressed",
     "embedding",
     "llm_analysis",
     "regulation_refs",
@@ -69,6 +69,12 @@ SPEC_EVENT_COLUMNS = {
 
 #: 기능명세서 §6 `zones` 컬럼 전량.
 SPEC_ZONE_COLUMNS = {"zone_id", "cam_id", "name", "polygon_m", "buffer_m", "active"}
+
+#: 기능명세서 §6 `alert_sounds` 컬럼 전량. FN-CFG-03
+#:
+#: `violation_type` 은 PK 이면서 수동 방송 음원 이름(§4.5 `sound`)도 담는다 —
+#: 두 쓰임이 같은 "이름 → 파일" 조회이므로 테이블을 나누지 않는다.
+SPEC_ALERT_SOUND_COLUMNS = {"violation_type", "file_path", "level", "label", "active"}
 
 
 def test_all_spec_tables_exist() -> None:
@@ -83,6 +89,12 @@ def test_events_columns_match_spec_exactly() -> None:
 def test_zones_columns_match_spec_exactly() -> None:
     columns = set(SQLModel.metadata.tables["zones"].columns.keys())
     assert columns == SPEC_ZONE_COLUMNS
+
+
+def test_alert_sounds_columns_match_spec_exactly() -> None:
+    """§6 `alert_sounds` — 서버가 임시로 만든 `key`·`filename` 이 아니라 명세서 컬럼이다."""
+    columns = set(SQLModel.metadata.tables["alert_sounds"].columns.keys())
+    assert columns == SPEC_ALERT_SOUND_COLUMNS
 
 
 def test_height_ratio_is_real() -> None:

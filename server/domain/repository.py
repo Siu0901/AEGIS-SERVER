@@ -27,6 +27,7 @@ from aegis_contracts import (
     ViolationType,
     Zone,
 )
+from server.domain.alerts import SoundEntry
 from server.domain.metrics import MetricsRow
 
 __all__ = [
@@ -167,18 +168,16 @@ class PolicyRepository(Protocol):
 
 
 class SoundRepository(Protocol):
-    """위반 유형·수동 방송 이름 → 음원 파일명. FN-ALM-01 · FN-ALM-04 · FN-CFG-03
+    """위반 유형·수동 방송 이름 → 음원 파일·등급·표시 이름.
 
-    ⚠ 대응 테이블(`alert_sounds`)이 **기능명세서 §6 에 없다.** FN-CFG-03(P0)이 요구하는
-    매핑을 둘 자리가 데이터 모델에 정의되지 않아 서버가 만들었다.
-    `docs/INDEX.md` 「명세서 확인 필요」 참조.
+    기능명세서 §6 `alert_sounds` · FN-ALM-01 · FN-ALM-04 · FN-CFG-03
 
-    **코드에 파일명을 박지 않기 위한 경계다**(절대규칙 6). 음원 교체가 배포가 아니라
-    설정 변경이어야 설치 현장마다 다른 안내 문구를 쓸 수 있다.
+    **코드에 파일명과 등급을 박지 않기 위한 경계다**(절대규칙 6). 음원과 등급 교체가
+    배포가 아니라 설정 변경이어야 설치 현장마다 다른 안내 문구와 경보 강도를 쓸 수 있다.
     """
 
-    async def load_sounds(self) -> dict[str, str]:
-        """`{key: filename}`. **꺼진(`active = false`) 항목은 빼고** 돌려준다."""
+    async def load_sounds(self) -> dict[str, SoundEntry]:
+        """`{violation_type: SoundEntry}`. **꺼진(`active = false`) 항목은 빼고** 돌려준다."""
         ...
 
 

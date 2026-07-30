@@ -118,6 +118,16 @@ class Event(SQLModel, table=True):
         default=None,
         description="pending / ready / failed — 예약 추출 상태",
     )
+    clip_error: str | None = Field(
+        default=None,
+        description="클립 추출 실패 사유. REC 의 reason 을 그대로 담고 note 에 섞지 않는다",
+    )
+    alert_suppressed: bool = Field(
+        default=False,
+        description=(
+            "경고 일시중지 중 확정되어 방송이 나가지 않은 이벤트. 시정률에서 전량 제외된다"
+        ),
+    )
 
     embedding: Any | None = Field(
         default=None,
@@ -198,15 +208,13 @@ class VehicleClassRow(SQLModel, table=True):
 
 
 class AlertSound(SQLModel, table=True):
-    """위반 유형 → 경고 음원 매핑. FN-ALM-01 · FN-CFG-03
+    """위반 유형 → 경고 음원 매핑. 기능명세서 §6 `alert_sounds` · FN-ALM-01 · FN-CFG-03
 
-    ⚠ **기능명세서 §6 에 없는 테이블이다.** 명세서는 FN-CFG-03(경고 음원 매핑 · P0)과
-    "위반 유형에 **사전 매핑된** 음원 파일"(§4.3)을 요구하는데 그 매핑을 둘 자리를
-    데이터 모델에 정의하지 않았다. 코드에 파일명을 박으면 절대규칙 6(하드코딩 금지)과
-    FN-CFG-03(화면에서 지정) 둘 다 깨지므로 여기 둔다.
-    `docs/INDEX.md` 「명세서 확인 필요」에 올려 두었다 — §6 에 추가할지는 사람이 정한다.
+    파일명을 코드에 박으면 절대규칙 6(하드코딩 금지)과 FN-CFG-03(화면에서 지정) 둘 다
+    깨진다. 관리자가 설정 화면에서 유형별 음원과 등급을 바꿀 수 있어야 하므로 §6 이
+    이 테이블을 정의했다.
 
-    `key` 는 두 가지로 쓰인다.
+    `violation_type` 은 두 가지로 쓰인다.
 
     | 값 | 쓰임 |
     |---|---|
@@ -215,12 +223,15 @@ class AlertSound(SQLModel, table=True):
 
     한 테이블로 둔 이유: 수동 방송의 `sound` 도 결국 "이름 → 파일" 조회다. 나누면 같은
     파일이 두 곳에 등록될 수 있고, 어느 쪽이 재생되는지가 호출 경로에 따라 갈린다.
+    §4.5 도 `sound` 를 "`alert_sounds` 테이블의 키"라고 적어 이 쓰임을 전제한다.
     """
 
     __tablename__ = "alert_sounds"
 
-    key: str = Field(primary_key=True, description="위반 유형 또는 수동 방송 음원 이름")
-    filename: str = Field(description="assets/audio/ 기준 파일명. 경로가 아니라 파일명이다")
+    violation_type: str = Field(primary_key=True, description="위반 유형 또는 수동 방송 음원 이름")
+    file_path: str = Field(description="assets/audio/ 기준 상대 경로. 루트를 벗어날 수 없다")
+    level: int = Field(default=2, description="1 | 2 | 3 — §3 AlertCommand.level 과 같은 척도")
+    label: str | None = Field(default=None, description="설정 화면 표시 이름. 미지정이면 null")
     active: bool = Field(default=True, description="꺼두면 그 유형은 방송하지 않는다")
 
 
