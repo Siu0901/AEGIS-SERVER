@@ -402,8 +402,13 @@ METRICS_SUMMARY_EXAMPLE: dict[str, Any] = {
 }
 
 
+#: 예시에 `suppressed` 가 없으므로 파싱용으로 0을 얹은 것. **예시 자체는 손대지 않는다** —
+#: 명세서에 적힌 것과 코드가 요구하는 것의 차이가 이 한 줄로만 드러나야 한다.
+SUMMARY_PAYLOAD: dict[str, Any] = METRICS_SUMMARY_EXAMPLE | {"suppressed": 0}
+
+
 def test_metrics_summary_example_parses() -> None:
-    summary = MetricsSummary.model_validate(METRICS_SUMMARY_EXAMPLE)
+    summary = MetricsSummary.model_validate(SUMMARY_PAYLOAD)
     assert summary.resolved_late == 1
     assert summary.correction_rate == 0.87
 
@@ -414,7 +419,7 @@ def test_metrics_summary_example_is_internally_consistent() -> None:
     예시가 `23` 이던 시절에는 응답만 보고 검산하면 한 건이 사라졌다. 지표를 외부에서
     검증할 수 있어야 한다는 것이 §6.7 의 전제이므로, 예시부터 그 검산을 통과해야 한다.
     """
-    summary = MetricsSummary.model_validate(METRICS_SUMMARY_EXAMPLE)
+    summary = MetricsSummary.model_validate(SUMMARY_PAYLOAD)
     denominator = summary.resolved + summary.resolved_late + summary.unresolved
     assert denominator + summary.undetermined == summary.total_violations
     assert summary.correction_rate == pytest.approx(summary.resolved / denominator, abs=0.005)
@@ -425,9 +430,30 @@ def test_metrics_summary_example_is_internally_consistent() -> None:
     assert 0.0 < summary.undetermined_rate < 0.1
 
 
+#: 기능명세서 §4.8 이 「`suppressed` 로 별도 집계」를 요구하는데 §4.2 응답 예시에는
+#: 아직 그 칸이 없다. 예시에 없다는 이유로 계약에서 빼면 지표가 자기 정의를 못 지키므로
+#: 응답에 두고, 그 차이를 여기 한 곳에 적어 둔다(`docs/INDEX.md` 「명세서 확인 필요」).
+SUMMARY_FIELDS_BEYOND_EXAMPLE = {"suppressed"}
+
+
 def test_metrics_summary_field_set_matches_spec() -> None:
-    """§4.2 예시에 있는 칸이 전부 있고, 없는 칸을 만들지 않았다."""
-    assert set(MetricsSummary.model_fields) == set(METRICS_SUMMARY_EXAMPLE)
+    """§4.2 예시에 있는 칸이 전부 있고, 그 밖에는 §4.8 이 요구한 것만 있다."""
+    assert (
+        set(MetricsSummary.model_fields)
+        == set(METRICS_SUMMARY_EXAMPLE) | SUMMARY_FIELDS_BEYOND_EXAMPLE
+    )
+
+
+def test_suppressed_is_excluded_from_both_ratios() -> None:
+    """§4.8 — 방송이 없었던 건은 시정률 분모·분자 어디에도 들어가지 않는다.
+
+    응답만 보고 검산할 수 있어야 하므로, `suppressed` 를 네 버킷 합에 더하면
+    `total_violations` 를 넘어서는 안 된다 — 별도 집계이지 모집단의 일부가 아니다.
+    """
+    summary = MetricsSummary.model_validate(SUMMARY_PAYLOAD | {"suppressed": 3})
+    denominator = summary.resolved + summary.resolved_late + summary.unresolved
+    assert denominator + summary.undetermined == summary.total_violations
+    assert summary.suppressed == 3
 
 
 def test_rates_are_nullable_when_the_denominator_is_empty() -> None:
@@ -437,7 +463,7 @@ def test_rates_are_nullable_when_the_denominator_is_empty() -> None:
     것처럼 보인다. 대시보드는 `null` 을 `–` 로 그린다.
     """
     empty = MetricsSummary.model_validate(
-        METRICS_SUMMARY_EXAMPLE
+        SUMMARY_PAYLOAD
         | {
             "correction_rate": None,
             "undetermined_rate": None,
@@ -797,6 +823,8 @@ POLICIES_EXAMPLE: dict[str, Any] = {
     "fall_axis_angle_min_deg": 55.0,
     "fall_stillness_s": 5.0,
     "anomaly_sample_interval_min": 5,
+    "mute_default_duration_s": 900,
+    "clip_extract_margin_s": 2,
 }
 
 

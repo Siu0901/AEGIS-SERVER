@@ -94,6 +94,23 @@ class Policies(SpecModel):
     clip_post_roll_s: float = 10.0
     """이벤트 클립의 사후 구간(초)."""
 
+    clip_extract_margin_s: float = 2.0
+    """사후 구간 기록 완료 후 클립 추출까지의 여유(초).
+
+    세그먼트 파일이 닫히기 전에 잘라내면 파일 끝이 손상된다(§4.5 · 기능명세서 §4.4).
+    예약 실행 시각은 `confirmed_at + clip_post_roll_s + 이 값` 이다.
+    `clip_pre_roll_s` · `clip_post_roll_s` 와 같은 성격인데 서버 설정에만 있던 값을
+    명세서가 정책 키로 올렸다.
+    """
+
+    # --- 경고 (FN-ALM-05) ---
+    mute_default_duration_s: float = 900.0
+    """경고 일시중지 기본 지속시간(초). `POST /alerts/mute` 가 `minutes` 를 생략했을 때 쓴다.
+
+    **기한 없는 일시중지는 없다.** 요청이 길이를 주지 않아도 이 값이 붙는다 —
+    꺼둔 것을 잊는 순간 감시가 조용히 멎는 상태를 만들지 않기 위해서다.
+    """
+
     # --- 오버레이 시간 정합 (FN-UI-02) ---
     # 버퍼는 **재생 경로별로 나뉜다.** 라이브 영상 지연이 경로에 따라 한 자릿수 배
     # 차이가 나므로(M1 실측: WebRTC 0.27~0.34초 · LL-HLS 약 2.5초) 단일 값으로는
@@ -152,6 +169,8 @@ class PolicyPatch(SpecModel):
     cls_min_conf: float | None = None
     clip_pre_roll_s: float | None = None
     clip_post_roll_s: float | None = None
+    clip_extract_margin_s: float | None = None
+    mute_default_duration_s: float | None = None
     overlay_buffer_webrtc_ms: float | None = None
     overlay_buffer_hls_ms: float | None = None
     overlay_stale_ms: float | None = None

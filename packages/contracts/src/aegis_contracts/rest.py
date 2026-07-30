@@ -12,8 +12,10 @@ from pydantic import AwareDatetime, Field
 
 from ._base import Homography, PointM, PointPx, SpecModel
 from .enums import (
+    AlertLevel,
     ChatRoute,
     ClipExtractStatus,
+    ClipStatus,
     DistributionBy,
     EventStatus,
     MetricBucket,
@@ -53,6 +55,7 @@ __all__ = [
     "EventSummary",
     "ImageAttachment",
     "ManualAlertRequest",
+    "ManualAlertResponse",
     "McuStatus",
     "MetricsDistributionQuery",
     "MetricsDistributionResponse",
@@ -62,6 +65,7 @@ __all__ = [
     "MetricsTimeseriesQuery",
     "MetricsTimeseriesResponse",
     "MuteAlertRequest",
+    "MuteAlertResponse",
     "NearbySnapshot",
     "RecCameraStatus",
     "RecStatusResponse",
@@ -225,6 +229,31 @@ class EventDetail(EventSummary):
     similar_incidents: list[SimilarIncident] = Field(default_factory=list)
     timeline: list[TimelineEntry] = Field(default_factory=list)
 
+    # ⚠ 아래 셋은 §6 `events` 컬럼이지만 §4.1 응답 예시에는 아직 칸이 없다.
+    # 세 값 모두 **다시 읽을 수 없으면 화면이 그릴 수 없는** 것들이라 상세 응답에 둔다.
+    # `docs/INDEX.md` 「명세서 확인 필요」에 올려 두었다(CLAUDE.md 절대규칙 8).
+    clip_status: ClipStatus | None
+    """`pending` / `ready` / `failed`. 확정 전이면 `null`.
+
+    이벤트 상세 화면(FN-UI-03)은 `pending` 동안 클립 대신 키프레임을 보여준다.
+    §5.2 `event_updated` 로는 그 순간 화면을 보고 있던 사람만 알 수 있으므로,
+    나중에 열어본 사람도 알 수 있도록 상세 응답이 같은 값을 준다.
+    """
+
+    clip_error: str | None
+    """클립 추출 실패 사유. REC 의 `reason`(§4.7)을 그대로 담는다(§6).
+
+    **`note` 와 섞지 않는다.** 관리자 메모와 기계가 남긴 실패 사유가 한 칸을 쓰면
+    사람이 쓴 문장을 지우거나 사유가 덮이는 일이 생긴다.
+    """
+
+    alert_suppressed: bool
+    """경고 일시중지 중에 확정되어 **방송이 나가지 않은** 이벤트인가(§6 · §4.8).
+
+    시정률 집계에서 전량 제외된다 — 작업자에게 알린 적이 없으니 시정할 기회도 없었다.
+    화면은 이 값이 참인 이벤트에 그 사실을 표시한다(미시정으로 보이면 안 된다).
+    """
+
 
 class EventPatchRequest(SpecModel):
     """`PATCH /events/{event_id}`. API명세서 §4.1
@@ -281,6 +310,17 @@ class MetricsSummary(SpecModel):
     unresolved: int
     """아직 해소되지 않은 건수(`alerted` · `re_alerted`)."""
     undetermined: int
+    suppressed: int
+    """경고 일시중지 중에 확정되어 **방송이 나가지 않은** 건수(기능명세서 §4.8).
+
+    시정률 분모·분자 모두에서 제외된다. 지표 이름이 「**방송 후** 시정률」이므로
+    방송이 없었던 이벤트는 모집단이 아니다 — 알린 적이 없으니 시정할 기회도 없었고,
+    미시정으로 세면 시스템 성능을 부당하게 깎는다. `expired` 와 같은 원칙으로
+    **제외하고 건수를 공개**한다.
+
+    ⚠ §4.2 응답 예시에는 아직 이 칸이 없다. §4.8 이 「`suppressed` 로 별도 집계」를
+    요구하므로 여기 둔다 — `docs/INDEX.md` 「명세서 확인 필요」 참조.
+    """
     avg_resolution_sec: int
     fall_events: int
     anomaly_flags: int
@@ -610,16 +650,48 @@ class ManualAlertRequest(SpecModel):
     """`POST /alerts/manual` 요청. API명세서 §4.5"""
 
     cam_id: int
-    sound: str
-    level: int
+    sound: str | None = None
+    """`alert_sounds` 의 키. **미지정 시 기본 안내 음원**을 쓴다(§4.5)."""
+    level: AlertLevel
+    """`1` | `2` | `3`. `notify_device` 가 참이면 이 값으로 MQTT 도 발행한다."""
+    notify_device: bool = True
+    """기본 `true`. 스피커만 울리고 경광등은 끄고 싶으면 `false`(§4.5)."""
+
+
+class ManualAlertResponse(SpecModel):
+    """`POST /alerts/manual` 응답(`202`). API명세서 §4.5"""
+
+    dispatched_at: AwareDatetime
 
 
 class MuteAlertRequest(SpecModel):
     """`POST /alerts/mute` 요청. API명세서 §4.5"""
 
-    cam_id: int
-    minutes: int
+    cam_id: int | None = None
+    """**생략하면 전체 카메라**에 적용된다(§4.5)."""
+    minutes: int | None = None
+    """`0` 은 즉시 해제다. 생략하면 `mute_default_duration_s`(기본 900초)를 쓴다.
+
+    **기한 없는 일시중지가 되지 않도록** 서버가 정책 기본값을 붙인다 —
+    꺼둔 것을 잊는 순간 감시가 조용히 멎는 상태가 오탐보다 위험하다.
+    """
     reason: str
+
+
+class MuteAlertResponse(SpecModel):
+    """`POST /alerts/mute` · `GET /alerts/mute` 응답. API명세서 §4.5
+
+    두 엔드포인트가 **같은 형태**를 돌려준다(§4.5). 조회 경로가 있어야 화면이
+    "언제 풀리는지"를 새로고침 뒤에도 알 수 있다.
+    """
+
+    cam_id: int | None
+    """`null` 이면 전체 카메라 대상이다."""
+    muted: bool
+    muted_until: AwareDatetime | None
+    """해제 시각. `muted` 가 거짓이면 `null`."""
+    reason: str | None
+    """일시중지 사유. `muted` 가 거짓이면 `null`."""
 
 
 # --------------------------------------------------------------------------
