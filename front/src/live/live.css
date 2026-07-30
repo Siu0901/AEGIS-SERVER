@@ -1,11 +1,18 @@
 /* 실시간 관제 (FN-UI-02) — 2채널 라이브 + 우측 상태 패널.
    시안 2페이지의 배치를 따르되 용어는 제조현장 기준이다(부록 B). */
 
+/* **영상은 제자리에 두고 우측 패널만 스크롤한다.**
+   관제 중에 진행 중 이벤트나 저장소 상태를 훑어보려고 스크롤했더니 영상이 화면 밖으로
+   나가면 그건 관제 화면이 아니다. 그래서 화면 높이를 뷰포트에 못박아 **페이지 자체
+   스크롤을 없애고**, 넘치는 쪽(우측 패널)만 자기 안에서 움직이게 한다.
+   `--topbar-h` 는 상단 바, 40px 은 `.app__content` 의 위아래 패딩(20px×2)이다. */
 .live {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 300px;
   gap: 16px;
-  align-items: start;
+  align-items: stretch;
+  height: calc(100vh - var(--topbar-h) - 40px);
+  min-height: 0;
 }
 
 .live__main {
@@ -14,6 +21,10 @@
   flex-direction: column;
   gap: 12px;
   min-width: 0;
+  /* 창이 아주 작아 타일이 2행으로 접히면 이쪽도 스크롤을 허용한다 — "영상이 고정"보다
+     "영상이 아예 안 보인다"가 나쁘다. 정상 크기에서는 넘치지 않아 스크롤바가 없다. */
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .live__grid {
@@ -21,17 +32,55 @@
   grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
   gap: 16px;
   min-width: 0;
+  /* 남은 높이를 타일이 나눠 먹으면 16:9 가 깨진다. 위에서부터 쌓고 남기는 둔다. */
+  align-content: start;
 }
 
 .live__side {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  min-height: 0;
+  overflow-y: auto;
+  /* 끝에 닿았을 때 스크롤이 페이지로 전파되지 않게 한다 — 전파되면 영상이 밀린다. */
+  overscroll-behavior: contain;
+  /* 스크롤바가 카드 테두리를 덮지 않도록 한 칸 띄운다. */
+  padding-right: 4px;
 }
 
+/* 어두운 테마에 맞춘 얇은 스크롤바. 기본 스크롤바는 카드 위에서 눈에 튄다. */
+.live__side::-webkit-scrollbar,
+.live__main::-webkit-scrollbar {
+  width: 8px;
+}
+
+.live__side::-webkit-scrollbar-thumb,
+.live__main::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+}
+
+.live__side::-webkit-scrollbar-thumb:hover,
+.live__main::-webkit-scrollbar-thumb:hover {
+  background: var(--text-dim);
+}
+
+.live__side::-webkit-scrollbar-track,
+.live__main::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 좁은 화면에서는 1열로 접히므로 높이를 풀어 평범한 페이지 스크롤로 돌린다.
+   1열에서 영상을 고정하면 우측 패널을 볼 방법이 없다. */
 @media (max-width: 1100px) {
   .live {
     grid-template-columns: minmax(0, 1fr);
+    height: auto;
+  }
+
+  .live__main,
+  .live__side {
+    overflow-y: visible;
   }
 }
 
