@@ -2,6 +2,8 @@
 """가짜 IP 카메라 2대를 mediamtx 로 무한 루프 송출한다.
 
     uv run tasks.py cams                              # testsrc2 테스트 패턴
+    uv run tasks.py cams --copy                       # ★ 재인코딩 없이 (CPU 거의 0)
+    uv run tasks.py cams --copy --source a.mp4        # 그 파일을 무한 루프
     uv run tasks.py cams --source a.mp4               # 카메라 1·2 모두 a.mp4
     uv run tasks.py cams --source a.mp4 --source b.mp4  # 카메라별 다른 영상
     uv run tasks.py cams --cams 2                     # 카메라 2만 (한 대만 끊어보려면)
@@ -22,7 +24,14 @@
 메인 위에 그린다(API명세서 §1.2). 640x640 같은 정사각으로 두면 좌표가 한쪽 축으로 눌린다.
 `require_16_9` 가 기동 전에 막는다.
 
-**타임코드를 화면에 태우는 것은 선택이 아니다.**
+**`--copy` 는 CPU 를 거의 쓰지 않는다.** 기본 모드는 `scale`·`drawtext`·`libx264` 를
+실시간으로 돌려 이 노트북에서 네 경로가 **CPU 405%**(논리 12코어 중 4개)를 먹는다.
+그 결과 인코더가 실시간을 못 따라가 `realtime` 필터가 2초씩 밀리고, mediamtx 가
+`reader is too slow, discarding 398 frames` 를 내며 화면이 끊긴다. `--copy` 는 클립을
+한 번만 인코딩해 캐시하고 그것을 `-c copy` 로 리먹스하므로 그 부하가 사라진다 —
+실물 카메라가 이미 h264 를 뱉는 상태와 같다. **대가는 타임코드가 없다는 것**이다.
+
+**타임코드를 화면에 태우는 것은 선택이 아니다.** (기본 모드에서)
 영상 지연을 재는 유일한 수단이고, M2 오버레이 시간 정합(±100ms)의 기준선이 된다.
 폰트를 찾지 못하면 타임코드 없이 송출하지 않고 오류로 중단한다 — 기준선이 조용히
 사라지는 것이 이 도구에서 가장 나쁜 실패다(CLAUDE.md 절대규칙 9).
@@ -41,6 +50,7 @@ import argparse
 import io
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -233,6 +243,155 @@ def input_args(source: str | None) -> list[str]:
     return ["-f", "lavfi", "-i", f"testsrc2=size={MAIN_SIZE}:rate={FPS}"]
 
 
+#: `--copy` 모드가 미리 인코딩해 두는 클립이 사는 곳. `media/` 는 git 에서 제외된다.
+PREPARED_DIR = Path(__file__).resolve().parent.parent / "media" / "run" / "prepared"
+
+#: `--copy` 모드에서 준비하는 클립 길이(초). 짧으면 루프가 자주 돌고, 길면 준비가 오래 걸린다.
+PREPARED_SECONDS = int(os.environ.get("CAMS_CLIP_SECONDS", "30"))
+
+
+def prepared_path(stream: Stream, source: str | None) -> Path:
+    """스트림 규격별 캐시 파일. **소스가 다르면 다른 파일**이어야 한다.
+
+    소스를 바꿨는데 같은 캐시를 재사용하면 화면에는 옛 영상이 계속 나오고, 그 사실이
+    아무 데도 드러나지 않는다.
+    """
+    tag = "testsrc2" if source is None else Path(source).stem
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", tag)[:40]
+    return PREPARED_DIR / f"{safe}_{stream.kind}_{stream.size}.mp4"
+
+
+def require_no_b_frames(clip: Path, stream: Stream) -> None:
+    """준비된 클립에 B-프레임이 없는지 확인한다. 있으면 **송출하지 않고 오류를 낸다.**
+
+    WebRTC 는 B-프레임 H264 를 받지 못한다 — mediamtx 가 세션을 열자마자
+    `WebRTC doesn't support H264 streams with B-frames` 로 닫아버리고, 화면에는
+    검은 타일만 남는다. 그 실패는 **브라우저 콘솔에도 서버 로그에도 안 보여서**
+    mediamtx 컨테이너 로그를 뒤져야 원인을 안다(실제로 그렇게 찾았다).
+
+    조용히 송출하고 화면이 검은 것보다, 여기서 멈추고 이유를 말하는 편이 낫다
+    (CLAUDE.md 절대규칙 9).
+    """
+    ffprobe = shutil.which("ffprobe")
+    if ffprobe is None:
+        raise CamsError("ffprobe 를 찾을 수 없다 — 준비된 클립을 검사할 수 없다")
+    result = subprocess.run(
+        [ffprobe, "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=has_b_frames",
+         "-of", "default=noprint_wrappers=1:nokey=1", str(clip)],
+        capture_output=True,
+        check=False,
+    )  # fmt: skip
+    text = result.stdout.decode("utf-8", "replace").strip()
+    if result.returncode != 0 or not text:
+        raise CamsError(f"{stream.label} 준비된 클립을 읽을 수 없다: {clip}")
+    if text != "0":
+        clip.unlink(missing_ok=True)
+        raise CamsError(
+            f"{stream.label} 준비된 클립에 B-프레임이 있다 (has_b_frames={text}).\n"
+            "  WebRTC 가 이 스트림을 받지 못해 화면이 검게 남는다.\n"
+            "  낡은 캐시를 지웠으니 다시 실행하면 -bf 0 으로 새로 인코딩한다."
+        )
+
+
+def prepare_clip(ffmpeg: str, stream: Stream, source: str | None, font: str) -> Path:
+    """`--copy` 송출용 클립을 **한 번만** 인코딩해 캐시한다.
+
+    이 함수가 `--copy` 모드의 전부다. 평상시 송출은 이 파일을 `-c copy` 로 리먹스하므로
+    ffmpeg 이 디코딩도 인코딩도 하지 않는다.
+
+    **왜 필요한가.** 기본 모드는 `scale` · `drawtext` · `libx264` 를 실시간으로 돌린다.
+    이 노트북(Intel Core 5 120U · 저전력 15W급)에서 실측하면 네 경로가 **CPU 405%**
+    (논리 12코어 중 4개)를 상시 점유하고, 그 결과 `realtime` 필터가 2초씩 밀렸다가
+    리셋되고(`time discontinuity detected: -2270672 us`) mediamtx 가
+    `reader is too slow, discarding 398 frames` 를 낸다. 화면 끊김의 직접 원인이다.
+    **실물 젯슨 환경에는 이 부하가 없다** — 카메라가 이미 h264 를 뱉는다. 순수한
+    개발 환경 부하이므로 개발 환경에서 없애는 것이 맞다.
+
+    **타임코드를 굽지 않는다.** 클립을 루프하면 파일 안의 시각이 되감겨 벽시계와
+    어긋나는데, 그 타임코드는 "지금 몇 시의 프레임인가"를 눈으로 대조하는 도구다
+    (오버레이 정합 실측). 어긋난 타임코드는 없는 타임코드보다 나쁘다. 정합을 재려면
+    기본 모드나 `--marker` 를 쓴다.
+    """
+    destination = prepared_path(stream, source)
+    if destination.exists() and destination.stat().st_size > 0:
+        # **캐시도 검사한다.** 규격이 바뀌기 전에 만든 클립이 남아 있으면 그것을 그대로
+        # 송출하게 되고, 화면이 검은 채로 이유가 드러나지 않는다.
+        require_no_b_frames(destination, stream)
+        say(f"      {stream.label:<11} 준비된 클립 재사용  {destination.name}")
+        return destination
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    say(f"      {stream.label:<11} 클립 인코딩 중… ({PREPARED_SECONDS}초 · 1회만)")
+    argv = [
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel", "error",
+        "-nostdin",
+        "-y",
+        # 준비 단계에서는 실시간 페이싱을 걸지 않는다 — 최대 속도로 인코딩해 끝낸다.
+        *(["-stream_loop", "-1", "-i", source] if source else
+          ["-f", "lavfi", "-i", f"testsrc2=size={MAIN_SIZE}:rate={FPS}"]),
+        "-t", str(PREPARED_SECONDS),
+        "-vf", f"scale={stream.size},fps={FPS}",
+        "-an",
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-profile:v", "baseline" if stream.kind == "sub" else "main",
+        # ★ **B-프레임을 만들지 않는다.** WebRTC 는 B-프레임 H264 를 받지 못하고
+        # (mediamtx: `WebRTC doesn't support H264 streams with B-frames`) 세션을 즉시
+        # 닫는다. 기본 모드는 `-tune zerolatency` 가 이것을 함께 껐기 때문에 드러나지
+        # 않았다. 실물 IP 카메라도 저지연을 위해 B-프레임을 쓰지 않으므로 규격에 맞다.
+        "-bf", "0",
+        "-pix_fmt", "yuv420p",
+        "-b:v", stream.bitrate,
+        "-maxrate", stream.bitrate,
+        "-bufsize", f"{int(stream.bitrate.rstrip('k')) * 2}k",
+        # GOP 2초를 유지한다 — 클립·키프레임 추출 정밀도가 여기 걸려 있다(FN-REC-03).
+        "-g", str(GOP),
+        "-keyint_min", str(GOP),
+        "-sc_threshold", "0",
+        "-movflags", "+faststart",
+        str(destination),
+    ]  # fmt: skip
+    del font  # 타임코드를 굽지 않으므로 폰트가 필요 없다.
+    result = subprocess.run(argv, capture_output=True, check=False)
+    if result.returncode != 0 or not destination.exists():
+        destination.unlink(missing_ok=True)
+        detail = result.stderr.decode("utf-8", "replace").strip().splitlines()[-6:]
+        raise CamsError(
+            f"{stream.label} 클립 준비 실패 (종료코드 {result.returncode})\n" + "\n".join(detail)
+        )
+    return destination
+
+
+def copy_argv(ffmpeg: str, stream: Stream, clip: Path) -> list[str]:
+    """준비된 클립을 **재인코딩 없이** 무한 루프 송출한다.
+
+    `-re` 로 실시간 페이싱을 한다 — `-c copy` 에서는 `realtime` 필터를 쓸 수 없다
+    (필터는 디코딩된 프레임에만 걸린다).
+
+    `-fflags +genpts` 를 붙이는 이유: `-stream_loop -1` 이 루프할 때 입력 pts 가
+    되감기는데, 그대로 RTSP 로 보내면 mediamtx 가 타임스탬프 역행을 보고 세션을
+    끊는다. 새 pts 를 생성하게 해 루프 경계를 이어 붙인다.
+    """
+    return [
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel", "warning",
+        "-nostdin",
+        "-re",
+        "-fflags", "+genpts",
+        "-stream_loop", "-1",
+        "-i", str(clip),
+        "-an",
+        "-c:v", "copy",
+        "-f", "rtsp",
+        "-rtsp_transport", "tcp",
+        stream.url,
+    ]  # fmt: skip
+
+
 def ffmpeg_argv(
     ffmpeg: str, stream: Stream, source: str | None, font: str, *, marker: bool = False
 ) -> list[str]:
@@ -339,6 +498,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--copy",
+        action="store_true",
+        help=(
+            "★ 재인코딩 없이 송출한다 (CPU 를 거의 쓰지 않는다). 클립을 한 번만 "
+            "인코딩해 캐시하고 그것을 무한 루프로 리먹스한다. 실물 카메라가 이미 "
+            "h264 를 뱉는 것과 같은 상태다. 대가로 영상에 타임코드가 없다 — "
+            "정합을 눈으로 재려면 기본 모드나 --marker 를 쓴다"
+        ),
+    )
+    parser.add_argument(
         "--marker",
         action="store_true",
         help=(
@@ -386,21 +555,35 @@ def main(argv: list[str] | None = None) -> int:
                 "  설치해 PATH 에 넣어라 (Windows: winget install Gyan.FFmpeg)."
             )
 
-        font = drawtext_font()
+        if args.copy and args.marker:
+            # marker 는 매 프레임 사각형을 다시 그린다 — 재인코딩 없이는 불가능하다.
+            # 조용히 한쪽을 무시하면 정합을 재는 줄 알고 아무 표시 없는 영상을 본다.
+            raise CamsError("--copy 와 --marker 는 함께 쓸 수 없다 (marker 는 재인코딩이 필요하다)")
+
+        font = drawtext_font() if not args.copy else ""
         per_cam = sources_for_cams(args.source, cam_ids)
         if not args.source:
             say("[fake_cams] --source 없음 - testsrc2 테스트 패턴을 송출한다")
 
-        for stream in planned_streams(cam_ids):
+        streams = planned_streams(cam_ids)
+        clips: dict[str, Path] = {}
+        if args.copy:
+            say(f"[fake_cams] --copy: 재인코딩 없이 송출한다 (클립 {PREPARED_SECONDS}초 루프)")
+            say("            영상에 타임코드가 없다 — 정합 실측은 기본 모드나 --marker 로 한다")
+            for stream in streams:
+                clips[stream.label] = prepare_clip(ffmpeg, stream, per_cam[stream.cam_id], font)
+
+        for stream in streams:
             say(
                 f"[fake_cams] {stream.label:<10} {stream.size}@{FPS} "
                 f"{stream.bitrate:>6}  ->  {stream.url}"
             )
-            processes.append(
-                subprocess.Popen(
-                    ffmpeg_argv(ffmpeg, stream, per_cam[stream.cam_id], font, marker=args.marker)
-                )
+            argv_for_stream = (
+                copy_argv(ffmpeg, stream, clips[stream.label])
+                if args.copy
+                else ffmpeg_argv(ffmpeg, stream, per_cam[stream.cam_id], font, marker=args.marker)
             )
+            processes.append(subprocess.Popen(argv_for_stream))
             labels.append(stream.label)
     except CamsError as exc:
         stop_all(processes, pidfile)
