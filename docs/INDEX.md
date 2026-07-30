@@ -22,7 +22,7 @@
 | **M3** | 상태머신과 지표 | 확정 · 해소 · 쿨다운 · 소실 유예 · **재결합** · 수동 정정 · 반복 위반 · **시정률/판정 불가율** |
 | **M4** | 경고와 클립 | 음성 방송 · 경광등(MQTT) · 긴급 알림 · 수동 방송 · 클립 예약 추출 · 클라우드 격리 |
 | **M5** | 관제 화면 P0 | 개요 · 실시간 관제(진행 중 이벤트·수동 방송) · 이벤트 · `tasks.py types` · vitest |
-| **M6** | 설정과 비전 로직 | 캘리브레이션 · 구역 편집 · 음원 매핑 · 정책 · `packages/vision` 순수 계산 |
+| **M6** | 설정과 좌표계 | 캘리브레이션 · 구역 편집 · 음원 매핑 · 정책 · `packages/vision` 순수 계산 |
 | **M7** | 지능 기능 | 임베딩 · 장면 검색 · LLM 분석 · 규정 매핑 · 챗봇 · 브리핑 |
 | **M8** | 분석·보고서 | 분석 화면 · 이상 탐지 · 유사 사례 · 주간 보고서 (P2 다수) |
 | **M9** | 엣지 실물 이식 | 시뮬레이터를 실물 Jetson 러너로 교체 |
@@ -43,10 +43,10 @@
 | FN-DET-03 | 객체 추적 및 트랙 ID 부여 (ByteTrack) | P0 | EDGE | 기능 §4.1 | M9 | `edge/track.py` | ⬜ |
 | FN-DET-04 | 2단계 안전모 분류 (크롭 기반 · 게이팅) | P0 | EDGE | 기능 §4.1 | M9 | `edge/classify.py` | ⬜ |
 | FN-DET-05 | 분류 결과 캐싱 (`cls_cache_ms`) | P0 | EDGE | 기능 §4.1 | M9 | `edge/classify.py` | ⬜ |
-| FN-DET-06 | 접지점 산출 및 실좌표 변환 | P0 | EDGE | 기능 §4.1 · API §6.1·6.2 | M6 (로직) / M9 (엣지) | `packages/vision/foot_point.py` · `homography.py` | ⬜ |
-| FN-DET-07 | 금지구역 침입 판정 (히스테리시스) | P0 | EDGE | 기능 §4.1 | M6 / M9 | `packages/vision/zones.py` | ⬜ |
-| FN-DET-08 | 지게차 근접 판정 | P1 | EDGE | 기능 §4.1 | M6 / M9 | `packages/vision/distance.py` | ⬜ |
-| FN-DET-09 | 마스크 기반 최근접 거리 | P1 | EDGE | 기능 §4.1 · API §6.5 | M6 / M9 | `packages/vision/distance.py` | ⬜ |
+| FN-DET-06 | 접지점 산출 및 실좌표 변환 | P0 | EDGE | 기능 §4.1 · API §6.1·6.2 | M6 (로직) / M9 (엣지) | `packages/vision/footpoint.py` · `homography.py` · `sim/edge_sim/scripted.py` | ✅ (로직·sim) |
+| FN-DET-07 | 금지구역 침입 판정 (히스테리시스) | P0 | EDGE | 기능 §4.1 | M6 / M9 | `packages/vision/zones.py` · `sim/tests/test_coordinates.py` | ✅ (로직) |
+| FN-DET-08 | 지게차 근접 판정 | P1 | EDGE | 기능 §4.1 | M6 / M9 | `packages/vision/distance.py` | 🟡 (거리·반경 로직 완료 · 판정은 M9) |
+| FN-DET-09 | 마스크 기반 최근접 거리 | P1 | EDGE | 기능 §4.1 · API §6.5 | M6 / M9 | `packages/vision/distance.py` | ✅ (로직) |
 | FN-DET-10 | 쓰러짐 판정 (3조건 동시 충족) | P1 | EDGE | 기능 §4.1 · API §6.4 | M6 / M9 | `packages/vision/posture.py` | ⬜ |
 | FN-DET-11 | 뎁스 온디맨드 검증 | P1 | EDGE | 기능 §4.1 · API §6.6 | M9 | `edge/depth.py` | ⬜ |
 | FN-DET-12 | 이벤트 후보 생성 및 전송 | P0 | EDGE | 기능 §4.1 · API §2.2 | M2 (sim) / M9 | `sim/edge_sim/` · `sim/cases/` · `edge/rules.py` | ✅ (sim) |
@@ -108,7 +108,7 @@
 |---|---|---|---|---|---|---|---|
 | FN-REC-01 | 라이브 재스트리밍 (1080p 메인) | P0 | SRV | 기능 §4.4 | M1 | `server/infra/stream/` · `deploy/mediamtx.yml` · `front/src/live/` | ✅ |
 | FN-REC-02 | 7일 링버퍼 녹화 | P0 | REC | 기능 §4.4 · API §4.7 | M1 | `recorder/capture.py` · `recorder/retention.py` | ✅ |
-| FN-REC-03 | 이벤트 클립 · 키프레임 추출 | P0 | REC/SRV | 기능 §4.4 · API §4.7 | M1 (REC API) / M4 (예약 실행) | `recorder/clips.py` · `server/infra/clip/service.py` | ✅ |
+| FN-REC-03 | 이벤트 클립 · 키프레임 추출 (스냅샷 버퍼) | P0 | REC/SRV | 기능 §4.4 · API §4.7 | M1 (REC API) / M4 (예약 실행) / M6 (타이밍·버퍼) | `recorder/clips.py` · `recorder/snapshots.py` · `server/infra/clip/service.py` | ✅ |
 | FN-REC-04 | 이벤트 DB 저장 | P0 | SRV | 기능 §4.4 · §6 | M2 | `server/infra/db/repository.py` · `server/app/routes/events.py` | ✅ |
 | FN-REC-05 | 저장 용량 관리 | P1 | REC | 기능 §4.4 | M1 | `recorder/retention.py` | ✅ |
 
@@ -123,7 +123,8 @@
 > 것은 정상 동작이며 `partial` 이 아니다.**
 >
 > **예약 큐를 메모리에 두지 않았다.** 예약의 유일한 표현은 DB 의 `clip_status = pending`
-> 이고 실행 시각은 `confirmed_at + clip_post_roll_s + margin` 으로 계산된다. 그래서
+> 이고 실행 시각은 `confirmed_at + clip_post_roll_s + rec_segment_seconds +
+> clip_extract_margin_s` 로 계산된다. 그래서
 > **서버가 죽어도 예약이 남고, 재시작 뒤 첫 조회가 곧 복구다** — 복구 코드가 따로 없다.
 > `sim/cases/clip_recovery.yaml` 이 이것을 잠근다.
 >
@@ -132,9 +133,15 @@
 > `partial` · `not_found` 는 REC 이 **정상 동작한 결과**이므로 `failed` + 사유 기록이다.
 
 > **클립은 확정 즉시 추출하지 않는다.** 확정 순간에는 사후 구간이 아직 녹화되지 않았다.
-> `confirmed_at + clip_post_roll_s + margin(2초)` 시점에 예약 실행하고, 그동안
-> `clip_status = pending` 으로 노출한다. 키프레임만 즉시 추출한다.
+> `confirmed_at + clip_post_roll_s + rec_segment_seconds + clip_extract_margin_s` 시점에
+> 예약 실행하고, 그동안 `clip_status = pending` 으로 노출한다.
+> **세그먼트 길이는 REC 의 `GET /status` 에서 읽는다** — 서버에 상수로 두면 REC 설정을
+> 바꿨을 때 아직 열려 있는 파일을 잘라 뒤가 빈 클립이 `ready` 로 굳는다(M6 에서 반영).
 > 서버 재시작 시 `pending` 잡은 DB에서 복구해 재실행한다.
+>
+> **키프레임은 세그먼트가 아니라 REC 의 메모리 스냅샷 버퍼에서 나온다**(초당 1장 · 최근
+> 60초 · §4.4). 확정 순간의 프레임은 아직 어떤 파일에도 없어서, 세그먼트만 보던 시절에는
+> 그 요청이 500 이었고 이벤트 상세 화면에 보여줄 그림이 없었다.
 
 ---
 
@@ -168,7 +175,7 @@
 | FN-UI-04 | 영상 검색 — 자연어 질의 · 유사도순 결과 | P1 | WEB | 기능 §4.6 · API §4.3 | M7 | `front/src/pages/SearchPage.tsx` | ⬜ |
 | FN-UI-05 | 분석 · 보고서 — 시정률 추이 · 반복 순위 · 히트맵 · 이상 탐지 | P1 | WEB | 기능 §4.6 · API §4.2 | M8 | `front/src/pages/AnalysisPage.tsx` | ⬜ |
 | FN-UI-06 | 챗봇 — 통계·검색·브리핑 질의 | P1 | WEB | 기능 §4.6 · API §4.4 | M7 | `front/src/pages/AssistantPage.tsx` | ⬜ |
-| FN-UI-07 | 설정 — 구역 그리기 · 캘리브레이션 · 음원 · 임계값 · 시스템 | P1 | WEB | 기능 §4.6 · API §4.5 | M6 | `front/src/pages/SettingsPage.tsx` | ⬜ |
+| FN-UI-07 | 설정 — 구역 그리기 · 캘리브레이션 · 음원 · 임계값 · 시스템 | P1 | WEB | 기능 §4.6 · API §4.5 | M6 | `front/src/pages/SettingsPage.tsx` · `settings.css` · `front/src/api/settings.ts` | ✅ |
 
 > **오버레이는 도착 즉시 그리지 않는다.** `ts` 기준 지연 버퍼에 담았다가 재생 중인
 > 프레임 시각에 맞춰 그린다. 정합 오차 목표 **±100ms**.
@@ -191,11 +198,11 @@
 
 | FN-ID | 기능명 | 우선 | 계층 | 명세 위치 | 마일스톤 | 코드 위치(예정) | 상태 |
 |---|---|---|---|---|---|---|---|
-| FN-CFG-01 | 카메라 캘리브레이션 (지면 4점 → 호모그래피) | P0 | SRV/WEB | 기능 §4.7 · API §4.5 | M6 | `packages/vision/homography.py` · `server/app/routes/cameras.py` | ⬜ |
-| FN-CFG-02 | 금지구역 편집 (폴리곤 → 지면 좌표) | P0 | SRV/WEB | 기능 §4.7 · API §4.5 | M6 | `server/app/routes/zones.py` · `front/src/pages/SettingsPage.tsx` | ⬜ |
-| FN-CFG-03 | 경고 음원 매핑 (유형별 음원 + **등급**) | P0 | SRV/WEB | 기능 §4.7 · §6 | M4 (저장소) / M5 (§6 컬럼 반영) / M6 (화면) | `server/infra/db/models.py`(`alert_sounds`) · `server/infra/audio/library.py` · `scripts/seed_sounds.py` | 🟡 (화면만 남음) |
-| FN-CFG-04 | 임계값 정책 관리 | P1 | SRV/WEB | 기능 §4.7 · API §4.5 | M6 | `server/app/routes/policies.py` | ⬜ |
-| FN-CFG-05 | 위험 반경 설정 (클래스별) | P1 | SRV/WEB | 기능 §4.7 · API §4.5 | M6 | `server/app/routes/vehicle_classes.py` | ⬜ |
+| FN-CFG-01 | 카메라 캘리브레이션 (지면 4점 → 호모그래피 · 재투영 오차 표시) | P0 | SRV/WEB | 기능 §4.7 · API §4.5 | M6 | `packages/vision/homography.py` · `server/app/routes/cameras.py` · `scripts/seed_cameras.py` | ✅ |
+| FN-CFG-02 | 금지구역 편집 (폴리곤 → 지면 좌표 · `zone_updated` 발행) | P0 | SRV/WEB | 기능 §4.7 · API §4.5 · §5.4 | M6 | `server/app/routes/zones.py` · `front/src/pages/SettingsPage.tsx` | ✅ |
+| FN-CFG-03 | 경고 음원 매핑 (유형별 음원 + **등급** · `fall` 하한 3) | P0 | SRV/WEB | 기능 §4.7 · §6 · API §4.5 | M4 (저장소) / M5 (§6 컬럼) / M6 (API·화면) | `server/app/routes/sounds.py` · `server/domain/alerts.py`(`check_level`) · `front/src/pages/SettingsPage.tsx` | ✅ |
+| FN-CFG-04 | 임계값 정책 관리 (**재시작 없이 반영**) | P1 | SRV/WEB | 기능 §4.7 · API §4.5 | M6 | `server/app/routes/policies.py` · `front/src/pages/SettingsPage.tsx` | ✅ |
+| FN-CFG-05 | 위험 반경 설정 (클래스별) | P1 | SRV/WEB | 기능 §4.7 · API §4.5 | M6 | `server/app/routes/vehicles.py` · `server/infra/db/repository.py` | ✅ |
 
 ---
 
@@ -804,6 +811,160 @@ M5 본작업이 끝난 뒤 **실제로 스택을 띄워 쓰면서** 나온 것�
 
 ---
 
+## M6 산출물 (설정과 좌표계)
+
+**이 단계에서 실좌표계가 성립했다.** 지금까지 시뮬레이터가 미터값을 손으로 실어 보냈지만,
+이제 픽셀에서 미터를 계산하는 코드(`packages/vision`)가 생겼고 시나리오·설정 화면·서버가
+**같은 호모그래피 하나**를 쓴다.
+
+| 항목 | 위치 | 근거 | 상태 |
+|---|---|---|---|
+| `homography.py` — 실측 4점 → H(DLT · Hartley 정규화) · 픽셀↔미터 양방향 · 재투영/왕복 오차 | `packages/vision/src/aegis_vision/homography.py` | API §6.2 · §4.5 | ✅ |
+| `footpoint.py` — 마스크 하위 8% 띠의 x 중앙값 · bbox 경로 · `foot_conf` 3요인 | `.../footpoint.py` | API §6.1 | ✅ |
+| `zones.py` — 점-다각형 · 부호 있는 거리 · `buffer_m` 히스테리시스 | `.../zones.py` | FN-DET-07 | ✅ |
+| `distance.py` — `bbox_center` / `mask_nearest` · 위험 반경 경계 포함 | `.../distance.py` | API §6.5 · FN-DET-08·09 | ✅ |
+| FN-CFG-01 캘리브레이션 API + 화면 (재투영 오차 표시 · 구역 재발행) | `server/app/routes/cameras.py` · `front/src/pages/SettingsPage.tsx` | §4.5 · §5.4 | ✅ |
+| FN-CFG-02 구역 편집 — 화면에서 그린 **픽셀**을 서버가 미터로 변환 · `zone_updated` 발행 | `server/app/routes/zones.py` | §4.5 · §5.4 | ✅ |
+| FN-CFG-03 음원 매핑 API (`GET`/`PUT /alert-sounds`) · `fall` 등급 하한 422 | `server/app/routes/sounds.py` · `server/domain/alerts.py` | §4.5 · §3 | ✅ |
+| FN-CFG-04 `PATCH /policies` — **재시작 없이** 상태머신·경고·클립에 즉시 반영 | `server/app/routes/policies.py` | §4.5 | ✅ |
+| FN-CFG-05 `GET`/`PATCH /vehicle-classes` — 위험 반경 | `server/app/routes/vehicles.py` | §4.5 | ✅ |
+| FN-UI-07 설정 화면 — 영상 위 4점 클릭 · 폴리곤 그리기 · 음원 표 · 임계값 격자 · 위험 반경 | `front/src/pages/SettingsPage.tsx` · `settings.css` | 시안 4p · 부록 A-1 | ✅ |
+| edge_sim 이 **정규화 픽셀만** 싣고 `packages/vision` 으로 미터를 계산 | `sim/edge_sim/scripted.py` · `scripts/seed_cameras.py` | FN-DET-06 | ✅ |
+| 좌표 일관성 회귀 — 미터 직접 기재 금지 · `in_zone` 기하 일치 · `within_danger_radius` 검산 | `sim/tests/test_coordinates.py` | — | ✅ |
+
+### 기존 시나리오의 좌표는 두 벌이었다 (★ 이번에 드러난 것)
+
+M6 이전 시나리오는 `foot_point`(픽셀)와 `foot_point_m`(미터)를 **각각 손으로** 적었다.
+둘이 어긋나도 아무 테스트가 깨지지 않는다 — 서버는 미터만 보고 화면은 픽셀만 보기 때문이다.
+변환 경로를 붙이기 전에 그 두 벌이 서로 맞는지부터 쟀다.
+
+| 검사 | 결과 |
+|---|---|
+| cam1 의 (픽셀, 미터) 쌍 41개에 **하나의 호모그래피**가 맞는가 | **아니다.** 최소제곱 잔차 평균 5.72 m · 최대 83 m |
+| 같은 검사를 RANSAC 으로 (오차 0.3 m 이내) | 41쌍 중 **24쌍만** 한 평면 위에 있었다 |
+| cam2 의 15쌍 | **전부 일치**(중앙값 0.10 m · 최대 0.27 m) — 이쪽은 실제로 변환해 만든 값이다 |
+| `no_helmet` 한 파일만 따로 | 잔차 0.006 m — 핀홀 모델로 되맞추니 **높이 2.18 m · 틸트 5.9°** 가 나왔다 |
+
+즉 **변환이 틀린 것이 아니라 기존 좌표 일부가 손으로 쓰인 것**이었다. 더 나쁜 것은
+좌표와 라벨이 이미 어긋나 있었다는 점이다 — 아래는 **M6 이전부터 틀려 있던** 것들이다.
+
+| 시나리오 | 적혀 있던 미터 | 적혀 있던 `in_zone` | 사실 |
+|---|---|---|---|
+| `alert_suppressed` p7 | (12.4, 7.88) | `forklift_lane` | 구역은 x 2~7 m 다 — **밖인데 안이라고 적혀 있었다** |
+| `false_positive` p5 | (14.2, 8.4) | `forklift_lane` | 같은 오류 |
+| `gating_freeze` p3 | (9.8, 14.2) | `forklift_lane` | y 도 벗어난다 |
+| `fall_excluded` p3 | (3.1, 7.6) | `null` | **안인데 밖이라고 적혀 있었다** |
+| `no_helmet_resolved` p3 | (6.02, 7.91) | `null` | 같은 오류 |
+
+**복원한 카메라 기하를 개발용 캘리브레이션으로 굳혔다**(`scripts/seed_cameras.py`).
+바닥의 6 m × 5 m 격자 네 점(x 3~9 · y 7~12)을 그 모델로 투영한 값이며, 그래서 기존 픽셀
+경로가 예전 미터값과 **거의 같은 위치**로 변환된다 — `no_helmet` 기준 (8.28, 9.00) →
+(8.23, 8.81), (6.49, 8.59) → (6.49, 8.47). `in_zone` · `zone_id` 는 이제 **계산해서 채웠고**,
+같은 규칙을 `sim/tests/test_coordinates.py` 가 매번 검산한다.
+
+### 시나리오 기대값은 유지됐다
+
+`uv run tasks.py cases` — **12개 중 12개 통과**(시정률·판정 불가율·경고 목록·클립 상태 전부).
+좌표계를 바꿨는데도 기대값이 그대로인 이유는 상태머신이 보는 것이 `violation_type` ·
+`observed_ms` · `nearby[].dist_m` 이지 접지점 자체가 아니기 때문이다. 다만 **클립 예약
+시각이 12초에서 22초로 늘어** 세 시나리오의 꼬리를 조정했다.
+
+| 시나리오 | 조정 | 이유 |
+|---|---|---|
+| `normal_resolve` · `alert_muted` | `tail_s: 9.0` | 해소(+16초) 뒤라 시간을 더 흘려보내도 상태가 바뀌지 않는다 |
+| `clip_recovery` | `rec.segment_seconds: 2` | 이 시나리오의 주제가 「재시작을 넘어 pending → ready」다. tail 을 22초 늘리면 관측이 끊긴 트랙이 `lost` 로 가서 보려는 것이 흐려진다 |
+| `alert_suppressed` | 트랙 7 의 기대를 `clip_status: pending` 으로 | 확정(+14.5초) + 22초는 시나리오가 끝난 뒤다. **늦게 확정된 이벤트의 클립이 아직 준비되지 않은 것이 정상**이고, 그것을 기대값에 그대로 적었다 |
+
+### 실측 — 화면을 실제로 켜서 확인한 것
+
+실제 서버 · PostgreSQL · REC · 가짜 카메라 2대 · 브라우저에서 조작했다.
+
+| 확인 | 결과 |
+|---|---|
+| 영상 위 4점 클릭 → 실측값 입력 → 저장 | `cam1 캘리브레이션 저장 — 재투영 오차 0.000 m` |
+| 한 직선 위 4점(통로 한 줄을 따라 찍는 실수) | **422** · 화면에 「한 직선 위에 있다 — 지면 평면이 정해지지 않는다」 |
+| 폴리곤 그리기 → 저장 | 픽셀 4점 → 지면 (3.73, 7.34) (7.24, 7.34) (7.14, 11.29) (3.58, 11.29) · 서버가 변환 |
+| 저장된 구역이 영상 위에 다시 그려지는가 | 3개 폴리곤 렌더 (미터 → 픽셀 역변환) |
+| 캘리브레이션 없는 카메라에 구역 저장 | 422 「먼저 4점 캘리브레이션을 하세요」 |
+| `PATCH /policies` (확정 3→4초 · 쿨다운 30→25초) | 200 · 응답이 갱신 후 전량 · 재시작 없음 |
+| `PUT /alert-sounds/fall` `level: 2` | **422** — 안전 하한은 설정 대상이 아니다 |
+| 확정 → 방송 지연 | **113 ms** (FN-ALM-01 요구 1초) |
+| 확정 시각 키프레임 | **2장 저장** (이전에는 0장 · REC 이 500 을 냈다) |
+| 클립 | `ready` · 6.7 MB · 실제 구간 21.1초 (`partial` 아님) |
+| 설정 화면 대기 시 요청 수 | 60초에 3건(`GET /alerts/mute` — 다른 탭의 실시간 관제 폴링) |
+
+### 화면을 켜서 찾은 것 (verify 로는 잡히지 않는다)
+
+| 문제 | 조치 |
+|---|---|
+| **서버가 남긴 로그가 하나도 보이지 않았다** | uvicorn 은 자기 로거만 설정한다. 루트에 핸들러가 없어 `log.info` 가 전부 사라지고 접근 로그만 남아 있었다 — 캘리브레이션 저장·`zone_updated` 발행·클립 예약이 전부 안 보였다. `_configure_logging()` 을 두었다(핸들러가 이미 있으면 손대지 않는다) |
+| 로그를 켜니 **httpx2 가 초당 한 줄**을 찍었다 | 스트림 감시가 mediamtx 를 초당 폴링한다. `httpx2` 로거를 WARNING 으로 내렸다 — 실패는 그대로 보인다 |
+| 한글 로그가 **cp949 로 깨져** 파일에 남았다 | 서버도 `stdout`/`stderr` 를 UTF-8 로 재설정한다(`tasks.py` · 시드 스크립트와 같은 처리) |
+| 4점을 **빠르게 연속 클릭하면 한 점만** 남았다 | 같은 렌더 주기의 클릭들이 배열을 서로 덮어썼다. 함수형 갱신(`setPoints((current) => ...)`)으로 고쳤다 |
+| 저장 실패인데 「설정을 읽지 **못했다**」로 떴다 | 읽기 실패와 저장 실패가 같은 문구를 쓰고 있었다. 문구를 부르는 쪽이 붙이게 했다 |
+| 설정 화면의 카메라 이름이 **코드에 박혀** 있었다 | 설정 화면만 `GET /cameras` 의 `name`(§6 `cameras.name`)을 쓴다. 다른 화면은 아직 `labels.ts` 표를 쓴다 — 아래 「남아 있는 확인 필요」 참조 |
+
+### ★ 스냅샷 버퍼의 CPU — 명세서 전제가 개발 기계에서는 성립하지 않는다
+
+§4.4 는 「초당 1장 인코딩은 리먹스 부하에 비해 무시할 수준」이라고 적었다. **비용은 인코딩이
+아니라 디코딩이었다** — 초당 1장을 뽑아도 `fps` 필터에 넣으려면 모든 프레임을 풀어야 한다.
+
+| 방식 | 20초 동안 CPU | 코어 |
+|---|---|---|
+| 전체 디코딩 (`-vf fps=1`) — 현재 기본 | 6.5초 | **33%** |
+| 키프레임만 (`-skip_frame nokey`) | 1.4초 | **7%** |
+| 패킷 폐기 (`-discard nokey`) | 4.5초 | 23% |
+| (비교) 세그먼트 녹화 = 리먹스 | 0.3초 | 2% |
+
+카메라 2대면 코어의 **66%**다. 젯슨은 NVDEC 이 받아주므로 명세서의 전제가 성립하지만,
+소프트웨어 디코딩을 쓰는 개발 노트북에서는 성립하지 않는다(M5 의 가짜 카메라 재인코딩과
+같은 종류의 문제다). `REC_SNAPSHOT_KEYFRAMES_ONLY` 를 두되 **기본은 끔**으로 했다 —
+켜면 샘플 간격이 스트림 GOP 를 따르므로 §4.4 가 보장한 「초당 1장 · 최대 0.5초 차이」가
+깨질 수 있고, 명세서가 정한 값을 설정 하나로 조용히 바꾸지 않는다(절대규칙 8).
+
+### 키프레임 응답 시간 (M6 실측)
+
+| 요청 시각 | 경로 | 응답 |
+|---|---|---|
+| 지금 (버퍼 안) | 메모리 | **6.7 ms** · 176 KB |
+| 180초 전 (버퍼 밖) | 세그먼트 + ffmpeg | 416 ms · 163 KB |
+
+확정 순간의 요청이 **500 에서 200 으로** 바뀐 것이 이 변경의 요점이고, 62배는 덤이다.
+
+### M6 이 고른 것 (설계 판단)
+
+| 판단 | 이유 |
+|---|---|
+| `packages/vision` 에 **의존성을 두지 않았다**(numpy 도 안 쓴다) | 젯슨·서버·시뮬레이터가 함께 쓰는 순수 계산이다. 대응점 4~8개의 최소제곱과 프레임당 수십 번의 점 변환에 배열 라이브러리가 필요하지 않다. 대신 수치 안정성은 직접 챙겼다 — **Hartley 정규화 없이 풀면** 같은 데이터에서 잔차가 0.1 m 대에서 1.6 m 대로 커진다(실측) |
+| 최소 고유벡터를 **야코비 회전**으로 구한다 | `AᵀA` 는 대칭이라 야코비면 충분하고 외부 라이브러리 없이 안정적이다 |
+| 4점이 **한 직선 위면 거부**한다 | 통로 한 줄을 따라 찍는 실수는 실제로 일어나고, 행렬은 풀리지만 결과가 무의미하다. 조용히 통과시키면 모든 거리·구역 판정이 틀리면서 화면 어디에도 드러나지 않는다 |
+| 지평선 위의 점을 **거부**한다 | 동차좌표의 `W` 가 0에 가까우면 대응하는 지면 점이 없다. 큰 수를 돌려주면 그 좌표가 거리 계산과 구역 판정으로 그대로 흘러간다 |
+| 히스테리시스를 **`buffer_m` 하나로** 만든다 | 진입선 = 경계 + `buffer_m`(사전 경고 · §4.5), 이탈선 = 거기서 다시 `buffer_m`. 새 상수를 만들지 않았고, `buffer_m = 0` 이면 두 선이 경계로 겹쳐 히스테리시스가 사라진다 |
+| 겹친 구역에서는 **더 좁은 쪽**을 고른다 | 「공장 전체」보다 「지게차 통행로」가 쓸모 있는 답이다. 목록 순서(= DB 조회 순서)로 정하면 아무 의미 없는 것이 판정을 바꾼다 |
+| 픽셀 → 미터 변환을 **서버에서** 한다 | 프론트가 변환하면 호모그래피 적용 코드가 TypeScript 로 한 벌 더 생긴다. 되그릴 때만 역행렬을 곱한다(행렬 곱이지 캘리브레이션이 아니다) |
+| 시나리오가 미터를 적으면 **오류**다 | 두 벌의 좌표가 다시 생기는 것을 막는 유일한 방법이다. 위 표가 그 대가를 보여준다 |
+| 세그먼트 길이를 **모르면 클립을 뽑지 않는다** | 기본값(10초)으로 추측해 뽑으면 REC 설정이 다를 때 뒤가 잘린 클립이 `ready` 로 굳고 되돌릴 수 없다. 예약은 DB 에 남으므로 REC 이 살아나면 다음 주기에 집힌다 |
+| `alert_sounds.level` 하한을 **읽는 쪽에서도** 본다 | API 가 422 로 막지만 DB 를 직접 고칠 수도 있다. `fall` = 2 를 그대로 쓰면 긴급 상황에서 부저가 울리지 않으므로, 읽을 때 3으로 올리고 그 사실을 ERROR 로 남긴다 |
+| `GET /cameras` 를 새로 만들었다 | 설정 화면이 저장된 구역을 영상 위에 다시 그리려면 호모그래피가 필요한데, `POST` 응답만으로는 **새로고침 뒤에 아무것도 그릴 수 없다**. §4.5 에 조회 경로가 없어 아래에 올려 두었다 |
+
+---
+
+## 명세서 갱신 반영 (v12 · M5 에서 보고한 9건 전량)
+
+| 항목 | 확정된 내용 | 반영 |
+|---|---|---|
+| **§4.4 클립 추출 타이밍** ★ | `confirmed_at + clip_post_roll_s + rec_segment_seconds + clip_extract_margin_s`. 세그먼트 길이가 **별도 항**이 됐고 그 값은 REC 의 `GET /status` 에서 읽는다 | `ClipService.set_segment_seconds` · `_watch_storage` 가 상태 폴링 응답에서 흘려보낸다(요청을 더 보내지 않는다) · 모르면 실행하지 않는다. DB 의 `clip_extract_margin_s` 를 12 → **2**(명세서 기본값)로 되돌렸다 |
+| **§4.4 키프레임 · 스냅샷 버퍼** ★ | REC 이 초당 1장 · 최근 60초를 메모리에 유지. `GET /keyframe` 은 버퍼 안이면 즉시, 밖이면 세그먼트에서 | `recorder/snapshots.py`(순수 버퍼 + 샘플러) · `GET /keyframe` 이 버퍼를 먼저 본다. 확정 시각 요청이 500 → 200 |
+| **§4.7 `recording` 절** | `segment_seconds` · `snapshot_fps` · `snapshot_window_s` 신설 | `RecRecordingStatus` · `RecorderService._recording()` |
+| **§4.1 응답 3칸** | `clip_status` · `clip_error` · `alert_suppressed` 가 정식 계약이 됐다 | 「임시로 두었다」 주석을 지웠다 — 계약 자체는 그대로였다 |
+| **§4.2 · §5.3 `suppressed`** | 둘 다에 실렸다 | `MetricMsg.suppressed` 신설 · 개요 화면이 `metric` 을 받고 **`GET /metrics/summary` 를 다시 부르던 것을 없앴다**(종결 전이마다 요청 하나) |
+| **§3 `AlertCommand.type: manual`** | 수동 방송 전용 값이 생겼다 | `AlertCommandType = ViolationType \| "manual"` · 수동 방송이 `zone_intrusion` 을 빌려 쓰던 것을 없앴다 |
+| **§3 `duration_s` 의 원천** | 정책 키 `alert_duration_s`(기본 5) | 서버 설정(`ALERT_DURATION_S`)에서 정책으로 옮겼다. `CLIP_MARGIN_S` 도 함께 서버 설정에서 사라졌다 |
+| **§3 `fall` 등급 하한** ★ | 3 미만으로 설정할 수 없고 API 가 422 로 거부한다 | `server/domain/alerts.py`(`MINIMUM_LEVEL` · `check_level`) — 순수 함수 하나를 API 와 DB 읽기 경로가 함께 쓴다 |
+| **§4.5 `GET`/`PUT /alert-sounds`** | 정의됐다 | `server/app/routes/sounds.py` · 저장 직후 캐시와 등급표를 즉시 갱신한다(주기 갱신 60초를 기다리지 않는다) |
+
+---
+
 ## 명세서 확인 필요
 
 명세서를 SSOT로 두고 **코드에서 임의로 채우지 않은** 항목이다. 사람이 판단해
@@ -901,22 +1062,27 @@ M5 본작업이 끝난 뒤 **실제로 스택을 띄워 쓰면서** 나온 것�
 
 ### A. 남아 있는 확인 필요
 
-M5 에서 새로 드러난 것들이다. 전부 **명세서가 요구하는 기능을 구현하려는데 둘 자리가
-없어서** 서버가 임시로 정한 것이며, 코드에는 그 사실을 주석으로 표시해 두었다.
+M5 에서 보고한 9건은 **전부 명세서에 반영되어 해소됐다**(위 「명세서 갱신 반영 (v12)」).
+아래는 M6 에서 새로 드러난 것들이며, 전부 **명세서가 요구하는 기능을 구현하려는데 둘
+자리가 없어서** 서버가 임시로 정한 것이다. 코드에는 그 사실을 주석으로 표시해 두었다.
 
 | 내용 | 상세 |
 |---|---|
-| **§4.4 「추출 타이밍」이 세그먼트 녹화 방식과 맞지 않는다** ★★ | §4.4 는 `confirmed_at + post_roll` 을 "사후 세그먼트 기록 완료"로 보고 `margin` 2초만 더한다. 그런데 REC 은 **벽시계 10초 격자**로 세그먼트를 닫으므로(`-segment_atclocktime`), 그 순간을 담은 파일은 **아직 열려 있다** — 닫히기까지 최대 세그먼트 길이(10초)가 더 걸린다. 실측: margin 2 → `partial: 뒤 2.9초 없음`(재현), margin 14 → `ready`. 필요한 값은 **세그먼트 길이 + 여유**다. 정책값이라 DB 에서 12(=10+2)로 올려 두었고 코드 기본값(2)은 명세서 값이라 건드리지 않았다. §4.4 의 `margin(2초)` 을 고칠지 정해 달라 |
-| **키프레임을 「확정 즉시」 뽑을 수 없다** ★★ | §4.4 는 `confirmed_at 시점: 키프레임 즉시 추출 (링버퍼에 이미 존재)` 라고 적었지만, 세그먼트 파일 방식에서 **방금 프레임은 아직 파일에 없다**. REC `GET /keyframe` 실측 — 1초 전 요청 **HTTP 500**, 5초 전부터 200. 그래서 확정 이벤트의 `keyframe_urls` 가 계속 빈 배열이고, 클립이 준비되기 전 화면에 보여줄 그림이 없다(FN-UI-03 이 그 자리를 키프레임으로 채우도록 만들어져 있다). 방안 셋 — (a) 확정 시각 대신 세그먼트 길이만큼 과거 프레임 (사건 순간이 아니다) · (b) 클립과 같은 시점에 함께 추출 (사건 순간을 정확히 얻지만 "클립 전까지 보여줄 그림"이라는 목적이 사라진다) · (c) 즉시 시도하고 실패하면 예약해 재시도. **어느 쪽도 §4.4 타이밍 표를 고쳐야 하므로 코드를 먼저 바꾸지 않았다** |
-| **§4.2 응답 예시에 `suppressed` 가 없다** ★ | 기능명세서 §4.8 은 「`suppressed` 로 별도 집계」를 요구하는데 API명세서 §4.2 `GET /metrics/summary` 예시 JSON 과 필드 표에는 그 칸이 없다. 예시에 없다는 이유로 계약에서 빼면 지표가 자기 정의를 못 지키므로 **응답에 두었다**. `packages/contracts/tests/test_spec_examples.py` 의 `SUMMARY_FIELDS_BEYOND_EXAMPLE` 한 곳에만 그 차이가 적혀 있다. §4.2 에 추가해 달라 |
-| **§5.3 `metric` 에도 `suppressed` 가 없다** | 같은 이유다. 지금은 화면이 `metric` 을 받으면 `GET /metrics/summary` 를 **다시 조회**해 그 칸을 채운다(종결 전이당 요청 한 번). §5.3 에 추가되면 재조회를 없앨 수 있다 |
-| **§4.1 응답에 `clip_status` · `clip_error` · `alert_suppressed` 자리가 없다** ★ | 셋 다 §6 `events` 컬럼인데 §4.1 목록·상세 예시에는 없다. **다시 읽을 수 없으면 화면이 그릴 수 없는** 값들이라 `EventDetail` 에 두었다 — `clip_status` 없이는 클립 재생 여부를 정할 수 없고(§5.2 `event_updated` 는 그 순간 보고 있던 사람만 받는다), `alert_suppressed` 없이는 "왜 이 이벤트가 지표에 없나"를 설명할 수 없다. §4.1 에 추가할지 정해 달라 |
-| **수동 방송의 `type` 을 §3 에 정의할 자리가 없다** | `notify_device` 가 생겨 수동 방송도 MQTT 를 발행하는데, §3 `AlertCommand.type` 은 `ViolationType` 이고 수동 방송에는 위반 유형이 없다. ESP32 가 이 값으로 **점멸 패턴을 고르므로** 아무 것이나 될 수 없어 지금은 `zone_intrusion`(「지금 그 구역을 주목하라」에 가장 가까운 일반 경보)을 쓴다. `event_id` 는 `MANUAL-cam{N}-{ISO8601}` 로 두어 조회 가능한 이벤트처럼 보이지 않게 했다. §3 에 「수동 방송」 경우를 정의해 달라 |
-| **`AlertCommand.duration_s` 에 대응하는 정책 키가 없다** | §3 이 경광등·부저 지속 시간을 요구하는데 §4.5 `GET /policies` 목록에 그 키가 없다. **장치 쪽 운용값**이라 상태머신 타이머와 성격이 다르다고 보아 서버 설정(`ALERT_DURATION_S`, 기본 5)에 두었다. `clip_extract_margin_s` 가 이번에 정책으로 올라갔으니 이것도 함께 정해 달라 |
-| **`alert_sounds.level` 과 §5.2 `severity` 의 우선순위** | 등급의 원천을 DB 로 옮겼으므로 관리자가 `no_helmet` 을 3으로 올리면 §5.2 `severity` 와 §3 `level` 이 함께 3이 된다. 그런데 §3 은 「**`fall` 은 항상 3**」을 못박았다 — 관리자가 `fall` 을 2로 **내리는** 것을 서버가 막아야 하는지가 정의되지 않았다. 지금은 막지 않는다(DB 값을 그대로 쓴다). 하한을 강제해야 하면 알려 달라 |
-| **`alert_sounds.label` 을 읽을 API 가 없다** | §6 이 표시 이름을 정의했지만 그것을 내보내는 엔드포인트가 §4.5 에 없다. FN-CFG-03 화면(M6)이 필요하므로 그때 `GET /alert-sounds` 같은 것을 정의해 달라. **M5 는 그것 없이 만들었다** — 수동 방송이 고를 수 있는 것은 위반 유형 넷(값 자체가 절대규칙 11 로 고정)과 「기본 안내」(`sound` 생략)뿐이라 파일명이 프론트에 없다 |
+| **§4.5 에 캘리브레이션 조회 경로가 없다** ★ | `POST /cameras/{cam_id}/calibration` 은 있는데 그 결과를 다시 읽을 곳이 없다. 설정 화면(FN-UI-07)은 저장된 구역을 영상 위에 다시 그려야 하는데 `zones.polygon_m` 은 지면 좌표라 **호모그래피 없이는 화면에 그릴 수 없다** — `POST` 응답만으로는 새로고침 뒤에 아무것도 그리지 못한다. `GET /cameras`(`cam_id` · `name` · `homography` · `ref_height_calibrated` · `calibrated_at`)를 만들어 두었다(`CameraCalibration`). §4.5 에 추가할지 정해 달라 |
+| **`POST /zones` 에 픽셀 폴리곤 자리가 없다** ★ | §4.5 는 「화면에서 그린 픽셀 좌표를 **서버가** 호모그래피로 변환해 저장」한다고 적었는데, 요청 예시에는 `polygon_m`(미터)만 있다. 미터만 받으면 변환을 클라이언트가 해야 하고, 그러면 호모그래피 적용 코드가 `packages/vision` 과 프론트 두 곳에 생긴다. `ZoneUpsertRequest` 에 `polygon`(정규화 픽셀)을 두고 **둘 중 정확히 하나만** 받게 했다(§1.2 좌표 규약대로 접미사 없는 이름이 픽셀이다). §4.5 요청 스키마를 정해 달라 |
+| **`DELETE /zones/{zone_id}` 가 §4.5 에 없다** | §5.4 는 `zone_updated.action: "delete"` 를 정의하는데 그 전이를 일으킬 REST 경로가 없다. 설정 화면에서 구역을 지울 수 없으면 잘못 그린 구역이 영구히 남는다. `DELETE /zones/{zone_id}?cam_id=` 로 두었다 — `cam_id` 는 §5.4 가 메시지 최상위에 요구하기 때문이다 |
+| **카메라 표시 이름의 원천이 둘이다** | §6 `cameras.name` 이 있는데 프론트 `labels.ts` 에도 표가 박혀 있다(`CAMERA_NAMES`). 설정 화면만 `GET /cameras` 의 값을 쓰게 했고 나머지 화면은 아직 코드의 표를 쓴다 — 같은 카메라가 화면마다 다른 이름으로 보인다. 절대규칙 6 대로라면 전부 DB 값이어야 한다. `GET /cameras` 가 §4.5 에 확정되면 함께 정리하겠다 |
+| **§4.4 「초당 1장은 무시할 수준」이 소프트웨어 디코딩에서는 성립하지 않는다** ★ | 비용은 인코딩이 아니라 **디코딩**이다(실측: 1080p 한 대에 코어 33% · 카메라 2대면 66%). 젯슨은 NVDEC 이 있어 전제가 성립하지만 개발 노트북은 아니다. `REC_SNAPSHOT_KEYFRAMES_ONLY`(기본 끔)를 두었고 켜면 코어 7% 로 내려가되 **샘플 간격이 스트림 GOP 를 따른다** — §4.4 가 보장한 「최대 0.5초 차이」가 GOP 2초에서는 최대 1초가 된다. 개발 환경 기본값을 켬으로 바꿀지, §4.4 에 「하드웨어 디코딩 전제」를 명시할지 정해 달라 |
+| `alert_sounds` 의 **표시 이름과 키를 화면이 자유롭게 바꾼다** | `PUT /alert-sounds/{violation_type}` 은 `file_path` 를 문자열로 받는다. 존재하지 않는 파일을 저장해도 API 는 성공하고, 그 사실은 **다음 경고 때** 로그로만 드러난다(`SoundLibrary` 가 파일 없음을 ERROR 로 남긴다). 저장 시점에 파일 존재를 검사해 422 로 막을지 정해 달라 — 막으면 파일을 먼저 올려야 하는 순서 제약이 생긴다 |
 
-### B. 판단이 필요했던 타입
+### B. 개발 환경에서 발견한 것 (명세서 사안 아님)
+
+| 내용 | 상세 |
+|---|---|
+| `.env` 의 `REC_RETENTION_DAYS=0.0417` | 보존 정책 시험 때 1시간으로 줄여둔 값이 남아 있다. 화면의 「녹화 · 보존 **0일**」이 그래서 나온다. 운용값은 7 이다 |
+| 이전 세션의 브라우저 탭이 살아 있었다 | 설정 화면만 열어 두었는데 `GET /alerts/mute` 가 60초에 3건씩 들어왔다. 다른 탭의 실시간 관제(FN-UI-02)가 120초마다 카메라 수 + 1 만큼 묻는 것이며, 현재 화면과는 무관하다 |
+
+### C. 판단이 필요했던 타입
 
 | 필드 | 판단 |
 |---|---|

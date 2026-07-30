@@ -418,8 +418,10 @@ class EventService:
         except (OSError, RuntimeError, ValueError) as exc:
             log.warning("지표를 다시 계산하지 못했다: %s", exc)
             return
-        # §5.3 이 `resolved_late` 를 실으면서 화면이 받은 숫자만으로 시정률을 검산할
-        # 수 있게 됐다 — 네 버킷의 합이 `total_violations` 이고, 분자는 `resolved` 다.
+        # §5.3 이 `resolved_late` 와 `suppressed` 를 실으면서 화면이 받은 숫자만으로
+        # 시정률을 검산할 수 있게 됐다 — 네 버킷의 합이 `total_violations` 이고 분자는
+        # `resolved` 이며, 방송이 없었던 건수는 그 바깥에 따로 있다. 화면이 이 메시지를
+        # 받고 `GET /metrics/summary` 를 다시 부르던 것도 함께 없어졌다.
         await self._publish(
             MetricMsg(
                 period=summary.period,
@@ -428,6 +430,7 @@ class EventService:
                 total_violations=summary.total_violations,
                 resolved=summary.resolved,
                 resolved_late=summary.resolved_late,
+                suppressed=summary.suppressed,
                 unresolved=summary.unresolved,
                 undetermined=summary.undetermined,
                 avg_resolution_sec=summary.avg_resolution_sec,
