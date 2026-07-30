@@ -1,9 +1,8 @@
 /**
  * 실시간 관제 (FN-UI-02).
  *
- * M2 범위는 **2채널 라이브 + 오버레이**와 **단독 확대 보기**까지다. 진행 중 이벤트
- * 패널과 수동 방송은 각각 M3·M5 에서 붙는다. 지금 없는 기능을 자리표시자로 그려두지
- * 않는다 — 빈 패널은 "아직 없음"과 "고장남"을 구분하지 못하게 만든다.
+ * 시안 2페이지 그대로 — 좌측 2채널 라이브(+오버레이 · 단독 확대), 우측 「진행 중
+ * 이벤트」와 「빠른 제어」. M5 에서 우측 패널이 붙어 화면이 완성됐다.
  *
  * 오버레이가 필요로 하는 두 가지를 이 화면이 한 번만 읽어 타일에 나눠준다.
  *
@@ -22,28 +21,20 @@ import { subscribePolicies } from '../api/policies'
 import { subscribeDashboard } from '../api/system'
 import { useSystemStatus } from '../api/useSystemStatus'
 import { applyZoneUpdate, fetchZones } from '../api/zones'
+import ActiveEvents from '../live/ActiveEvents'
 import CameraTile from '../live/CameraTile'
+import QuickControls from '../live/QuickControls'
+import { cameraName, retentionLabel, violationLabel } from '../types/labels'
 import {
+  UNMEASURED,
   isEventCreatedMsg,
   type EventCreatedMsg,
   type OverlayPolicies,
   type Zone,
 } from '../types/system'
 import '../live/live.css'
-
-/** 카메라 표시 이름. 실제 설치 위치명은 M6 설정 화면에서 관리한다(FN-CFG). */
-const CAMERA_NAMES: Record<number, string> = {
-  1: '카메라 1 · 작업장 A',
-  2: '카메라 2 · 지게차 통행로',
-}
-
-/** 위반 유형 라벨. 시안의 건설현장 용어가 아니라 명세서 용어다(부록 B). */
-const VIOLATION_LABEL: Record<string, string> = {
-  no_helmet: '안전모 미착용',
-  zone_intrusion: '금지구역 침입',
-  proximity: '지게차 근접',
-  fall: '쓰러짐',
-}
+import '../pages/overview.css'
+import '../pages/events.css'
 
 /** 가장자리 알림 한 건. 확대 중이 아닌 채널에서 확정된 이벤트다. */
 type EdgeAlert = {
@@ -114,8 +105,6 @@ export default function LivePage() {
   // **구독은 확대 여부와 무관하다.** 화면에서 내린 채널의 이벤트도 계속 받는다 —
   // 보이지 않는 것과 감시가 멈추는 것은 다르다. 소켓 자체도 `subscribeDashboard` 가
   // 화면 밖에서 하나로 유지하므로 타일을 내려도 끊기지 않는다.
-  // (`event_created` 는 확정 판정이 생기는 M3 부터 흐른다. 그때까지 이 구독은
-  // `zone_updated` 만 처리한다.)
   useEffect(() => {
     return subscribeDashboard({
       onMessage: (message) => {
@@ -124,7 +113,7 @@ export default function LivePage() {
         const event = message as EventCreatedMsg
         setAlerts((current) => {
           if (current.some((item) => item.event_id === event.event_id)) return current
-          const label = VIOLATION_LABEL[event.violation_type] ?? event.violation_type
+          const label = violationLabel(event.violation_type)
           // 최신 3건까지만 띄운다. 그 이상은 가장자리를 덮어 영상을 가린다.
           return [...current, { event_id: event.event_id, cam_id: event.cam_id, label }].slice(-3)
         })
@@ -176,7 +165,7 @@ export default function LivePage() {
               className={`live__view ${solo === camera.cam_id ? 'live__view--on' : ''}`}
               onClick={() => show(camera.cam_id)}
             >
-              {CAMERA_NAMES[camera.cam_id] ?? `카메라 ${camera.cam_id}`}
+              {cameraName(camera.cam_id)}
             </button>
           ))}
           <span className="live__spacer" />
@@ -201,7 +190,7 @@ export default function LivePage() {
             <CameraTile
               key={camera.cam_id}
               camera={camera}
-              name={CAMERA_NAMES[camera.cam_id] ?? `카메라 ${camera.cam_id}`}
+              name={cameraName(camera.cam_id)}
               solo={solo === camera.cam_id}
               onToggleSolo={() => show(solo === camera.cam_id ? null : camera.cam_id)}
               policies={policies}
@@ -220,9 +209,7 @@ export default function LivePage() {
                 className="live__edge-item"
                 onClick={() => show(alert.cam_id)}
               >
-                <span className="live__edge-cam">
-                  {CAMERA_NAMES[alert.cam_id] ?? `카메라 ${alert.cam_id}`}
-                </span>
+                <span className="live__edge-cam">{cameraName(alert.cam_id)}</span>
                 <span className="live__edge-label">{alert.label}</span>
                 <span className="live__edge-go">전환</span>
               </button>
@@ -232,6 +219,11 @@ export default function LivePage() {
       </div>
 
       <aside className="live__side">
+        {/* 시안 2페이지 우측 — 진행 중 이벤트가 먼저, 그다음 빠른 제어다.
+            스트림·저장소 상태는 그 아래로 내린다(관제 중 먼저 볼 것이 이벤트다). */}
+        <ActiveEvents camIds={cameras.map((camera) => camera.cam_id)} />
+        <QuickControls camIds={cameras.map((camera) => camera.cam_id)} />
+
         <section className="card">
           <h2 className="card__title">스트림 상태</h2>
           <table className="live__table">
@@ -254,7 +246,7 @@ export default function LivePage() {
                     {camera.sub_state}
                   </td>
                   {/* 엣지가 붙기 전에는 null 이다. 0 으로 그리면 장애처럼 보인다. */}
-                  <td>{camera.fps === null ? unmeasured : camera.fps.toFixed(1)}</td>
+                  <td>{camera.fps === null ? UNMEASURED : camera.fps.toFixed(1)}</td>
                 </tr>
               ))}
             </tbody>
@@ -273,14 +265,14 @@ export default function LivePage() {
             <dt>여유</dt>
             <dd>{gb(status.storage.free_gb)}</dd>
             <dt>보존</dt>
-            <dd>{days(status.storage.retention_days)}</dd>
+            <dd>{retentionLabel(status.storage.retention_days)}</dd>
             <dt>최고(最古)</dt>
-            <dd>{stamp(status.storage.oldest_segment_at)}</dd>
+            <dd>{recStamp(status.storage.oldest_segment_at)}</dd>
           </dl>
           <p className="card__note">
             REC(§4.7)이 보고한 값을 그대로 표시한다 — 서버 노트북의 디스크가 아니다.
             <br />
-            <span className="live__unmeasured">{unmeasured}</span> 는 <b>측정 불가</b>다.
+            <span className="live__unmeasured">{UNMEASURED}</span> 는 <b>측정 불가</b>다.
             REC 에 닿지 못했다는 뜻이며 0 과 다르다. 최고 세그먼트 시각은 영상 검색이
             가능한 범위의 하한이다.
           </p>
@@ -300,22 +292,17 @@ export default function LivePage() {
   )
 }
 
-/** 관측 주체가 없어 값이 `null` 인 자리. **0 과 다르게 그린다**(§4.6). */
-const unmeasured = '측정 불가'
-
 function gb(value: number | null): string {
-  return value === null ? unmeasured : `${value} GB`
+  return value === null ? UNMEASURED : `${value} GB`
 }
 
-function days(value: number | null): string {
-  if (value === null) return unmeasured
-  // 개발 환경은 보존을 1시간으로 낮춰 쓴다. 0일로 반올림되므로 그대로 적으면
-  // "보존하지 않음"으로 읽힌다.
-  return value === 0 ? '1일 미만' : `${value}일`
-}
-
-function stamp(value: string | null): string {
-  if (value === null) return unmeasured
+/**
+ * REC 이 준 시각. **`null` 을 `—` 가 아니라 「측정 불가」로 그린다** — 여기서 `null` 은
+ * "값이 없다"가 아니라 "REC 에 닿지 못했다"는 뜻이다(§4.6). 이벤트 시각의 `—`
+ * (`types/labels.ts` 의 `stamp`)와 의미가 다르므로 함수를 나눠 둔다.
+ */
+function recStamp(value: string | null): string {
+  if (value === null) return UNMEASURED
   const at = new Date(value)
   return Number.isNaN(at.getTime()) ? value : at.toLocaleString()
 }

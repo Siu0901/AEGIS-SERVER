@@ -440,3 +440,203 @@
 .live__unmeasured {
   color: var(--warn);
 }
+
+/* ---------------------------------------------------------------------------
+   진행 중 이벤트 · 빠른 제어 (FN-UI-02 · M5). 시안 2페이지 우측 패널.
+   --------------------------------------------------------------------------- */
+
+.active,
+.quick {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.active__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.active__head .card__title {
+  margin: 0;
+}
+
+.active__list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.active__list li + li {
+  border-top: 1px solid var(--border);
+}
+
+.active__item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 4px;
+  border-radius: var(--radius-sm);
+}
+
+.active__item:hover {
+  background: var(--bg-panel-hover);
+}
+
+.active__quiet {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  list-style: none;
+}
+
+.active__quiet li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+/* 쓰러짐 — 최상위 등급 알림 (FN-ALM-03). 목록 항목과 같은 모양이면 안 된다. */
+.urgent {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  background: rgba(239, 68, 68, 0.12);
+  animation: urgent-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes urgent-pulse {
+  50% {
+    border-color: rgba(239, 68, 68, 0.45);
+  }
+}
+
+.urgent__title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #fca5a5;
+}
+
+.urgent__meta {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.urgent__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.urgent__why {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+/* --- 빠른 제어 --------------------------------------------------------- */
+
+.quick__group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.quick__head {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.quick__field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.quick__field > span {
+  flex: 0 0 42px;
+}
+
+.quick__field select,
+.quick__field input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-content);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+
+.quick__check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.quick__buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.quick__muted {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-sm);
+  background: rgba(245, 158, 11, 0.1);
+  list-style: none;
+}
+
+.quick__muted-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.quick__muted-name {
+  font-weight: 600;
+}
+
+.quick__muted-left {
+  color: var(--text-muted);
+}
+
+.quick__ok {
+  margin: 0;
+  font-size: 12px;
+  color: var(--ok);
+}
+
+.quick__error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--danger);
+}
