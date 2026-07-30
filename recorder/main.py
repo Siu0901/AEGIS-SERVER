@@ -118,8 +118,24 @@ def create_app() -> FastAPI:
         cam_id: Annotated[int, Query(ge=1)],
         at: Annotated[AwareDatetime, Query()],
     ) -> Response:
-        """단일 프레임 JPEG. 이벤트 확정 시 즉시 호출되므로 지연 없이 응답한다."""
-        payload = await clips.extract_keyframe(settings, cam_id=cam_id, at=at.astimezone(UTC))
+        """단일 프레임 JPEG. 이벤트 확정 시 즉시 호출되므로 지연 없이 응답한다.
+
+        **버퍼 안이면 메모리에서, 밖이면 세그먼트에서**(기능명세서 §4.4). 확정 시점의
+        프레임은 아직 어떤 파일에도 없으므로 세그먼트만으로는 답할 수 없다 — 그 경로만
+        있던 시절에는 확정 직후 요청이 500 으로 끝나 이벤트 상세 화면이 비어 있었다.
+        """
+        wanted = at.astimezone(UTC)
+        buffer = service.snapshots(cam_id)
+        if buffer is not None and (hit := buffer.nearest(wanted)) is not None:
+            found_at, payload = hit
+            log.debug(
+                "cam%d %s 키프레임을 스냅샷 버퍼에서 냈다 (%+.2f초)",
+                cam_id,
+                wanted.isoformat(),
+                (found_at - wanted).total_seconds(),
+            )
+            return Response(content=payload, media_type="image/jpeg")
+        payload = await clips.extract_keyframe(settings, cam_id=cam_id, at=wanted)
         return Response(content=payload, media_type="image/jpeg")
 
     return application

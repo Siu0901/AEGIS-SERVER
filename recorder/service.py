@@ -7,12 +7,18 @@ import logging
 import shutil
 from datetime import datetime
 
-from aegis_contracts import RecCameraStatus, RecStatusResponse, RecStorageStatus
+from aegis_contracts import (
+    RecCameraStatus,
+    RecRecordingStatus,
+    RecStatusResponse,
+    RecStorageStatus,
+)
 from aegis_vision.clock import Clock
 from recorder import retention
 from recorder.capture import CameraRecorder
 from recorder.config import RecSettings
 from recorder.segments import Segment, scan_segments
+from recorder.snapshots import SnapshotBuffer, SnapshotSampler
 
 __all__ = ["RecorderService"]
 
@@ -30,6 +36,11 @@ class RecorderService:
         self._recorders = {
             cam_id: CameraRecorder(cam_id, settings, clock) for cam_id in settings.rec_cam_ids
         }
+        self._samplers = {
+            cam_id: SnapshotSampler(cam_id, settings, clock) for cam_id in settings.rec_cam_ids
+        }
+        """카메라별 스냅샷 버퍼(기능명세서 §4.4). 녹화와 **별도 프로세스**다 —
+        리먹스 녹화는 디코딩하지 않으므로 같은 ffmpeg 에서 JPEG 을 뽑을 수 없다."""
         self._tasks: list[asyncio.Task[None]] = []
         self._snapshot: dict[int, list[Segment]] | None = None
         """스윕이 남겨두는 카메라별 세그먼트 목록. `GET /status` 가 이걸 읽는다."""
@@ -42,6 +53,8 @@ class RecorderService:
         self._settings.rec_media_root.mkdir(parents=True, exist_ok=True)
         for cam_id, recorder in self._recorders.items():
             self._tasks.append(asyncio.create_task(recorder.run(), name=f"rec-cam{cam_id}"))
+        for cam_id, sampler in self._samplers.items():
+            self._tasks.append(asyncio.create_task(sampler.run(), name=f"rec-snap{cam_id}"))
         self._tasks.append(asyncio.create_task(self._sweep_loop(), name="rec-sweep"))
         log.info(
             "REC 기동 — cams=%s root=%s 보존 %.4g일 / 상한 %.1fGB",
@@ -51,7 +64,14 @@ class RecorderService:
             self._settings.rec_max_disk_gb,
         )
 
+    def snapshots(self, cam_id: int) -> SnapshotBuffer | None:
+        """카메라의 스냅샷 버퍼. 등록되지 않은 카메라면 `None`."""
+        sampler = self._samplers.get(cam_id)
+        return None if sampler is None else sampler.buffer
+
     async def stop(self) -> None:
+        for sampler in self._samplers.values():
+            await sampler.stop()
         for recorder in self._recorders.values():
             await recorder.stop()
         for task in self._tasks:
@@ -144,7 +164,24 @@ class RecorderService:
         used_bytes = sum(item.size_bytes for item in all_segments)
         oldest = min((item.start_at for item in all_segments), default=None)
 
-        return RecStatusResponse(cameras=cameras, storage=self._storage(used_bytes, oldest))
+        return RecStatusResponse(
+            cameras=cameras,
+            storage=self._storage(used_bytes, oldest),
+            recording=self._recording(),
+        )
+
+    def _recording(self) -> RecRecordingStatus:
+        """§4.7 `recording` — 서버가 클립 예약 시각을 계산하는 데 쓰는 값들.
+
+        **서버에 같은 상수를 두지 않기 위해 보고한다**(기능명세서 §4.4). 세그먼트 길이를
+        양쪽에 적어 두면 REC 설정을 바꿨을 때 서버가 모른 채 아직 열려 있는 파일을
+        잘라내고, 그 클립은 뒤가 잘린 채 `partial` 로 남는다.
+        """
+        return RecRecordingStatus(
+            segment_seconds=self._settings.rec_segment_seconds,
+            snapshot_fps=self._settings.rec_snapshot_fps,
+            snapshot_window_s=self._settings.rec_snapshot_window_s,
+        )
 
     def _storage(self, used_bytes: int, oldest: datetime | None) -> RecStorageStatus:
         """§4.7 `storage`.
