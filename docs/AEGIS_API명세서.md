@@ -323,10 +323,16 @@ v2.0 · 2026-07-18
 
 | 필드 | 타입 | 설명 |
 |---|---|---|
-| `type` | string | 위반 유형. ESP32는 이 값으로 점멸 패턴 결정 |
+| `type` | string | 점멸 패턴 선택자. `no_helmet` / `zone_intrusion` / `proximity` / `fall` / **`manual`** |
 | `level` | int (**`1` \| `2` \| `3` 만**) | 위험 등급. 1=주의(부저 없음), 2=경고, **3=긴급(연속 부저) — `fall`은 항상 3**. §5.2 `severity` 와 **동일한 값을 쓴다**(같은 열거형을 공유한다) |
-| `duration_s` | int | 경광등·부저 지속 시간 |
+| `duration_s` | int | 경광등·부저 지속 시간. 정책 키 `alert_duration_s`(기본 5)에서 읽는다 |
 | `repeat` | bool | 재경고 여부. `true`면 패턴을 달리해 상습 상황 구분 |
+
+**`manual` 타입**: 수동 방송(`POST /alerts/manual`)에는 위반 유형이 없으므로 `type: "manual"` 을 쓴다. ESP32는 이를 일반 주의 환기 패턴으로 처리한다. 위반 유형 값을 빌려 쓰면 장치가 실제 위반이 감지된 것처럼 동작한다. `event_id` 는 `MANUAL-cam{N}-{ISO8601}` 형식이며 조회 가능한 이벤트가 아니다.
+
+**`level` 의 원천과 하한**: 등급은 `alert_sounds.level`(§6)에서 읽으므로 관리자가 유형별로 조정할 수 있다. 단 **`fall` 은 `3` 미만으로 설정할 수 없으며 API가 거부한다.** 쓰러짐은 대상자가 스스로 시정할 수 없는 유일한 유형이고, 등급을 낮추면 긴급 상황에서 부저가 울리지 않는다. 안전 하한은 설정 대상이 아니다.
+
+---
 
 **토픽**: `aegis/device/status` (ESP32 발행 → 서버 구독)
 
@@ -378,6 +384,11 @@ v2.0 · 2026-07-18
 | `detected_at` / `confirmed_at` / `alerted_at` | 최초 후보 관측 · 확정 · **최초** 경고 발동 시각 |
 | `last_alerted_at` | **최근** 경고 시각. 재경고 시 갱신된다. `alerted_at` 은 변경되지 않는다 |
 | `note` | 관리자 메모. 수동 정정 사유 등. 이벤트 상세 화면(FN-UI-03)에서 표시한다 |
+| `clip_status` | `pending` / `ready` / `failed`. `pending` 이면 화면은 키프레임을 대신 표시한다 |
+| `clip_error` | 추출 실패 사유(REC 의 `reason`). `note` 와 섞지 않는다 |
+| `alert_suppressed` | 일시중지 중 확정되어 **방송이 나가지 않았다**. 시정률 집계에서 제외된 이벤트임을 화면에 표시한다 |
+
+**`alert_suppressed` 는 "방송하지 않았다"만을 뜻한다.** 방송을 시도했으나 재생·발행이 **실패**한 경우는 `false` 다. 사람이 의도적으로 멈춘 것과 장치가 고장난 것은 다르며, 후자를 지표에서 빼면 **장애가 시정률을 좋아 보이게 만든다.** 재생 실패는 `system` 메시지로 별도 보고한다.
 | `resolution_sec` | `alerted_at`→`resolved_at` 소요 초. **시정률 지표의 원천** |
 | `posture` | 확정 시점 자세. `fall` 이벤트의 근거 |
 | `repeat_count_7d` | 동일 트랙·구역의 최근 7일 유사 이벤트 수 |
@@ -389,6 +400,9 @@ v2.0 · 2026-07-18
 ```json
 {
   "clip_url": "/media/clips/EV-20260814-0231.mp4",
+  "clip_status": "ready",
+  "clip_error": null,
+  "alert_suppressed": false,
   "keyframe_urls": ["/media/kf/..._0.jpg", "/media/kf/..._1.jpg"],
   "helmet_conf": 0.88,
   "stillness_s": 0.4,
@@ -440,6 +454,7 @@ v2.0 · 2026-07-18
   "resolved_late": 1,
   "unresolved": 2,
   "undetermined": 1,
+  "suppressed": 1,
   "avg_resolution_sec": 41,
   "fall_events": 0,
   "anomaly_flags": 1
@@ -451,6 +466,7 @@ v2.0 · 2026-07-18
 | `correction_rate` | `resolved / (resolved + resolved_late + unresolved)`. **`fall`과 `expired`는 제외.** 분모가 0이면 `null` |
 | `resolved_late` | 해소됐으나 `resolve_window_s` 초과. 분모에만 들어간다. `unresolved` 와 섞지 않는다 |
 | `undetermined` | 재결합 실패로 종결된 `expired` 건수. **시정률 분모·분자 모두에서 제외** |
+| `suppressed` | 경고 일시중지 중 확정되어 방송이 없었던 건수. **시정률에서 제외**되며 별도로 노출한다 |
 | `undetermined_rate` | `expired / (resolved + resolved_late + unresolved + expired)`. 시정률과 **항상 병기**한다. 분모가 0이면 `null`. 늦은 시정은 **모집단이지 판정 불가가 아니므로** 분모에 포함된다 |
 | `fall_events` | 쓰러짐 이벤트 수. 별도 집계 |
 | `avg_resolution_sec` | `resolution_sec` 평균 |
@@ -670,7 +686,8 @@ v2.0 · 2026-07-18
   "fall_stillness_s": 5.0,
   "anomaly_sample_interval_min": 5,
   "mute_default_duration_s": 900,
-  "clip_extract_margin_s": 2
+  "clip_extract_margin_s": 2,
+  "alert_duration_s": 5
 }
 ```
 
@@ -702,7 +719,20 @@ v2.0 · 2026-07-18
 | `fall_stillness_s` | 정지 지속이 이 값 이상이면 조건 ③ 충족 |
 | `anomaly_sample_interval_min` | 정상 풀 샘플링 주기(분). 기본 5 |
 | `mute_default_duration_s` | 경고 일시중지 기본 지속시간(초). 기본 900 |
-| `clip_extract_margin_s` | 사후 구간 기록 완료 후 클립 추출까지의 여유(초). 기본 2. 세그먼트 파일이 닫히기 전에 잘라내면 끝이 손상된다 |
+| `clip_extract_margin_s` | 세그먼트가 닫힌 뒤 클립 추출까지의 여유(초). 기본 2. **세그먼트 길이는 이 값에 포함되지 않으며 REC이 보고하는 값을 따로 더한다**(기능명세서 §4.4) |
+| `alert_duration_s` | 경광등·부저 지속 시간(초). 기본 5. `AlertCommand.duration_s` 로 나간다 |
+
+#### `GET /alert-sounds` / `PUT /alert-sounds/{violation_type}`
+
+경고 음원 매핑(FN-CFG-03, §6 `alert_sounds`)을 조회·수정한다.
+
+```json
+[ { "violation_type":"no_helmet", "file_path":"assets/audio/no_helmet.wav",
+    "level":2, "label":"안전모 착용 안내", "active":true } ]
+```
+
+`PUT` 은 `file_path` / `level` / `label` / `active` 를 갱신한다.
+**`violation_type` 이 `fall` 이면 `level` 을 `3` 미만으로 낮출 수 없다**(§3). 위반 시 `422` 를 반환한다.
 
 #### `POST /alerts/manual` — 수동 방송
 
@@ -857,7 +887,9 @@ REC은 메인 스트림 녹화와 구간 추출만 담당하는 독립 컴포넌
   ],
   "storage": { "total_gb":500, "used_gb":378, "free_gb":122,
                "retention_days":7,
-               "oldest_segment_at":"2026-08-07T05:37:00Z" } }
+               "oldest_segment_at":"2026-08-07T05:37:00Z" },
+  "recording": { "segment_seconds":10,
+                 "snapshot_fps":1, "snapshot_window_s":60 } }
 ```
 
 서버는 이 응답을 `GET /system/status`(§4.6)의 `storage` 절에 그대로 전달한다. **서버가 자체 디스크를 조회해 채우지 않는다.** 운용 시 녹화 디스크는 서버가 아니라 엣지에 있기 때문이다.
@@ -1019,7 +1051,7 @@ FN-UI-02 표시 규칙(위반자 적색·근접 거리선·거리 라벨)을 채
 ```json
 { "type":"metric","period":"today","correction_rate":0.87,
   "undetermined_rate":0.04,"total_violations":24,"resolved":20,
-  "resolved_late":1,
+  "resolved_late":1,"suppressed":1,
   "unresolved":2,"undetermined":1,"avg_resolution_sec":41,
   "fall_events":0,"anomaly_flags":1 }
 ```
