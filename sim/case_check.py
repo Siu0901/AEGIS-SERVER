@@ -31,6 +31,7 @@ expect:
       resolved_at_s: 16.0   # 선택
       resolution_sec: 12    # 선택 (±1 허용)
       clip_status: ready      # 선택 — FN-REC-03. null 이면 "예약조차 걸리지 않았다"
+      alert_suppressed: false # 선택 — 일시중지 중 확정되어 방송이 없었는가 (§4.8)
   metrics:
     correction_rate: 1.0    # 분모가 0이면 `null` 이다 (0.0 이 아니다 · §6.7)
     undetermined_rate: 0.0
@@ -39,6 +40,7 @@ expect:
     resolved_late: 0        # 창 초과 해소 — 분모에만 (unresolved 와 섞지 않는다)
     unresolved: 0
     undetermined: 0
+    suppressed: 0           # 방송 없이 확정된 건 — 분모·분자 어디에도 안 든다 (§4.8)
     fall_events: 0
   alerts:                   # 선택 — FN-ALM-01·02. **전량 목록**이다(더 나가도 실패)
     - at_s: 3.5
@@ -54,8 +56,8 @@ manual:                     # 선택 — FN-EVT-05 수동 정정
 
 mute:                       # 선택 — FN-ALM-05 경고 일시중지
   - at: 1.0
-    cam_id: 1
-    minutes: 15
+    cam_id: 1               # 생략하면 전체 카메라 (§4.5)
+    minutes: 15             # 0 은 즉시 해제 · 생략하면 mute_default_duration_s
     reason: 정비 작업
 
 restart_at: [12.0]          # 선택 — 이 시각에 서버를 내렸다 올린다 (저장소만 남는다)
@@ -74,7 +76,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, cast
 
 import yaml
 
@@ -95,11 +97,12 @@ from aegis_contracts import (
     TrackLostMsg,
     ViolationType,
 )
-from aegis_contracts.enums import ClipExtractStatus
+from aegis_contracts.enums import AlertLevel, ClipExtractStatus
 from aegis_vision.clock import FakeClock
 from scripts.seed_sounds import AUDIO_DIR, DEFAULT_SOUNDS
 from server.app.alert_service import AlertService
 from server.app.event_service import EventService, Publisher
+from server.domain.alerts import SoundEntry
 from server.domain.event_machine import EventMachine, format_event_id
 from server.domain.mcu_state import McuRuntime
 from server.domain.metrics import MetricsRow
@@ -232,6 +235,8 @@ class CaseStore:
                 status=event.status,
                 resolution_sec=event.resolution_sec,
                 is_false_positive=event.event_id in self.false_positive,
+                # ★ §4.8 — 방송이 나가지 않은 건은 「방송 후」 시정률의 모집단이 아니다.
+                alert_suppressed=event.alert_suppressed,
             )
             for event in self.events.values()
             if (from_ is None or event.detected_at >= from_)
@@ -280,10 +285,17 @@ class CaseMqtt:
 
 
 class CaseSounds:
-    """`SoundReader` 대역 — `alert_sounds` 테이블 대신 기본 매핑 하나."""
+    """`SoundReader` 대역 — `alert_sounds` 테이블 대신 시드 기본값 하나.
 
-    async def load_sounds(self) -> dict[str, str]:
-        return dict(DEFAULT_SOUNDS)
+    **`scripts/seed_sounds.py` 의 표를 그대로 쓴다.** 여기서 따로 적으면 시드가
+    바뀌었을 때 시나리오만 옛 등급으로 통과한다.
+    """
+
+    async def load_sounds(self) -> dict[str, SoundEntry]:
+        return {
+            key: SoundEntry(file_path=file_path, level=cast("AlertLevel", level), label=label)
+            for key, (file_path, level, label) in DEFAULT_SOUNDS.items()
+        }
 
 
 class CaseRec:
@@ -593,10 +605,15 @@ async def _apply_mute(alerts: AlertService | None, entry: Mapping[str, Any]) -> 
     if alerts is None:
         msg = "경고 집행자가 없어 일시중지를 적용할 수 없다"
         raise ValueError(msg)
+    cam_id = entry.get("cam_id")
+    minutes = entry.get("minutes")
     await alerts.mute(
         MuteAlertRequest(
-            cam_id=int(entry.get("cam_id", 1)),
-            minutes=int(entry.get("minutes", 0)),
+            # `cam_id` 를 적지 않으면 **전체 카메라**다(§4.5). 1 로 채우면 시나리오가
+            # 전체 대상 중지를 검증할 수 없다.
+            cam_id=None if cam_id is None else int(cam_id),
+            # `minutes` 를 적지 않으면 정책 기본값(`mute_default_duration_s`)이 붙는다.
+            minutes=None if minutes is None else int(minutes),
             reason=str(entry.get("reason", "")),
         )
     )
@@ -646,7 +663,7 @@ def _check_event(want: Mapping[str, Any], got: EventDetail, result: CaseResult) 
 
     if "status" in want and got.status.value != want["status"]:
         problems.append(f"{label} status: 기대 {want['status']} · 실제 {got.status.value}")
-    for key in ("alert_count", "zone_id"):
+    for key in ("alert_count", "zone_id", "alert_suppressed"):
         if key in want and getattr(got, key) != want[key]:
             problems.append(f"{label} {key}: 기대 {want[key]} · 실제 {getattr(got, key)}")
 

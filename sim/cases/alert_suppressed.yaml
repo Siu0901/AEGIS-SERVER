@@ -1,0 +1,247 @@
+# alert_suppressed — 방송이 없었던 이벤트는 「방송 후 시정률」 분모에 들지 않는다
+#
+# ★ 기능명세서 §4.8 · API명세서 §4.5. 이 프로젝트의 지표 정의를 직접 잠그는 시나리오다.
+#
+# `alert_muted` 는 "일시중지 중에는 아무것도 나가지 않는다"만 본다. 그것만으로는
+# **모집단에서 빠졌는지**를 알 수 없다 — 그 시나리오에는 이벤트가 한 건뿐이라
+# 제외했든 안 했든 분모가 어차피 작다.
+#
+# 여기서는 모집단을 섞는다.
+#
+#   트랙 3 : 일시중지 중 확정 → 방송 없음 → 끝까지 미시정
+#   트랙 7 : 해제 후 확정   → 방송 나감  → 시정 완료
+#
+# 규칙이 지켜지면 판정 가능한 이벤트는 트랙 7 하나뿐이므로 **시정률 1.00**이다.
+# 트랙 3 이 분모로 새면 `1 / 2 = 0.50` 이 된다. 즉 이 파일의 `1.00` 은
+# "미시정 한 건이 분모에 없다"는 주장을 숫자 하나로 못박는다.
+#
+# `fall_excluded` · `false_positive` 가 같은 방식으로 각자의 제외 규칙을 잠근다.
+#
+# 부수적으로 잠기는 것 둘:
+#   · `minutes: 0` 이 즉시 해제라는 것 (§4.5)
+#   · 해제 뒤의 경고는 정상적으로 나간다는 것 (일시중지가 영구화되지 않는다)
+
+name: alert_suppressed
+description: 일시중지 중 확정된 이벤트가 시정률 분모에서 빠지는지
+cam_id: 1
+frame_fps: 8
+
+timeline:
+  # --- t=0 : 두 사람 모두 관측된다. 3번은 안전모 미착용, 7번은 착용 ---
+  - at: 0.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.91
+        bbox: [0.197, 0.364, 0.273, 0.764]
+        helmet: "off"
+        helmet_conf: 0.88
+        foot_point: [0.235, 0.762]
+        foot_point_m: [4.21, 7.85]
+        foot_conf: 0.88
+        posture: standing
+        height_ratio: 0.97
+        axis_angle_deg: 8.2
+        stillness_s: 0.4
+        in_zone: forklift_lane
+      - class: person
+        track_id: 7
+        conf: 0.93
+        bbox: [0.601, 0.362, 0.677, 0.763]
+        helmet: "on"
+        helmet_conf: 0.95
+        foot_point: [0.639, 0.761]
+        foot_point_m: [12.40, 7.88]
+        foot_conf: 0.90
+        posture: standing
+        height_ratio: 0.98
+        axis_angle_deg: 5.8
+        stillness_s: 0.3
+        in_zone: forklift_lane
+
+  - at: 0.5
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violation_type: no_helmet
+    zone_id: forklift_lane
+    bbox: [0.197, 0.364, 0.273, 0.764]
+    conf: 0.91
+    foot_point_m: [4.21, 7.85]
+    foot_conf: 0.88
+    helmet: "off"
+    helmet_conf: 0.88
+    posture: standing
+    observed_ms: 500
+    nearby: []
+
+  # --- t=11 : 해제 뒤. 3번은 여전히 미착용, 7번이 안전모를 벗는다 ---
+  - at: 11.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.90
+        bbox: [0.205, 0.363, 0.281, 0.763]
+        helmet: "off"
+        helmet_conf: 0.89
+        foot_point: [0.243, 0.761]
+        foot_point_m: [4.55, 7.86]
+        foot_conf: 0.87
+        posture: standing
+        height_ratio: 0.97
+        axis_angle_deg: 7.9
+        stillness_s: 0.5
+        in_zone: forklift_lane
+      - class: person
+        track_id: 7
+        conf: 0.92
+        bbox: [0.612, 0.361, 0.688, 0.762]
+        helmet: "off"
+        helmet_conf: 0.86
+        foot_point: [0.650, 0.760]
+        foot_point_m: [12.72, 7.89]
+        foot_conf: 0.89
+        posture: standing
+        height_ratio: 0.98
+        axis_angle_deg: 6.1
+        stillness_s: 0.2
+        in_zone: forklift_lane
+
+  - at: 11.5
+    type: candidate
+    cam_id: 1
+    track_id: 7
+    violation_type: no_helmet
+    zone_id: forklift_lane
+    bbox: [0.612, 0.361, 0.688, 0.762]
+    conf: 0.92
+    foot_point_m: [12.72, 7.89]
+    foot_conf: 0.89
+    helmet: "off"
+    helmet_conf: 0.86
+    posture: standing
+    observed_ms: 500
+    nearby: []
+
+  # --- t=16 : 7번이 안전모를 쓴다 (해소 타이머 시작). 3번은 그대로 ---
+  - at: 16.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.90
+        bbox: [0.212, 0.362, 0.288, 0.762]
+        helmet: "off"
+        helmet_conf: 0.88
+        foot_point: [0.250, 0.760]
+        foot_point_m: [4.82, 7.87]
+        foot_conf: 0.88
+        posture: standing
+        height_ratio: 0.97
+        axis_angle_deg: 8.0
+        stillness_s: 0.6
+        in_zone: forklift_lane
+      - class: person
+        track_id: 7
+        conf: 0.94
+        bbox: [0.628, 0.360, 0.704, 0.761]
+        helmet: "on"
+        helmet_conf: 0.96
+        foot_point: [0.666, 0.759]
+        foot_point_m: [13.10, 7.90]
+        foot_conf: 0.90
+        posture: standing
+        height_ratio: 0.98
+        axis_angle_deg: 5.4
+        stillness_s: 0.3
+        in_zone: forklift_lane
+
+  # --- t=27 : 해소 판정(16.0 + 10초)이 지난 뒤까지 관측을 이어간다 ---
+  - at: 27.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.91
+        bbox: [0.220, 0.362, 0.296, 0.762]
+        helmet: "off"
+        helmet_conf: 0.89
+        foot_point: [0.258, 0.760]
+        foot_point_m: [5.10, 7.87]
+        foot_conf: 0.88
+        posture: standing
+        height_ratio: 0.97
+        axis_angle_deg: 8.1
+        stillness_s: 0.7
+        in_zone: forklift_lane
+      - class: person
+        track_id: 7
+        conf: 0.93
+        bbox: [0.641, 0.360, 0.717, 0.761]
+        helmet: "on"
+        helmet_conf: 0.96
+        foot_point: [0.679, 0.759]
+        foot_point_m: [13.42, 7.90]
+        foot_conf: 0.90
+        posture: standing
+        height_ratio: 0.98
+        axis_angle_deg: 5.2
+        stillness_s: 0.4
+        in_zone: forklift_lane
+
+mute:
+  # 트랙 3 의 확정(+3.5s)보다 먼저 건다.
+  - at: 1.0
+    cam_id: 1
+    minutes: 15
+    reason: 정비 작업
+  # `minutes: 0` = 즉시 해제(§4.5). 트랙 7 의 확정(+14.5s)보다 먼저다.
+  - at: 10.0
+    cam_id: 1
+    minutes: 0
+    reason: 정비 완료
+
+expect:
+  # 트랙 3 의 쿨다운 재경고는 +33.5s 다. 그 전에 끝내 경고 목록을 단순하게 유지한다.
+  tail_s: 1.0
+  events:
+    - track_id: 3
+      violation_type: no_helmet
+      status: alerted
+      alert_count: 1
+      alerted_at_s: 3.5
+      # ★ 방송이 없었다. 이 칸이 거짓이면 아래 시정률이 0.50 으로 떨어진다.
+      alert_suppressed: true
+      clip_status: ready
+    - track_id: 7
+      violation_type: no_helmet
+      status: resolved
+      alert_count: 1
+      alerted_at_s: 14.5
+      resolved_at_s: 26.0
+      alert_suppressed: false
+      clip_status: ready
+  # ★ 해제 뒤의 경고 한 건만 나간다. 일시중지가 영구화되지 않는다는 뜻이다.
+  alerts:
+    - at_s: 14.5
+      violation_type: no_helmet
+      level: 2
+      repeat: false
+      sound: no_helmet.wav
+  metrics:
+    # ★ 판정 가능한 것은 트랙 7 하나뿐이다. 트랙 3 이 분모로 새면 0.50 이 된다.
+    correction_rate: 1.0
+    undetermined_rate: 0.0
+    total_violations: 1
+    resolved: 1
+    resolved_late: 0
+    unresolved: 0
+    undetermined: 0
+    suppressed: 1
+    fall_events: 0
