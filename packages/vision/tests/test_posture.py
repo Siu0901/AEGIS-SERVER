@@ -173,7 +173,7 @@ def test_ground_projecting_the_whole_mask_inverts_the_result() -> None:
 
 
 def _tracker() -> StillnessTracker:
-    return StillnessTracker(move_max=0.01, shape_change_max=0.05)
+    return StillnessTracker(move_px=0.01, window_s=1.0, shape_change_max=0.05)
 
 
 def test_stillness_accumulates_while_the_mask_holds_still() -> None:

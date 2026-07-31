@@ -35,6 +35,7 @@
 from __future__ import annotations
 
 import math
+from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -270,21 +271,30 @@ class StillnessTracker:
     시계를 읽지 않는다.
     """
 
-    def __init__(self, *, move_max: float, shape_change_max: float) -> None:
+    def __init__(self, *, move_px: float, window_s: float, shape_change_max: float) -> None:
         """
         Args:
-            move_max: 중심 이동 허용치(정규화 픽셀 / 초).
-            shape_change_max: 형태 변화 허용 비율(면적·종횡비 변화 / 초).
+            move_px: 정지로 볼 최대 이동량(정규화 픽셀). 정책 키 `stillness_move_px`.
+            window_s: 이동을 평가하는 창(초). 정책 키 `stillness_window_s`.
+            shape_change_max: 창 안에서 허용할 형태 변화 비율(면적·종횡비).
 
-        **기본값을 두지 않는다.** 카메라 화각과 설치 높이에 따라 달라지는 튜닝값이라
-        `edge/config.yaml` 소관이다(절대규칙 6).
+        ★ **앞의 둘은 정책값이다**(API명세서 §4.5). 정지 판정 임계는 오탐 억제의 핵심
+        조건이고 현장 튜닝이 잦아서, 명세서가 `edge/config.yaml` 에서 `policies` 테이블로
+        승격시켰다. 형태 변화 임계는 카메라 화각·설치 높이에 종속되므로 장비 설정에 남는다.
+
+        **기본값을 두지 않는다**(절대규칙 6). 기본값을 주면 정책 조회에 실패한 경로가
+        조용히 코드 상수로 판정하게 되고, 그때 화면에 보이는 임계값과 실제 판정이 갈린다.
         """
-        if move_max <= 0.0 or shape_change_max <= 0.0:
-            msg = f"임계는 0보다 커야 한다: move={move_max!r} shape={shape_change_max!r}"
+        if move_px <= 0.0 or window_s <= 0.0 or shape_change_max <= 0.0:
+            msg = (
+                "임계는 0보다 커야 한다: "
+                f"move={move_px!r} window={window_s!r} shape={shape_change_max!r}"
+            )
             raise ValueError(msg)
-        self._move_max = move_max
+        self._move_px = move_px
+        self._window_s = window_s
         self._shape_change_max = shape_change_max
-        self._previous: tuple[float, MaskShape] | None = None
+        self._window: deque[tuple[float, MaskShape]] = deque()
         self._still_s = 0.0
 
     @property
@@ -297,29 +307,38 @@ class StillnessTracker:
 
         `at_s` 는 단조 증가하는 초 단위 시각(`Clock.monotonic`)이다.
 
+        ★ **창 전체를 본다**(`stillness_window_s`). 프레임 간 차이만 보면 8fps 에서
+        한 프레임의 흔들림이 곧 「움직였다」가 되어 정지 시간이 계속 0으로 되돌아가고,
+        조건 ③이 사실상 충족될 수 없게 된다. 창 시작 시점의 형상과 지금을 비교한다.
+
         **움직이면 0으로 되돌린다.** 여기서 동결(값 유지)하지 않는 이유는, 게이팅
         보류(§6.3)와 달리 「움직였다」는 것이 관측된 사실이기 때문이다 — 관측하지 못한
         것과 움직인 것은 다르다.
         """
-        previous = self._previous
-        self._previous = (at_s, shape)
-        if previous is None:
-            self._still_s = 0.0
-            return self.stillness_s
-
-        last_at, last_shape = previous
-        elapsed = at_s - last_at
-        if elapsed <= 0.0:
+        window = self._window
+        if window and at_s <= window[-1][0]:
             # 같은 시각이 두 번 오면 시간을 더하지 않는다. 재생 배속이나 중복 프레임에서
             # 정지 시간이 공짜로 늘어나면 쓰러짐이 만들어진다.
             return self.stillness_s
 
+        elapsed = at_s - window[-1][0] if window else 0.0
+        window.append((at_s, shape))
+        # 창 밖으로 나간 관측을 버린다. **경계에 걸친 것 하나는 남긴다** — 그것이 없으면
+        # 8fps 에서 창이 0.875초로 줄어 실제보다 짧은 구간만 비교하게 된다.
+        while len(window) > 1 and window[1][0] <= at_s - self._window_s:
+            window.popleft()
+
+        if elapsed <= 0.0:
+            self._still_s = 0.0
+            return self.stillness_s
+
+        _, oldest = window[0]
         moved = math.hypot(
-            shape.center[0] - last_shape.center[0],
-            shape.center[1] - last_shape.center[1],
+            shape.center[0] - oldest.center[0],
+            shape.center[1] - oldest.center[1],
         )
-        changed = _shape_change(last_shape, shape)
-        if moved / elapsed <= self._move_max and changed / elapsed <= self._shape_change_max:
+        changed = _shape_change(oldest, shape)
+        if moved <= self._move_px and changed <= self._shape_change_max:
             self._still_s += elapsed
         else:
             self._still_s = 0.0
@@ -327,7 +346,7 @@ class StillnessTracker:
 
     def reset(self) -> None:
         """트랙이 끊겼다 — 지금까지의 정지 시간은 이 사람의 것이 아니다."""
-        self._previous = None
+        self._window.clear()
         self._still_s = 0.0
 
 

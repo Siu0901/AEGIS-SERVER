@@ -157,6 +157,22 @@ class Policies(SpecModel):
     fall_stillness_s: float = 5.0
     """정지 지속이 이 값 이상이면 조건 ③ 충족. 오탐 억제의 핵심이라 미세 조정이 잦다."""
 
+    stillness_move_px: float = 0.008
+    """**무엇을 정지로 볼 것인가** — 이 값(정규화 픽셀) 이하 이동이면 정지다(§4.5).
+
+    ★ 명세서가 `edge/config.yaml` 에서 정책 테이블로 **승격**한 키다. 정지 판정 임계는
+    오탐 억제의 핵심 조건이고 현장 튜닝이 잦은데, 장비 설정 파일에 있으면 조정할 때마다
+    엣지에 접속해 파일을 고치고 프로세스를 다시 띄워야 한다 — 그건 배포이지 설정이 아니다.
+    """
+
+    stillness_window_s: float = 1.0
+    """정지 여부를 평가하는 **이동 평균 창**(초).
+
+    프레임 간 차이만 보면 8fps 에서 한 프레임의 흔들림이 곧 「움직였다」가 되어 정지
+    시간이 계속 0으로 되돌아간다. 창을 두면 그 잡음이 평균에 묻힌다 — 대신 창보다
+    짧은 움직임은 보이지 않으므로, `stillness_move_px` 와 **함께** 조정해야 한다.
+    """
+
     # --- 이상 탐지 (FN-AI-04) ---
     anomaly_sample_interval_min: float = 5.0
     """정상 풀 샘플링 주기(분)."""
@@ -194,4 +210,6 @@ class PolicyPatch(SpecModel):
     fall_height_ratio_max: float | None = None
     fall_axis_angle_min_deg: float | None = None
     fall_stillness_s: float | None = None
+    stillness_move_px: float | None = None
+    stillness_window_s: float | None = None
     anomaly_sample_interval_min: float | None = None

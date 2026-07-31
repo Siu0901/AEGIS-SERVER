@@ -3,9 +3,14 @@
 #   +0s    작업자(track 3)가 서서 일한다 — 높이 비율 ≈ 1 · 주축 ≈ 0° · 계속 움직인다
 #   +2.5s  쓰러진다. bbox 가 낮고 넓어지고 움직임이 멈춘다
 #          ①(높이 비율)과 ②(주축 각도)는 이 순간 바로 충족된다
-#   +7.5s  ③(정지 지속 5초)이 채워져 `posture` 가 `fallen` 으로 바뀐다
-#   +8.0s~ 엣지가 `fall` 후보를 올린다
-#   +11s   서버가 확정하고 **level 3** 긴급 경고를 낸다 (§3 · FN-ALM-03)
+#   +8.4s  ③(정지 지속 5초)이 채워져 `posture` 가 `fallen` 으로 바뀐다
+#   +8.5s~ 엣지가 `fall` 후보를 올린다
+#   +11.5s 서버가 확정하고 **level 3** 긴급 경고를 낸다 (§3 · FN-ALM-03)
+#
+# ★ **쓰러진 순간(+2.5s)에서 5초가 아니라 약 5.9초가 걸린다.** 정지 판정이
+#   `stillness_window_s`(1.0초) 이동 평균 창으로 돌기 때문이다(§4.5) — 창이 서 있던
+#   구간의 형상을 물고 있는 동안에는 정지가 쌓이지 않는다. 창을 없애면 8fps 에서 한
+#   프레임의 흔들림이 곧 「움직였다」가 되어 정지 시간이 계속 0으로 되돌아간다.
 #
 # ★ **세 조건 중 ③이 5초를 채우기 전에는 `fallen` 이 아니다.** ①②만으로 판정하면
 #   쭈그려 앉는 순간마다 긴급 경고가 나간다. `crouch_not_fall` · `bend_not_fall` 이
@@ -110,7 +115,7 @@ timeline:
     depth_calls_per_min: 13
 
   # ── ③  세 조건이 모두 채워진 뒤에야 후보가 올라간다 ──
-  - at: 8.0
+  - at: 8.5
     type: candidate
     cam_id: 1
     track_id: 3
@@ -123,7 +128,7 @@ timeline:
     observed_ms: 500
     nearby: []
 
-  - at: 9.5
+  - at: 10.0
     type: candidate
     cam_id: 1
     track_id: 3
@@ -136,7 +141,7 @@ timeline:
     observed_ms: 2000
     nearby: []
 
-  - at: 11.0
+  - at: 11.5
     type: candidate
     cam_id: 1
     track_id: 3
@@ -149,7 +154,7 @@ timeline:
     observed_ms: 3500
     nearby: []
 
-  - at: 12.5
+  - at: 13.0
     type: candidate
     cam_id: 1
     track_id: 3
@@ -199,11 +204,11 @@ expect:
       status: alerted
       zone_id: forklift_lane
       alert_count: 1
-      confirmed_at_s: 11.0
-      alerted_at_s: 11.0
+      confirmed_at_s: 11.5
+      alerted_at_s: 11.5
   alerts:
     # ★ `fall` 은 항상 level 3 다. 설정으로 3 미만으로 내릴 수 없다(§3 · FN-CFG-03).
-    - at_s: 11.0
+    - at_s: 11.5
       violation_type: fall
       level: 3
       repeat: false
