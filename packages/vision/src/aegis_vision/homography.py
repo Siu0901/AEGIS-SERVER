@@ -29,6 +29,7 @@ from typing import Self
 
 __all__ = [
     "MIN_CORRESPONDENCES",
+    "Bbox",
     "CalibrationError",
     "Correspondence",
     "Homography",
@@ -42,6 +43,9 @@ PointPx = tuple[float, float]
 
 #: 지면 실좌표(m). 접미사 `_m` 이 붙은 좌표는 전부 이것이다.
 PointM = tuple[float, float]
+
+#: 정규화 경계상자 `[x1, y1, x2, y2]`(API명세서 §2.1). 좌상단·우하단 코너다.
+Bbox = tuple[float, float, float, float]
 
 #: 3×3 행렬. 계약(`aegis_contracts.Homography`)은 `list[list[float]]` 로 주고받는다.
 Matrix3 = tuple[
