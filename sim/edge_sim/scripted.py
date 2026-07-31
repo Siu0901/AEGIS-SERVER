@@ -44,6 +44,11 @@
 | `frame` 지게차의 `anchor` | `anchor_m` |
 | `candidate` 의 `foot_point` | `foot_point_m` |
 
+**M7 이 같은 규칙을 자세와 거리에도 적용했다.** 시나리오가 `mask: {posture, motion}` 을
+적으면 `height_ratio` · `axis_angle_deg` · `stillness_s` · `posture` 를 계산해 싣고,
+후보가 `nearby: auto` 를 적으면 `nearby[]` 를 계산해 싣는다(`derive.py`). 결과를 손으로
+적으면 시나리오 작성자가 곧 판정자가 되어 오탐 억제를 검증할 수 없다.
+
 카메라별 캘리브레이션은 `scripts/seed_cameras.py` 의 개발용 4점이며 **DB 시드와 같은
 상수**다 — 엣지와 서버가 다른 좌표계로 계산하면 거리도 구역도 어긋난다.
 """
@@ -63,6 +68,7 @@ from pydantic import TypeAdapter
 from aegis_contracts import EdgeMessage
 from aegis_vision import Homography
 from scripts.seed_cameras import homography_for
+from sim.edge_sim.derive import derive_entries
 
 __all__ = ["CASES_DIR", "ScheduledMessage", "load_case", "resolve_case_path", "retime"]
 
@@ -78,6 +84,10 @@ _TS_FIELD: Final[dict[str, str]] = {
 }
 
 #: 키프레임 사이를 선형 보간하는 스칼라 필드. API명세서 §2.1
+#:
+#: `height_ratio` · `axis_angle_deg` · `stillness_s` 가 여기 남아 있는 것은 **옛
+#: 시나리오(M2~M4)가 손으로 적은 값** 때문이다. `mask` 를 적은 시나리오에서는 이 값들이
+#: 보간이 아니라 계산으로 채워진다(`derive.py`) — 보간 뒤에 덮어쓰므로 충돌하지 않는다.
 _LERP_SCALAR: Final[frozenset[str]] = frozenset(
     {"conf", "foot_conf", "helmet_conf", "height_ratio", "axis_angle_deg", "stillness_s"}
 )
@@ -166,6 +176,10 @@ def load_case(case: str, start: datetime, speed: float = 1.0) -> list[ScheduledM
     entries.sort(key=lambda item: item[0])
 
     default_cam = int(raw.get("cam_id", 1))
+    # 보간이 끝난 **뒤에** 게이지를 계산한다. 정지 지속(FN-DET-10 ③)은 프레임 사이의
+    # 차이이므로 8fps 로 채워진 뒤라야 실물과 같은 밀도로 쌓인다 — 키프레임만 보고
+    # 계산하면 1~6초씩 건너뛴 값이 나와 3조건 중 하나가 사실상 무력해진다.
+    derive_entries(entries, _homography, default_cam)
     scheduled: list[ScheduledMessage] = []
     for at_s, payload in entries:
         played_at = at_s / speed
