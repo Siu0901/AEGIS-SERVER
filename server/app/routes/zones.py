@@ -76,16 +76,22 @@ async def list_zones(request: Request, cam_id: int | None = None) -> list[Zone]:
 async def upsert_zone(request: Request, body: ZoneUpsertRequest) -> Zone:
     """FN-CFG-02 — 구역 저장. 같은 `zone_id` 면 덮어쓴다.
 
-    폴리곤은 화면 픽셀(`polygon`)이나 지면 미터(`polygon_m`) 중 하나로 온다. 픽셀로
-    오면 **그 카메라의 호모그래피로 서버가 변환한다** — 캘리브레이션이 없으면 변환할
-    수 없으므로 `422` 로 거부하고, 그 사실이 화면에 그대로 드러나야 한다.
+    폴리곤은 화면에서 그린 **정규화 픽셀**로 온다. 지면 미터는 **그 카메라의
+    호모그래피로 서버가 만든다** — 캘리브레이션이 없으면 변환할 수 없으므로 `422` 로
+    거부하고, 그 사실이 화면에 그대로 드러나야 한다.
+
+    **두 표현을 모두 저장한다**(§4.5). 판정은 미터로 하지만 설정 화면이 구역을 다시
+    그리려면 픽셀이 필요하고, 캘리브레이션이 갱신되면 픽셀을 기준으로 미터를 다시
+    계산한다 — 사용자가 그린 위치가 원본이기 때문이다.
     """
-    polygon_m = await _resolve_polygon(request, body)
+    polygon = [(float(x), float(y)) for x, y in body.polygon]
+    polygon_m = await _to_ground(request, body.cam_id, polygon)
     zone = Zone(
         zone_id=body.zone_id,
         cam_id=body.cam_id,
         name=body.name,
         polygon_m=polygon_m,
+        polygon=polygon,
         buffer_m=body.buffer_m,
         active=body.active,
     )
@@ -151,32 +157,22 @@ async def delete_zone(request: Request, zone_id: str, cam_id: int) -> None:
     )
 
 
-async def _resolve_polygon(request: Request, body: ZoneUpsertRequest) -> list[tuple[float, float]]:
-    """요청의 폴리곤을 지면 좌표로 만든다. 픽셀로 왔으면 여기서 변환한다."""
-    if (body.polygon is None) == (body.polygon_m is None):
-        raise _validation("polygon(픽셀) 과 polygon_m(미터) 중 정확히 하나만 보내야 합니다")
-
-    if body.polygon is None:
-        # 위 검사가 "둘 중 하나"를 보장하므로 여기서는 `polygon_m` 이 반드시 있다.
-        polygon_m = [(float(x), float(y)) for x, y in body.polygon_m or []]
-    else:
-        matrix = await _homography(request, body.cam_id)
-        try:
-            homography = Homography.from_matrix(matrix)
-            polygon_m = [
-                (round(x, 3), round(y, 3))
-                for x, y in homography.polygon_to_ground(
-                    [(float(x), float(y)) for x, y in body.polygon]
-                )
-            ]
-        except CalibrationError as exc:
-            raise _validation(f"폴리곤을 지면 좌표로 바꾸지 못했습니다: {exc}") from exc
-
-    if len(polygon_m) < _MIN_VERTICES:
+async def _to_ground(
+    request: Request,
+    cam_id: int,
+    polygon: list[tuple[float, float]],
+) -> list[tuple[float, float]]:
+    """화면 픽셀 폴리곤 → 지면 좌표. **변환은 서버가 한다**(§4.5)."""
+    if len(polygon) < _MIN_VERTICES:
         raise _validation(
-            f"구역 꼭짓점이 {len(polygon_m)}개입니다 — {_MIN_VERTICES}개 이상 필요합니다"
+            f"구역 꼭짓점이 {len(polygon)}개입니다 — {_MIN_VERTICES}개 이상 필요합니다"
         )
-    return polygon_m
+    matrix = await _homography(request, cam_id)
+    try:
+        homography = Homography.from_matrix(matrix)
+        return [(round(x, 3), round(y, 3)) for x, y in homography.polygon_to_ground(polygon)]
+    except CalibrationError as exc:
+        raise _validation(f"폴리곤을 지면 좌표로 바꾸지 못했습니다: {exc}") from exc
 
 
 async def _homography(request: Request, cam_id: int) -> list[list[float]]:

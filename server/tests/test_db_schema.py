@@ -67,8 +67,29 @@ SPEC_EVENT_COLUMNS = {
     "note",
 }
 
-#: 기능명세서 §6 `zones` 컬럼 전량.
-SPEC_ZONE_COLUMNS = {"zone_id", "cam_id", "name", "polygon_m", "buffer_m", "active"}
+#: 기능명세서 §6 `zones` 컬럼 전량 + API명세서 §4.5 가 요구하는 `polygon`.
+#:
+#: ⚠ §6 표에는 `polygon` 이 없는데 §4.5 는 「두 표현을 모두 저장하고 반환한다」고 적었다.
+#: 픽셀을 버리면 캘리브레이션이 갱신될 때 **사용자가 그린 위치를 복원할 수 없다** —
+#: `docs/INDEX.md` 「명세서 확인 필요」 참조.
+SPEC_ZONE_COLUMNS = {"zone_id", "cam_id", "name", "polygon_m", "polygon", "buffer_m", "active"}
+
+#: 기능명세서 §6 `cameras` 컬럼 + API명세서 §4.5 가 요구하는 두 칸.
+#:
+#: ⚠ §6 표에는 `calib_points` · `reproj_error_m` 이 없는데 §4.5 `GET /cameras` 는 둘 다
+#: 반환한다. 행렬만 남기면 설정 화면이 **어느 점을 찍었는지 복원할 수 없어** 한 점만
+#: 고치려 해도 네 점을 다시 찍어야 한다 — 같은 항목에 올려 두었다.
+SPEC_CAMERA_COLUMNS = {
+    "cam_id",
+    "name",
+    "rtsp_main",
+    "rtsp_sub",
+    "homography",
+    "ref_height_px_at_m",
+    "calib_points",
+    "reproj_error_m",
+    "calibrated_at",
+}
 
 #: 기능명세서 §6 `alert_sounds` 컬럼 전량. FN-CFG-03
 #:
@@ -89,6 +110,12 @@ def test_events_columns_match_spec_exactly() -> None:
 def test_zones_columns_match_spec_exactly() -> None:
     columns = set(SQLModel.metadata.tables["zones"].columns.keys())
     assert columns == SPEC_ZONE_COLUMNS
+
+
+def test_cameras_columns_match_spec_exactly() -> None:
+    """§6 `cameras` + §4.5 가 요구하는 `calib_points` · `reproj_error_m`."""
+    columns = set(SQLModel.metadata.tables["cameras"].columns.keys())
+    assert columns == SPEC_CAMERA_COLUMNS
 
 
 def test_alert_sounds_columns_match_spec_exactly() -> None:

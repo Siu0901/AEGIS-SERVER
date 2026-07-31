@@ -54,6 +54,7 @@ LANE = Zone(
     cam_id=1,
     name="지게차 통행로",
     polygon_m=[(2.0, 6.0), (7.0, 6.0), (7.0, 11.0), (2.0, 11.0)],
+    polygon=[(0.10, 0.72), (0.55, 0.72), (0.55, 0.41), (0.10, 0.41)],
     buffer_m=0.3,
     active=True,
 )
@@ -181,21 +182,45 @@ def test_unknown_camera_is_404() -> None:
     assert response.status_code == 404
 
 
-def test_calibration_republishes_every_zone_of_that_camera() -> None:
-    """★ §5.4 — 지면 좌표계가 바뀌었으므로 대시보드 캐시를 갱신해야 한다.
+def test_calibration_recomputes_ground_coordinates_from_the_pixel_polygon() -> None:
+    """★ §4.5 — 캘리브레이션이 갱신되면 **픽셀을 기준으로** 지면 좌표를 다시 계산한다.
 
-    폴리곤 값은 그대로여도 **화면에 그리는 위치가 달라진다.**
+    사용자가 화면에서 그린 위치가 원본이다. 미터를 그대로 두면 화면의 도형과 판정에
+    쓰이는 도형이 서로 다른 좌표계에 놓이고, 그 어긋남은 구역 판정이 조용히 틀리는
+    형태로만 드러난다. 그 뒤 §5.4 `zone_updated` 로 대시보드 캐시를 갱신한다.
     """
-    other = LANE.model_copy(update={"zone_id": "cam2_zone", "cam_id": 2})
-    client, parts = build(zones=FakeZoneStore([LANE, other]))
+    # 캘리브레이션 사각형 그대로 그린 구역 → (0,0)-(5,0)-(5,5)-(0,5) 이 되어야 한다.
+    drawn = LANE.model_copy(
+        update={"polygon": [(0.21, 0.83), (0.68, 0.80), (0.75, 0.55), (0.28, 0.57)]}
+    )
+    other = drawn.model_copy(update={"zone_id": "cam2_zone", "cam_id": 2})
+    client, parts = build(zones=FakeZoneStore([drawn, other]))
     with client:
         client.post("/api/v1/cameras/1/calibration", json={"points": SPEC_POINTS})
+
+    stored = next(zone for zone in parts["zones"].zones if zone.zone_id == "forklift_lane")
+    assert stored.polygon_m[0] == (0.0, 0.0)
+    assert stored.polygon_m[2] == (5.0, 5.0)
+    assert stored.polygon == drawn.polygon, "픽셀 원본은 건드리지 않는다"
+
     published = [m for m in parts["hub"].messages if isinstance(m, ZoneUpdatedMsg)]
     assert [m.zone.zone_id for m in published] == ["forklift_lane"]
     assert published[0].action == "upsert"
     assert published[0].cam_id == 1
     # `upsert` 는 폴리곤 전량이 필수다(§5.4) — 없으면 수신 측이 캐시를 손상시킨다.
-    assert published[0].zone.polygon_m == LANE.polygon_m
+    assert published[0].zone.polygon_m == stored.polygon_m
+
+
+def test_zone_without_a_pixel_polygon_is_not_invented() -> None:
+    """픽셀 원본이 없는 옛 구역은 지어내지 않는다 — 그대로 두고 알린다.
+
+    미터를 옛 호모그래피로 되돌려 픽셀을 만들 수는 있지만, 그것은 **옛 캘리브레이션이
+    맞았다고 가정**하는 일이다. 지금 다시 찍는 이유가 바로 그것이 틀렸기 때문이다.
+    """
+    client, parts = build(zones=FakeZoneStore([LANE.model_copy(update={"polygon": []})]))
+    with client:
+        client.post("/api/v1/cameras/1/calibration", json={"points": SPEC_POINTS})
+    assert parts["zones"].zones[0].polygon_m == LANE.polygon_m
 
 
 def test_camera_list_exposes_the_matrix_for_drawing() -> None:
@@ -209,6 +234,11 @@ def test_camera_list_exposes_the_matrix_for_drawing() -> None:
         after = client.get("/api/v1/cameras").json()
     assert after[0]["homography"] is not None
     assert after[0]["calibrated_at"] is not None
+    # §4.5 — 대응점 원본과 재투영 오차도 함께 보존한다. 행렬만으로는 어느 점을
+    # 찍었는지 복원할 수 없어 한 점만 고치려 해도 네 점을 다시 찍어야 한다.
+    assert after[0]["calib_points"] == SPEC_POINTS
+    assert after[0]["reproj_error_m"] == 0.0
+    assert after[0]["rtsp_main"].endswith("/cam1/main")
 
 
 # --------------------------------------------------------------------------
@@ -259,8 +289,12 @@ def test_drawing_without_calibration_is_refused() -> None:
     assert parts["zones"].zones == []
 
 
-def test_meter_polygon_is_stored_as_is() -> None:
-    """실측값을 직접 넣는 경로. 변환하지 않는다."""
+def test_client_cannot_send_meters() -> None:
+    """§4.5 — `polygon_m` 은 **클라이언트가 직접 보내지 않는다.**
+
+    받아주면 호모그래피 적용 코드가 프론트에 한 벌 더 생기고, 두 벌이 갈리는 순간
+    화면의 구역과 판정의 구역이 달라진다. 계약이 `extra="forbid"` 라 422 다.
+    """
     client, parts = build(zones=FakeZoneStore([]))
     with client:
         response = client.post(
@@ -272,17 +306,15 @@ def test_meter_polygon_is_stored_as_is() -> None:
                 "polygon_m": [[1.0, 1.0], [4.0, 1.0], [4.0, 4.0]],
             },
         )
-    assert response.status_code == 200
-    assert parts["zones"].zones[0].polygon_m == [(1.0, 1.0), (4.0, 1.0), (4.0, 4.0)]
+    assert response.status_code == 422
+    assert parts["zones"].zones == []
 
 
-def test_both_or_neither_polygon_is_refused() -> None:
+def test_missing_polygon_is_refused() -> None:
     client, _ = build(zones=FakeZoneStore([]))
-    payload = {"zone_id": "z", "cam_id": 1, "name": "n"}
     with client:
-        assert client.post("/api/v1/zones", json=payload).status_code == 422
-        both = payload | {"polygon": [[0.1, 0.1]], "polygon_m": [[1.0, 1.0]]}
-        assert client.post("/api/v1/zones", json=both).status_code == 422
+        response = client.post("/api/v1/zones", json={"zone_id": "z", "cam_id": 1, "name": "n"})
+    assert response.status_code == 422
 
 
 def test_two_vertices_are_refused() -> None:
@@ -291,7 +323,7 @@ def test_two_vertices_are_refused() -> None:
     with client:
         response = client.post(
             "/api/v1/zones",
-            json={"zone_id": "z", "cam_id": 1, "name": "n", "polygon_m": [[0.0, 0.0], [1.0, 1.0]]},
+            json={"zone_id": "z", "cam_id": 1, "name": "n", "polygon": [[0.0, 0.0], [0.1, 0.1]]},
         )
     assert response.status_code == 422
 

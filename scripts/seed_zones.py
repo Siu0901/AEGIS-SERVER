@@ -9,8 +9,15 @@
 대시보드 캐시(§5.1)와 오버레이 라벨이 서로 맞는다. 구역 행이 없으면 화면에는
 "forklift_lane" 이라는 정체불명의 문자열만 남는다.
 
-**폴리곤은 지면 실좌표(m)다**(기능명세서 §6). 화면 픽셀로 그리려면 호모그래피가
-있어야 하고 그건 캘리브레이션(FN-CFG-01 · M6) 이후의 일이다.
+**두 표현을 모두 심는다**(API명세서 §4.5). 판정은 `polygon_m`(지면 미터)으로 하고,
+설정 화면이 구역을 다시 그리려면 `polygon`(정규화 픽셀)이 필요하다. 캘리브레이션이
+갱신되면 서버가 **픽셀을 기준으로** 미터를 다시 계산하므로, 픽셀이 비어 있는 구역은
+좌표계가 바뀔 때 따라오지 못한다.
+
+여기서는 지면 사각형을 먼저 정하고 개발용 호모그래피로 **픽셀을 역산**한다 — 이
+사각형에 시나리오 12종의 `in_zone` 기대값이 걸려 있어서 값을 옮길 수 없기 때문이다.
+그 결과 왼쪽 아래 꼭짓점의 x 가 −0.07 로 **화면 왼쪽 밖**에 놓인다. 사람이 그릴 수 없는
+모양이지만 좌표로는 성립하며, 이 구역이 화면보다 넓다는 사실을 그대로 보여준다.
 """
 
 from __future__ import annotations
@@ -18,9 +25,11 @@ from __future__ import annotations
 import argparse
 import io
 import sys
+from typing import cast
 
 from sqlalchemy.dialects.postgresql import insert
 
+from scripts.seed_cameras import homography_for
 from server.infra.db import Zone, create_db_engine
 
 # `tasks.py migrate` 가 이 모듈을 자식으로 돌리므로 출력이 파이프가 된다.
@@ -28,10 +37,10 @@ from server.infra.db import Zone, create_db_engine
 if isinstance(sys.stdout, io.TextIOWrapper):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-#: 개발용 기본 구역. `sim/cases/no_helmet.yaml` 의 경로가 이 사각형을 통과한다.
+#: 개발용 기본 구역의 지면 사각형. `sim/cases/no_helmet.yaml` 의 경로가 여기를 통과한다.
 #:
 #: 시안의 건설현장 용어(굴착 구역)가 아니라 제조현장 용어를 쓴다(기능명세서 부록 B).
-DEV_ZONES: list[dict[str, object]] = [
+_DEV_GROUND: list[dict[str, object]] = [
     {
         "zone_id": "forklift_lane",
         "cam_id": 1,
@@ -43,6 +52,24 @@ DEV_ZONES: list[dict[str, object]] = [
 ]
 
 
+def _with_pixels(zones: list[dict[str, object]]) -> list[dict[str, object]]:
+    """지면 사각형에서 픽셀 폴리곤을 역산해 붙인다.
+
+    **DB 시드와 시뮬레이터가 같은 호모그래피를 쓴다**(`scripts/seed_cameras.py`).
+    다른 값을 쓰면 서버가 계산하는 구역과 엣지가 보내는 좌표가 다른 평면 위에 놓인다.
+    """
+    seeded: list[dict[str, object]] = []
+    for zone in zones:
+        homography = homography_for(cast("int", zone["cam_id"]))
+        polygon_m = cast("list[list[float]]", zone["polygon_m"])
+        pixels = [homography.to_pixel((point[0], point[1])) for point in polygon_m]
+        seeded.append(zone | {"polygon": [[round(x, 4), round(y, 4)] for x, y in pixels]})
+    return seeded
+
+
+DEV_ZONES: list[dict[str, object]] = _with_pixels(_DEV_GROUND)
+
+
 def seed(*, force: bool) -> int:
     statement = insert(Zone).values(DEV_ZONES)
     if force:
@@ -52,6 +79,7 @@ def seed(*, force: bool) -> int:
                 "cam_id": statement.excluded.cam_id,
                 "name": statement.excluded.name,
                 "polygon_m": statement.excluded.polygon_m,
+                "polygon": statement.excluded.polygon,
                 "buffer_m": statement.excluded.buffer_m,
                 "active": statement.excluded.active,
             },

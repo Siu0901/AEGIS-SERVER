@@ -291,15 +291,29 @@ class DbEventRepository:
         track_id: int,
         zone_id: str | None,
         at: datetime,
+        violation_type: str | None = None,
     ) -> int:
-        """동일 트랙·구역의 최근 7일 유사 이벤트 수. FN-EVT-06"""
-        return await asyncio.to_thread(self._count_repeat_7d, cam_id, track_id, zone_id, at)
+        """동일 트랙·구역의 최근 7일 **유사** 이벤트 수. FN-EVT-06
+
+        ★ **작업자 개인 단위 누적이 아니다**(API명세서 §4.2 「작업자 개인 단위 누적은
+        하지 않는다」). `track_id` 는 세션 내 추적 번호일 뿐 신원이 아니므로, 이 숫자는
+        「이 사람이 4번 어겼다」가 아니라 **「이 자리·이 추적에서 같은 위반이 4번
+        관측됐다」**로 읽어야 한다. 화면 라벨도 그렇게 적는다(`EventsPage`).
+        """
+        return await asyncio.to_thread(
+            self._count_repeat_7d, cam_id, track_id, zone_id, at, violation_type
+        )
 
     def _count_repeat_7d(
-        self, cam_id: int, track_id: int, zone_id: str | None, at: datetime
+        self,
+        cam_id: int,
+        track_id: int,
+        zone_id: str | None,
+        at: datetime,
+        violation_type: str | None,
     ) -> int:
         with Session(self._engine) as session:
-            return self._repeat_query(session, cam_id, track_id, zone_id, at)
+            return self._repeat_query(session, cam_id, track_id, zone_id, at, violation_type)
 
     def _repeat_count(self, session: Session, row: EventRow) -> int:
         """목록·상세에 실을 `repeat_count_7d`.
@@ -309,7 +323,9 @@ class DbEventRepository:
         """
         if row.detected_at is None:
             return 0
-        return self._repeat_query(session, row.cam_id, row.track_id, row.zone_id, row.detected_at)
+        return self._repeat_query(
+            session, row.cam_id, row.track_id, row.zone_id, row.detected_at, row.violation_type
+        )
 
     def _repeat_query(
         self,
@@ -318,6 +334,7 @@ class DbEventRepository:
         track_id: int,
         zone_id: str | None,
         at: datetime,
+        violation_type: str | None,
     ) -> int:
         statement = (
             select(func.count())
@@ -328,6 +345,10 @@ class DbEventRepository:
             # 오탐으로 정정된 건은 반복 횟수에 넣지 않는다(FN-EVT-05).
             .where(col(EventRow.is_false_positive).is_(False))
         )
+        if violation_type is not None:
+            # §4.1 이 말하는 「**유사** 이벤트」다. 안전모 미착용과 지게차 근접을 한
+            # 숫자로 합치면 "무엇이 반복되고 있는가"가 사라져 대응을 정할 수 없다.
+            statement = statement.where(col(EventRow.violation_type) == violation_type)
         if zone_id is None:
             statement = statement.where(col(EventRow.track_id) == track_id)
         else:
@@ -464,6 +485,7 @@ class DbZoneRepository:
             row.cam_id = zone.cam_id
             row.name = zone.name
             row.polygon_m = [list(point) for point in zone.polygon_m]
+            row.polygon = [list(point) for point in zone.polygon]
             row.buffer_m = zone.buffer_m
             row.active = zone.active
             session.add(row)
@@ -502,9 +524,17 @@ class DbCameraRepository:
         homography: list[list[float]],
         ref_height_px_at_m: dict[str, Any] | None,
         calibrated_at: datetime,
+        calib_points: list[dict[str, Any]] | None = None,
+        reproj_error_m: float | None = None,
     ) -> None:
         await asyncio.to_thread(
-            self._save_calibration, cam_id, homography, ref_height_px_at_m, calibrated_at
+            self._save_calibration,
+            cam_id,
+            homography,
+            ref_height_px_at_m,
+            calibrated_at,
+            calib_points,
+            reproj_error_m,
         )
 
     def _save_calibration(
@@ -513,6 +543,8 @@ class DbCameraRepository:
         homography: list[list[float]],
         ref_height_px_at_m: dict[str, Any] | None,
         calibrated_at: datetime,
+        calib_points: list[dict[str, Any]] | None,
+        reproj_error_m: float | None,
     ) -> None:
         with Session(self._engine) as session:
             row = session.get(CameraRow, cam_id)
@@ -523,9 +555,27 @@ class DbCameraRepository:
                 raise LookupError(msg)
             row.homography = homography
             row.ref_height_px_at_m = ref_height_px_at_m
+            row.calib_points = calib_points
+            row.reproj_error_m = reproj_error_m
             row.calibrated_at = calibrated_at
             session.add(row)
             session.commit()
+
+    async def patch_camera(self, cam_id: int, changes: dict[str, Any]) -> dict[str, Any] | None:
+        """`PATCH /cameras/{cam_id}` (API명세서 §4.5). 없는 카메라면 `None`."""
+        return await asyncio.to_thread(self._patch_camera, cam_id, changes)
+
+    def _patch_camera(self, cam_id: int, changes: dict[str, Any]) -> dict[str, Any] | None:
+        with Session(self._engine) as session:
+            row = session.get(CameraRow, cam_id)
+            if row is None:
+                return None
+            for key, value in changes.items():
+                setattr(row, key, value)
+            session.add(row)
+            session.commit()
+            session.refresh(row)
+            return row.model_dump()
 
 
 class DbVehicleClassRepository:
@@ -784,6 +834,7 @@ def _zone(row: ZoneRow) -> Zone:
         cam_id=row.cam_id,
         name=row.name,
         polygon_m=[(point[0], point[1]) for point in row.polygon_m],
+        polygon=[(point[0], point[1]) for point in row.polygon],
         buffer_m=row.buffer_m,
         active=row.active,
     )

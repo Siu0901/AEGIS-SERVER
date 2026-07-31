@@ -104,11 +104,18 @@ class EventRepository(Protocol):
         track_id: int,
         zone_id: str | None,
         at: datetime,
+        violation_type: str | None = None,
     ) -> int:
-        """동일 트랙·구역의 최근 7일 유사 이벤트 수. FN-EVT-06
+        """동일 트랙·구역의 최근 7일 **유사** 이벤트 수. FN-EVT-06
 
         기준 시각 `at` 을 받는다. 구현이 시스템 시계를 읽으면 절대규칙 1이 깨지고,
         무엇보다 어제 본 목록과 오늘 본 목록에서 같은 이벤트의 숫자가 달라진다.
+
+        `violation_type` 을 주면 같은 유형만 센다 — §4.1 의 「유사 이벤트」다. 안전모
+        미착용과 지게차 근접을 한 숫자로 합치면 무엇이 반복되는지가 사라진다.
+
+        ★ **작업자 개인 단위 누적이 아니다**(API명세서 §4.2). `track_id` 는 세션 내
+        추적 번호일 뿐 신원이 아니므로 이 숫자는 사람이 아니라 **자리와 추적**에 붙는다.
         """
         ...
 
@@ -153,7 +160,23 @@ class CameraRepository(Protocol):
         homography: list[list[float]],
         ref_height_px_at_m: dict[str, Any] | None,
         calibrated_at: datetime,
-    ) -> None: ...
+        calib_points: list[dict[str, Any]] | None = None,
+        reproj_error_m: float | None = None,
+    ) -> None:
+        """행렬과 **대응점 원본**을 함께 저장한다(API명세서 §4.5 `calib_points`).
+
+        행렬만 남기면 설정 화면이 어느 점을 찍었는지 복원할 수 없어, 한 점만 고치려 해도
+        네 점을 다시 찍어야 한다.
+        """
+        ...
+
+    async def patch_camera(self, cam_id: int, changes: dict[str, Any]) -> dict[str, Any] | None:
+        """`PATCH /cameras/{cam_id}`. 없는 카메라면 `None`.
+
+        **새로 만들지 않는다** — `rtsp_main`·`rtsp_sub` 를 지어낼 수 없고, 지어낸
+        주소로는 아무 영상도 오지 않는다.
+        """
+        ...
 
 
 class PolicyRepository(Protocol):

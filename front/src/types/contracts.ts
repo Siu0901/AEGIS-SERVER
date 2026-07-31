@@ -145,13 +145,17 @@ export interface CalibrationResponse {
 }
 
 /**
- * 카메라 한 대의 캘리브레이션 상태. `GET /cameras`
+ * 카메라 한 대의 설정과 저장된 캘리브레이션. `GET /cameras`. API명세서 §4.5
  */
 export interface CameraCalibration {
   cam_id: number
   name: string
+  rtsp_main: string
+  rtsp_sub: string
   homography: number[][] | null
-  ref_height_calibrated: boolean
+  calib_points: CalibrationPoint[] | null
+  reproj_error_m: number | null
+  ref_height_px_at_m: number | null
   calibrated_at: string | null
 }
 
@@ -162,6 +166,15 @@ export interface CameraHealth {
   cam_id: number
   sub_state: 'ok' | 'reconnecting' | 'down'
   fps: number
+}
+
+/**
+ * `PATCH /cameras/{cam_id}` 요청. API명세서 §4.5
+ */
+export interface CameraPatch {
+  name: string | null
+  rtsp_main: string | null
+  rtsp_sub: string | null
 }
 
 /**
@@ -847,8 +860,8 @@ export interface RecCameraStatus {
  */
 export interface RecRecordingStatus {
   segment_seconds: number
-  snapshot_fps: number
   snapshot_window_s: number
+  snapshot_bytes: number
 }
 
 /**
@@ -1065,6 +1078,7 @@ export interface Zone {
   cam_id: number
   name: string
   polygon_m: ([number, number])[]
+  polygon: ([number, number])[]
   buffer_m: number
   active: boolean
 }
@@ -1097,8 +1111,7 @@ export interface ZoneUpsertRequest {
   zone_id: string
   cam_id: number
   name: string
-  polygon: ([number, number])[] | null
-  polygon_m: ([number, number])[] | null
+  polygon: ([number, number])[]
   buffer_m: number
   active: boolean
 }

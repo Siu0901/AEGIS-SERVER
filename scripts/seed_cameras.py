@@ -81,10 +81,25 @@ def homography_for(cam_id: int) -> Homography:
 
 
 def _rows() -> list[dict[str, Any]]:
-    return [
-        camera | {"homography": homography_for(int(camera["cam_id"])).to_rows()}
-        for camera in DEV_CAMERAS
-    ]
+    """행렬과 함께 **대응점 원본과 재투영 오차도** 심는다(API명세서 §4.5 `calib_points`).
+
+    행렬만 남기면 설정 화면이 어느 점을 찍었는지 복원할 수 없어, 개발용 캘리브레이션을
+    화면에서 확인하거나 한 점만 고칠 수 없다.
+    """
+    rows: list[dict[str, Any]] = []
+    for camera in DEV_CAMERAS:
+        cam_id = int(camera["cam_id"])
+        points = DEV_CALIBRATION[cam_id]
+        homography = homography_for(cam_id)
+        rows.append(
+            camera
+            | {
+                "homography": homography.to_rows(),
+                "calib_points": [{"px": list(px), "m": list(m)} for px, m in points],
+                "reproj_error_m": round(homography.reprojection_error_m(points), 4),
+            }
+        )
+    return rows
 
 
 def seed(*, force: bool) -> int:
@@ -97,6 +112,8 @@ def seed(*, force: bool) -> int:
                 "rtsp_main": statement.excluded.rtsp_main,
                 "rtsp_sub": statement.excluded.rtsp_sub,
                 "homography": statement.excluded.homography,
+                "calib_points": statement.excluded.calib_points,
+                "reproj_error_m": statement.excluded.reproj_error_m,
             },
         )
     else:

@@ -52,6 +52,10 @@ export function applyZoneUpdate(zones: Zone[], message: DashboardMessage): Zone[
     cam_id,
     name: zone.name,
     polygon_m: zone.polygon_m,
+    // §5.4 `zone` 페이로드에는 픽셀 폴리곤이 없다. **캐시에 있던 값을 유지한다** —
+    // 픽셀은 사용자가 그린 원본이라 캘리브레이션이 바뀌어도 그대로이고, 여기서
+    // 비워 버리면 설정 화면이 구역을 다시 그리지 못한다.
+    polygon: zones.find((item) => item.zone_id === zone.zone_id)?.polygon ?? [],
     buffer_m: zone.buffer_m,
     active: zone.active,
   }

@@ -164,6 +164,14 @@ class Zone(SQLModel, table=True):
         default_factory=list,
         sa_column=Column(JSONB, nullable=False, server_default="[]"),
     )
+    polygon: list[list[float]] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, nullable=False, server_default="[]"),
+        description=(
+            "사용자가 화면에서 그린 정규화 픽셀 폴리곤. **이쪽이 원본이다** — "
+            "캘리브레이션이 갱신되면 서버가 이 값으로 polygon_m 을 다시 계산한다(§4.5)"
+        ),
+    )
     buffer_m: float = Field(default=0.0, description="경계 여유 — 호모그래피 오차 흡수")
     active: bool = Field(default=True)
 
@@ -188,7 +196,19 @@ class Camera(SQLModel, table=True):
     ref_height_px_at_m: dict[str, Any] | None = Field(
         default=None,
         sa_column=Column(JSONB, nullable=True),
-        description="높이 비율 기준값 (reference_person)",
+        description="높이 비율 기준값 (reference_person — px_height 와 at_m)",
+    )
+    calib_points: list[dict[str, Any]] | None = Field(
+        default=None,
+        sa_column=Column(JSONB, nullable=True),
+        description=(
+            "캘리브레이션에 쓴 대응점 원본(API명세서 §4.5 `calib_points`). "
+            "행렬만으로는 어느 점을 찍었는지 복원할 수 없어 화면에서 고칠 수 없다"
+        ),
+    )
+    reproj_error_m: float | None = Field(
+        default=None,
+        description="재투영 오차 RMS(m). 4점이면 0이고 5점 이상부터 의미를 갖는다",
     )
     calibrated_at: datetime | None = Field(default=None, sa_column=_timestamptz())
 
