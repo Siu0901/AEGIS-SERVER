@@ -44,7 +44,10 @@ const ROUTE_LABEL: Record<ChatRoute, string> = {
 
 const ROUTE_NOTE: Record<ChatRoute, string> = {
   sql: '이벤트 표를 집계한 숫자다. 표를 함께 실어 문장과 대조할 수 있다.',
-  vector: '키프레임 임베딩으로 찾은 과거 장면이다.',
+  // ★ 「임베딩으로 찾았다」고 단정하지 않는다. 조건이 전부 구조화되어 있거나
+  //   클라우드가 꺼져 있으면 같은 경로가 SQL 로 떨어진다 — 실제로 무엇이
+  //   돌았는지는 근거 줄의 `mode` 에 있다.
+  vector: '과거 이벤트에서 찾은 장면이다. 실제 처리 경로는 아래 근거의 mode 를 봐라.',
   vision: '지금 이 순간의 프레임을 보고 만든 요약이다.',
 }
 
@@ -189,8 +192,9 @@ function Attachment({ attachment }: { attachment: Attachment }) {
               {row.map((cell, cellIndex) => (
                 <td key={cellIndex} className={typeof cell === 'number' ? 'analysis__num' : ''}>
                   {/* ★ `null` 은 `–` 다(§6.7). 0 으로 접으면 「판정 가능한 이벤트가
-                      없다」가 「0%」로 둔갑한다. 비율 셀은 서버가 0~1 로 보낸다. */}
-                  {cell === null ? '–' : formatCell(attachment.columns[cellIndex], cell)}
+                      없다」가 「0%」로 둔갑한다. 단위는 항목 이름에 적혀 오므로
+                      (「… (%)」) 화면이 숫자의 뜻을 추측하지 않는다. */}
+                  {cell === null ? '–' : String(cell)}
                 </td>
               ))}
             </tr>
@@ -225,12 +229,4 @@ function Attachment({ attachment }: { attachment: Attachment }) {
   // 모르는 첨부 종류다. **조용히 버리지 않는다**(절대규칙 9) — 계약이 늘었는데
   // 화면이 따라오지 않은 것이고, 그 사실이 드러나야 고칠 수 있다.
   return <p className="analysis__error">표시할 수 없는 첨부다: {JSON.stringify(attachment)}</p>
-}
-
-/** 비율 열은 0~1 로 오므로 백분율로 그린다. 나머지는 그대로. */
-function formatCell(column: string, cell: string | number): string {
-  if (typeof cell === 'number' && column === '값' && cell <= 1 && !Number.isInteger(cell)) {
-    return `${Math.round(cell * 100)}%`
-  }
-  return String(cell)
 }

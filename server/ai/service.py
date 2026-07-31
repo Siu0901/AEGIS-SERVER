@@ -379,9 +379,14 @@ class AiService:
             columns=["항목", "값"],
             # ★ 셀은 `string` / `number` / `null` 만이다(§4.4). 비율의 `null` 을
             #   문자열 "–" 로 바꾸지 않는다 — 화면이 그 판단을 해야 한다.
+            #
+            # ★ **단위를 항목 이름에 적는다.** 셀에 0~1 을 그대로 실으면 화면이 그 열이
+            #   비율인지 건수인지 알 수 없어 `1.0` 을 「1건」처럼 그린다(실제로 그랬다).
+            #   백분율로 바꿔 실으면 `null` 은 그대로 `null` 이면서 숫자가 자기 단위를
+            #   설명한다 — 화면의 추측이 필요 없어진다.
             rows=[
-                ["방송 후 시정률", summary.correction_rate],
-                ["판정 불가율", summary.undetermined_rate],
+                ["방송 후 시정률 (%)", _percent_value(summary.correction_rate)],
+                ["판정 불가율 (%)", _percent_value(summary.undetermined_rate)],
                 ["전체", summary.total_violations],
                 ["시정", summary.resolved],
                 ["늦은 시정", summary.resolved_late],
@@ -729,3 +734,12 @@ def _summary_sentence(summary: MetricsSummary) -> str:
 
 def _percent(value: float | None) -> str:
     return "–" if value is None else f"{value * 100:.0f}%"
+
+
+def _percent_value(value: float | None) -> int | None:
+    """비율(0~1) → 백분율 정수. **`null` 은 `null` 로 둔다**(§6.7).
+
+    표의 셀은 화면이 `–` 로 그린다 — 여기서 문자열로 바꾸면 서버가 그 판단을 한 것이
+    되고, 화면은 「재지 않았다」와 「0%」를 다시 구분할 수 없다.
+    """
+    return None if value is None else round(value * 100)

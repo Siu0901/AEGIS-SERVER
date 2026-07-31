@@ -24,7 +24,7 @@
 | **M5** | 관제 화면 P0 | 개요 · 실시간 관제(진행 중 이벤트·수동 방송) · 이벤트 · `tasks.py types` · vitest |
 | **M6** | 설정과 좌표계 | 캘리브레이션 · 구역 편집 · 음원 매핑 · 정책 · `packages/vision` 순수 계산 |
 | **M7** | P1 감지 정밀화 | 근접·마스크 최근접·쓰러짐 3조건·뎁스 온디맨드 · 합성 마스크 · 반복 위반 |
-| **M8** | 지능·분석 | 임베딩 · 장면 검색 · LLM 분석 · 규정 매핑 · 챗봇 · 브리핑 · 분석 화면 · 이상 탐지 |
+| **M8** | 지능·분석 | 임베딩 · 장면 검색 · LLM 분석 · 규정 매핑 · 챗봇 · 브리핑 · 분석 화면 · 이상 탐지 — **P1 완료** |
 | **M9** | 엣지 실물 이식 | 시뮬레이터를 실물 Jetson 러너로 교체 |
 
 > **M7 이 「지능 기능」에서 「P1 감지 정밀화」로 바뀌었다.** 감지 판정이 시뮬레이터가
@@ -155,19 +155,27 @@
 
 | FN-ID | 기능명 | 우선 | 계층 | 명세 위치 | 마일스톤 | 코드 위치(예정) | 상태 |
 |---|---|---|---|---|---|---|---|
-| FN-AI-01 | 이벤트 키프레임 임베딩 (halfvec 3072) | P1 | SRV/CLD | 기능 §4.5 | M8 | `server/ai/embedding.py` | ⬜ |
-| FN-AI-02 | 자연어 장면 검색 (하이브리드) | P1 | SRV/CLD | 기능 §4.5 · API §4.3 | M8 | `server/ai/search.py` · `server/app/routes/search.py` | ⬜ |
+| FN-AI-01 | 이벤트 키프레임 임베딩 (halfvec 3072) | P1 | SRV/CLD | 기능 §4.5 | M8 | `server/ai/service.py` · `gemini.py` · `repository.save_embedding` | ✅ |
+| FN-AI-02 | 자연어 장면 검색 (하이브리드) | P1 | SRV/CLD | 기능 §4.5 · API §4.3 | M8 | `server/ai/search.py` · `server/app/routes/search.py` | ✅ |
 | FN-AI-03 | 반복 위반 시각적 클러스터링 | P2 | SRV | 기능 §4.5 | M8 | `server/ai/cluster.py` | 보류 |
-| FN-AI-04 | 정상 풀 축적 및 이상 탐지 | P2 | SRV/CLD | 기능 §4.5 · API §6.8 | M8 | `server/ai/anomaly.py` | 보류 |
-| FN-AI-05 | LLM 심층 분석 생성 (LangGraph) | P1 | SRV/CLD | 기능 §4.5 | M8 | `server/ai/graph.py` | ⬜ |
-| FN-AI-06 | 규정 매핑 (사전 구축 테이블) | P1 | SRV | 기능 §4.5 | M8 | `server/ai/regulations.py` · `assets/` | ⬜ |
-| FN-AI-07 | 유사 사고사례 매칭 | P2 | SRV/CLD | 기능 §4.5 | M8 | `server/ai/incidents.py` · `assets/` | 보류 |
-| FN-AI-08 | 챗봇 질의 라우팅 (sql·vector·vision) | P1 | SRV/CLD | 기능 §4.5 · API §4.4 | M8 | `server/ai/graph.py` | ⬜ |
-| FN-AI-09 | 실시간 현장 브리핑 | P1 | SRV/CLD | 기능 §4.5 · API §4.4 | M8 | `server/ai/briefing.py` | ⬜ |
-| FN-AI-10 | 주간 보고서 생성 | P2 | SRV/CLD | 기능 §4.5 · API §4.4 | M8 | `server/ai/report.py` | 보류 |
+| FN-AI-04 | 정상 풀 축적 및 이상 탐지 | P2 | SRV/CLD | 기능 §4.5 · API §6.8 | M8 | `server/ai/vectors.py` · `service.sample_once` | ✅ |
+| FN-AI-05 | LLM 심층 분석 생성 (LangGraph) | P1 | SRV/CLD | 기능 §4.5 | M8 | `server/ai/graph.py` | ✅ |
+| FN-AI-06 | 규정 매핑 (사전 구축 테이블) | P1 | SRV | 기능 §4.5 | M8 | `server/ai/regulations.py` · `assets/seeds/regulations.yaml` | ✅ |
+| FN-AI-07 | 유사 사고사례 매칭 | P2 | SRV/CLD | 기능 §4.5 | M8 | `server/ai/incidents.py` · `assets/seeds/incidents.yaml` | ✅ |
+| FN-AI-08 | 챗봇 질의 라우팅 (sql·vector·vision) | P1 | SRV/CLD | 기능 §4.5 · API §4.4 | M8 | `server/ai/assistant.py` · `routes/assistant.py` | ✅ |
+| FN-AI-09 | 실시간 현장 브리핑 | P1 | SRV/CLD | 기능 §4.5 · API §4.4 | M8 | `server/ai/service.briefing` | ✅ |
+| FN-AI-10 | 주간 보고서 생성 | P2 | SRV/CLD | 기능 §4.5 · API §4.4 | M8 | `server/ai/service.start_weekly_report` | ✅ |
 
 > **클라우드가 죽어도 안전 기능은 무영향이어야 한다**(FN-SYS-03).
 > 규정 조항은 **LLM이 생성하지 않는다** — 사전 매핑 테이블로 결정적으로 연결한다.
+>
+> **M8 실측**: 어댑터가 붙어 있고 호출마다 2초 뒤 실패하는 상태에서 후보 → 확정·경고가
+> **1.0ms**, 확정 → 해소가 **2.4ms** 였다. 분석은 배경 태스크이고 `EventService` 가
+> 그것을 기다리지 않는다(아래 「M8 산출물」).
+>
+> **FN-AI-03(시각적 클러스터링)만 보류로 남았다.** P2 이고, 반복 위반 집계는
+> `GET /metrics/repeat`(FN-EVT-06 · 구역·카메라·추적 축)로 이미 화면에 나온다 —
+> 시각적 클러스터링은 그 위에 얹는 것이라 없어도 반복 위반을 못 보는 상태가 아니다.
 
 ---
 
@@ -177,10 +185,10 @@
 |---|---|---|---|---|---|---|---|
 | FN-UI-01 | 개요 — 핵심 지표 · 추세 · 분포 · 최근 이벤트 · 시스템 상태 | P0 | WEB | 기능 §4.6 | M5 | `front/src/pages/OverviewPage.tsx` | ✅ |
 | FN-UI-02 | 실시간 관제 — 2채널 라이브 + 오버레이 · **단독 확대 보기** · 진행 중 이벤트 · 수동 방송 | P0 | WEB | 기능 §4.6 · API §5 | M1 (라이브·상태·확대) / M2 (오버레이) / M3 (경고 상태) / M5 (우측 패널) | `front/src/pages/LivePage.tsx` · `front/src/live/` | ✅ |
-| FN-UI-03 | 이벤트 — 목록·필터 + 상세(클립·LLM·규정·타임라인) | P0 | WEB | 기능 §4.6 · API §4.1 | M5 | `front/src/pages/EventsPage.tsx` | ✅ (LLM·규정·유사사례 칸은 M8) |
-| FN-UI-04 | 영상 검색 — 자연어 질의 · 유사도순 결과 | P1 | WEB | 기능 §4.6 · API §4.3 | M8 | `front/src/pages/SearchPage.tsx` | ⬜ |
-| FN-UI-05 | 분석 · 보고서 — 시정률 추이 · 반복 순위 · 히트맵 · 이상 탐지 | P1 | WEB | 기능 §4.6 · API §4.2 | M8 | `front/src/pages/AnalysisPage.tsx` | ⬜ |
-| FN-UI-06 | 챗봇 — 통계·검색·브리핑 질의 | P1 | WEB | 기능 §4.6 · API §4.4 | M8 | `front/src/pages/AssistantPage.tsx` | ⬜ |
+| FN-UI-03 | 이벤트 — 목록·필터 + 상세(클립·LLM·규정·타임라인) | P0 | WEB | 기능 §4.6 · API §4.1 | M5 / M8(AI 칸) | `front/src/pages/EventsPage.tsx` | ✅ |
+| FN-UI-04 | 영상 검색 — 자연어 질의 · 유사도순 결과 | P1 | WEB | 기능 §4.6 · API §4.3 | M8 | `front/src/pages/SearchPage.tsx` · `api/analysis.ts` | ✅ |
+| FN-UI-05 | 분석 · 보고서 — 시정률 추이 · 반복 순위 · 히트맵 · 이상 탐지 | P1 | WEB | 기능 §4.6 · API §4.2 | M8 | `front/src/pages/AnalysisPage.tsx` · `analysis.css` | ✅ |
+| FN-UI-06 | 챗봇 — 통계·검색·브리핑 질의 | P1 | WEB | 기능 §4.6 · API §4.4 | M8 | `front/src/pages/AssistantPage.tsx` | ✅ |
 | FN-UI-07 | 설정 — 구역 그리기 · 캘리브레이션 · 음원 · 임계값 · 시스템 | P1 | WEB | 기능 §4.6 · API §4.5 | M6 | `front/src/pages/SettingsPage.tsx` · `settings.css` · `front/src/api/settings.ts` | ✅ |
 
 > **오버레이는 도착 즉시 그리지 않는다.** `ts` 기준 지연 버퍼에 담았다가 재생 중인
@@ -220,8 +228,8 @@
 |---|---|---|---|---|---|---|---|
 | FN-SYS-01 | 구성요소 상태 감시 (엣지·카메라·MCU·클라우드·저장소) | P0 | SRV | 기능 §4.8 · API §4.6 | M1 (카메라·저장소) / M2 (엣지) / M4 (MCU·클라우드) | `server/app/routes/system.py` · `server/domain/edge_state.py` · `mcu_state.py` · `cloud_state.py` | ✅ |
 | FN-SYS-02 | 시각 동기화 (NTP · 클립 정합의 전제) | P0 | SRV/EDGE | 기능 §4.8 | M1 (서버) / M2 (엣지 오프셋) | `server/infra/timesync.py` · `edge/` | 🟡 |
-| FN-SYS-03 | 클라우드 장애 격리 | P1 | SRV | 기능 §4.8 | M4 (격리·표시) / M8 (실제 어댑터) | `server/domain/cloud_state.py` · `server/tests/test_cloud_isolation.py` | 🟡 (어댑터만 남음) |
-| FN-SYS-04 | 지표 집계 (시정률 · 평균 시정 시간 · 판정 불가율 · 분포) | P0 | SRV | 기능 §4.8 · API §4.2·§6.7 | M3 (summary) / M8 (분포·시계열) | `server/domain/metrics.py` · `server/app/routes/metrics.py` | 🟡 |
+| FN-SYS-03 | 클라우드 장애 격리 | P1 | SRV | 기능 §4.8 | M4 (격리·표시) / M8 (실제 어댑터) | `server/domain/cloud_state.py` · `server/ai/guard.py` · `server/ai/gemini.py` | ✅ |
+| FN-SYS-04 | 지표 집계 (시정률 · 평균 시정 시간 · 판정 불가율 · 분포) | P0 | SRV | 기능 §4.8 · API §4.2·§6.7 | M3 (summary) / M8 (분포·시계열) | `server/domain/metrics.py` · `aggregates.py` · `routes/metrics.py` | ✅ |
 | FN-SYS-05 | 판정 불가 집계 (`expired` 별도 집계) | P0 | SRV | 기능 §4.8 · API §6.7 | M3 | `server/domain/metrics.py` | ✅ |
 | FN-SYS-06 | 엣지 메시지 거부 집계 (로깅 · 카운터 · 노출) | P0 | SRV | 기능 §4.8 · API §2.2 | M2 | `server/app/ws_edge.py` · `server/domain/edge_state.py` · `server/app/routes/system.py` | ✅ |
 
@@ -240,9 +248,10 @@
 > 실제로는 "판정 가능한 이벤트가 없다"이므로 화면은 `–` 로 그린다.
 > 늦은 시정(`resolve_window_s` 초과 해소)은 `resolved_late` 로 분리해 분모에만 넣는다.
 >
-> **FN-SYS-04 가 🟡 인 이유**: `GET /metrics/summary`(시정률 · 판정 불가율 · 평균 시정
-> 시간)는 M3 에서 동작한다. 같은 §4.2 의 `timeseries` · `distribution` · `repeat` 는
-> 분석 화면(FN-UI-05)의 데이터원이라 M8 에 함께 만든다.
+> **FN-SYS-04 는 M8 에서 닫혔다.** `GET /metrics/summary` 는 M3 에서 동작했고, 같은
+> §4.2 의 `timeseries` · `distribution` · `repeat` 를 분석 화면(FN-UI-05)과 함께 만들었다.
+> 비율 규칙은 여전히 `server/domain/metrics.py` **한 곳**에만 있다 — `aggregates.py` 가
+> 버킷마다 `summarize` 를 그대로 부른다. 두 벌이 되면 요약과 추이가 다른 시정률을 말한다.
 
 ---
 
@@ -1092,6 +1101,91 @@ M6 이전 시나리오는 `foot_point`(픽셀)와 `foot_point_m`(미터)를 **�
 
 ---
 
+## M8 산출물 (지능·분석)
+
+**이 단계의 전제는 「클라우드가 죽어도 안전 기능은 무영향」이다**(FN-SYS-03). 그래서
+지능 기능은 처음부터 **안전 루프 밖에서만** 돌게 만들었고, 그 사실을 실측으로 잠갔다
+(아래 「클라우드를 끊고 잰 것」).
+
+| 항목 | 위치 | 근거 | 상태 |
+|---|---|---|---|
+| 어댑터 경계 (`Embedder` · `Llm` 프로토콜) | `server/ai/ports.py` | §7 확장성 | ✅ |
+| Gemini 어댑터 — **`google.genai` 를 아는 유일한 파일** | `server/ai/gemini.py` | 기능 §4.5 | ✅ |
+| 클라우드 격리 — 실패를 상태로 바꾸고 거기서 멈춘다 | `server/ai/guard.py` · `server/domain/cloud_state.py` | FN-SYS-03 | ✅ |
+| FN-AI-01 키프레임 임베딩 → `events.embedding`(halfvec 3072) | `server/ai/service.py` · `repository.save_embedding` | 기능 §4.5 | ✅ |
+| FN-AI-02 하이브리드 검색 (SQL 선필터 + 벡터 랭킹) | `server/ai/search.py` · `repository.search_events` · `routes/search.py` | §4.3 | ✅ |
+| FN-AI-05 LangGraph 4단계 분석 | `server/ai/graph.py` | 기능 §4.5 | ✅ |
+| FN-AI-06 규정 매핑 (**사전 테이블**) | `server/ai/regulations.py` · `assets/seeds/regulations.yaml` | 기능 §4.5 | ✅ |
+| FN-AI-07 유사 사고사례 (확정 시 1회 계산·저장) | `server/ai/incidents.py` · `assets/seeds/incidents.yaml` | §6 | ✅ |
+| FN-AI-04 정상 풀 축적 · 이상 탐지 (k-NN 평균 코사인 거리) | `server/ai/vectors.py` · `service.sample_once` · `DbAiRepository` | §6.8 | ✅ |
+| FN-AI-08 챗봇 라우팅 (sql · vector · vision) | `server/ai/assistant.py` · `routes/assistant.py` | §4.4 | ✅ |
+| FN-AI-09 실시간 현장 브리핑 | `server/ai/service.briefing` | §4.4 | ✅ |
+| FN-AI-10 주간 보고서 (예약 → 배경 생성) | `server/ai/service.start_weekly_report` | §4.4 | ✅ |
+| FN-SYS-04 잔여 — 시계열 · 분포 · 반복 | `server/domain/aggregates.py` · `routes/metrics.py` | §4.2 | ✅ |
+| FN-UI-04 영상 검색 | `front/src/pages/SearchPage.tsx` | 기능 §4.6 | ✅ |
+| FN-UI-05 분석 · 보고서 | `front/src/pages/AnalysisPage.tsx` | 기능 §4.6 | ✅ |
+| FN-UI-06 챗봇 | `front/src/pages/AssistantPage.tsx` | 기능 §4.6 | ✅ |
+| 이벤트 상세의 LLM · 규정 · 유사 사례 칸 | `front/src/pages/EventsPage.tsx` | §4.1 | ✅ |
+
+### M8 이 고른 것 (설계 판단)
+
+| 판단 | 이유 |
+|---|---|
+| **라우팅을 LLM 에게 맡기지 않는다** | 경로 판단이 비결정적이면 같은 질문이 날마다 다른 경로로 가고 그 차이를 설명할 수 없다. 무엇보다 `vision` 은 실제 프레임을 캡처하므로 통계 질문이 그쪽으로 새면 답이 틀리는 동시에 비용이 든다 |
+| **질의 파싱도 정규식이다** | LLM 에게 "SQL 조건으로 바꿔줘"라고 시키면 **DB 에 나가는 조건을 생성 모델이 정한다.** 뽑아내지 못한 표현은 자유 문장으로 남아 벡터 쪽이 받으므로 놓치는 것이 없다 |
+| **통계 숫자를 LLM 이 만들지 않는다** | SQL 집계가 숫자를 만들고 LLM 은 문장으로 옮기기만 한다. 표(`kind:"table"`)를 함께 실어 사람이 문장과 원본을 대조할 수 있다 |
+| **표의 단위를 항목 이름에 적는다**(`… (%)`) | 셀에 0~1 을 그대로 실었더니 화면이 `1.0` 을 「1건」처럼 그렸다(실제로 그랬다). 백분율로 바꿔 실으면 `null` 은 `null` 인 채로 숫자가 자기 단위를 설명한다 |
+| **재지 않은 유사도를 지어내지 않는다** | 임베딩이 없으면 `similar_incidents` 는 **빈 목록**이고 검색 결과의 `similarity` 는 `null` 이다. 유형만 같은 사례에 숫자를 붙이면 그 숫자가 곧 근거가 된다 |
+| **분석 결과를 저장한다** | 조회할 때마다 부르면 같은 이벤트가 볼 때마다 다른 설명을 갖고, 「그때 무엇을 근거로 조치했는가」를 재현할 수 없다. 비용도 조회 수에 비례한다 |
+| **비어 있는 칸은 `changes` 에 넣지 않는다** | `None` 을 그대로 쓰면 앞선 분석 결과를 덮어 지운다 — 재실행이 개선이 아니라 손실이 된다 |
+| **정상 풀은 판정 여부와 무관하게 쌓는다** | 이상이었던 프레임을 빼면 풀이 점점 좁아져 「정상」의 정의가 스스로 조여든다 |
+| **풀이 얇으면 판정하지 않는다**(`MIN_POOL`) | 축적 초기의 큰 거리는 「이상」이 아니라 「모른다」다. `anomaly_score` 도 풀이 비면 `0.0` 이 아니라 `None` 을 낸다 |
+| **모집단이 빈 버킷은 점을 만들지 않는다** | §4.2 `points[].value` 는 `float` 이고 §6.7 은 분모 0이면 비율이 없다고 말한다. 0을 찍으면 이벤트가 없던 구간이 「시정률 0%」로 보인다 |
+| 반복 순위의 `track` 라벨이 **「추적」이지 「작업자」가 아니다** | §4.2 — 추적 번호는 신원이 아니고 카메라를 벗어나면 유효하지 않다. 라벨이 사람을 가리키면 그 숫자가 개인 평가로 읽힌다 |
+| 보고서를 **DB 테이블로 만들지 않았다** | 클립 예약(FN-REC-03)과 달리 놓쳐도 증거가 사라지지 않는다 — 다시 요청하면 된다. 결과 캐시임을 코드에 적었다 |
+
+### 화면을 실제로 켜서 확인한 것
+
+실제 서버 · PostgreSQL · REC · 가짜 카메라 2대 · 브라우저에서 조작했다.
+**클라우드 키는 설정하지 않았다** — 즉 아래 전부가 「클라우드 없는 현장」의 동작이다.
+
+| 확인 | 결과 |
+|---|---|
+| `proximity_forklift`(우회 되돌린 뒤) 실행 | `resolved` · **`min_distance_m` 1.55** (같은 순간 접지점 거리는 2.90m) · `resolution_sec` 13초 · 클립 `ready` |
+| 확정 → 방송 | **170ms** (로그 실측 · 클라우드 없음) |
+| 이벤트 상세 규정 칸 | 제172조 · 제39조 · 제179조 — **클라우드와 무관하게 채워졌다** |
+| 이벤트 상세 LLM · 유사 사례 칸 | 비어 있고, **왜 비었는지**가 화면에 적힌다 |
+| `POST /search/scenes` (조건만) | `mode: "sql"` · 6건 · `similarity` 전부 `null` |
+| `POST /assistant/chat` 3경로 | `sql` · `vector` · `vision` 모두 200. 통계 답변에 표 첨부 |
+| 브리핑 (클라우드 없음) | 「프레임은 확보했으나 분석이 꺼져 있다」 — **「이상 없음」이라고 하지 않는다** |
+| `POST /reports/weekly` → `GET /reports/{id}` | `generating` → `ready`. 집계 문장만으로 본문이 나왔다 |
+| 분석 화면 추이 | `07-29` 는 시정률 `–` · 판정 불가율 100% — **0% 로 접히지 않았다** |
+| 분석 화면 반복 순위 | 「추적 #3」 · 「1번 카메라 · 조립 라인」(DB `cameras.name`) · 「지게차 통행로」 |
+| 분석 화면 대기 60초 요청 수 | **0건** (CPU 0.9%) — 이 화면은 폴링하지 않는다 |
+| 챗봇 3회 조작 | 요청 **3건** · CPU 0.38초 |
+| 서버 로그 WARNING 이상 | **0건** |
+
+### 클라우드를 끊고 잰 것 (FN-SYS-03)
+
+어댑터가 **붙어 있고 호출마다 2초 뒤 실패**하는 상황을 만들어 재측정했다. 지금까지의
+실행은 「어댑터가 아예 없는」 경우였는데, 실제 장애는 이쪽이다 — 느린 실패가 루프를
+잡아먹는지가 관건이기 때문이다.
+
+| 항목 | 값 |
+|---|---|
+| 후보 → 확정·경고 (프레임 24장) | **1.0 ms** |
+| 확정 → 해소 (프레임 110장 처리 포함) | **2.4 ms** |
+| 클라우드 호출 | 1회 시도 · 전부 실패 (호출당 2초 지연) |
+| 이벤트 최종 상태 | `resolved` · `resolution_sec` 10 |
+| 규정 조항 | 2건 (사전 테이블 · 클라우드 무관) |
+| `llm_analysis` | `None` — 실패가 **빈 칸으로만** 나타난다 |
+| `cloud` 상태 | `available=false` · `last_error="연결 실패 (차단)"` |
+
+**2초짜리 실패가 3건 걸렸는데도 확정과 해소가 밀리초 단위로 끝났다.** 분석이 배경
+태스크이고 `EventService` 가 그것을 기다리지 않기 때문이다.
+
+---
+
 ## 명세서 갱신 반영 (v12 · M5 에서 보고한 9건 전량)
 
 | 항목 | 확정된 내용 | 반영 |
@@ -1209,11 +1303,22 @@ M6 이전 시나리오는 `foot_point`(픽셀)와 `foot_point_m`(미터)를 **�
 
 | 내용 | 상세 |
 |---|---|
-| **★ `proximity` 해소 판정이 후보를 만든 거리와 다른 거리를 쓴다** | 엣지는 **마스크 최근접**(`nearby[].dist_m` · §6.5)으로 후보를 올리는데, 서버의 해소 판정(§4.2 FN-EVT-03 「거리가 임계값 초과」)은 `frame` 의 **접지점↔`anchor` 거리**로 잰다. `frame`(§2.1)에 마스크 최근접이 실리지 않아서다. 두 값은 **FN-DET-09 가 존재하는 바로 그 상황**(포크가 뻗은 지게차)에서 갈린다 — 실측으로 최근접 1.55m · 접지점 거리 3.50m 였다. 그러면 엣지가 근접이라고 올린 순간에 서버는 「이미 해소」로 보아 확정에 도달하지 못한다. `sim/cases/proximity_forklift.yaml` 은 두 값이 함께 임계 안에 들도록 작업자를 더 가까이 세워 우회했다. **§2.1 `frame` 에 최근접 거리를 실을지, §4.2 해소 조건을 후보 기준으로 바꿀지 정해 달라** |
-| **§6 `zones` 에 `polygon`(픽셀) 칸이 없다** | §4.5 는 「두 표현을 모두 저장하고 반환한다」고 확정했는데 §6 테이블 목록에는 `polygon_m` 만 있다. 마이그레이션 `0007` 로 컬럼을 넣었고 `test_db_schema.py` 가 그 사실을 주석과 함께 잠갔다. §6 에 추가해 달라 |
-| **§6 `cameras` 에 `calib_points` · `reproj_error_m` 칸이 없다** | §4.5 `GET /cameras` 는 둘 다 반환한다. 행렬만 남기면 설정 화면이 **어느 점을 찍었는지 복원할 수 없어** 한 점만 고치려 해도 네 점을 다시 찍어야 한다. 같은 마이그레이션으로 넣었다. §6 에 추가해 달라 |
-| **`ref_height_px_at_m` 이 응답에서는 스칼라인데 계산에는 두 값이 필요하다** | §4.5 `GET /cameras` 예시는 `"ref_height_px_at_m": 0.42` 로 **높이 하나**다. 그런데 기대 높이 곡선을 정하려면 「그 높이를 **어느 위치에서** 쟀는가」(`reference_person.at_m`)가 함께 있어야 한다. DB 는 `{px_height, at_m}` 을 통째로 들고 있고 응답에는 높이만 싣는다 — 설정 화면이 기준점 위치를 되그릴 수 없다. 응답에 위치를 함께 실을지 정해 달라 |
-| **정지 판정 임계 두 개의 자리** | `stillness_move_max` · `stillness_shape_change_max` 는 §4.5 정책 키 목록에 없다. 카메라 화각·설치 높이에 종속되는 값이라 `edge/config.yaml` 의 `posture` 절에 두었다(지속 시간 `fall_stillness_s` 는 정책값 그대로다). 화면에서 조정할 값이라면 `policies` 로 옮겨야 한다 |
+| ~~**★ `proximity` 해소 판정이 후보를 만든 거리와 다른 거리를 쓴다**~~ **해소됨** — §2.1 에 `frame.objects[].nearby[]`(`dist_m` · `basis` · `in_danger_zone`)가 신설됐다. 서버가 그 값으로 해소를 판정하고 오버레이 거리선도 같은 값을 쓴다. `proximity_forklift.yaml` 의 우회를 되돌렸고 실측 최근접 **1.55m** · 접지점 **2.90m** 로 경고 임계(2.0m)를 사이에 두고 갈리는 위치가 시나리오의 요점이 됐다 | 엣지는 **마스크 최근접**(`nearby[].dist_m` · §6.5)으로 후보를 올리는데, 서버의 해소 판정(§4.2 FN-EVT-03 「거리가 임계값 초과」)은 `frame` 의 **접지점↔`anchor` 거리**로 잰다. `frame`(§2.1)에 마스크 최근접이 실리지 않아서다. 두 값은 **FN-DET-09 가 존재하는 바로 그 상황**(포크가 뻗은 지게차)에서 갈린다 — 실측으로 최근접 1.55m · 접지점 거리 3.50m 였다. 그러면 엣지가 근접이라고 올린 순간에 서버는 「이미 해소」로 보아 확정에 도달하지 못한다. `sim/cases/proximity_forklift.yaml` 은 두 값이 함께 임계 안에 들도록 작업자를 더 가까이 세워 우회했다. **§2.1 `frame` 에 최근접 거리를 실을지, §4.2 해소 조건을 후보 기준으로 바꿀지 정해 달라** |
+| ~~**§6 `zones` 에 `polygon`(픽셀) 칸이 없다**~~ **해소됨** — §6 `zones` 에 `polygon`(정규화 픽셀 원본)이 추가됐다 | §4.5 는 「두 표현을 모두 저장하고 반환한다」고 확정했는데 §6 테이블 목록에는 `polygon_m` 만 있다. 마이그레이션 `0007` 로 컬럼을 넣었고 `test_db_schema.py` 가 그 사실을 주석과 함께 잠갔다. §6 에 추가해 달라 |
+| ~~**§6 `cameras` 에 `calib_points` · `reproj_error_m` 칸이 없다**~~ **해소됨** — 둘 다 §6 `cameras` 에 추가됐다 | §4.5 `GET /cameras` 는 둘 다 반환한다. 행렬만 남기면 설정 화면이 **어느 점을 찍었는지 복원할 수 없어** 한 점만 고치려 해도 네 점을 다시 찍어야 한다. 같은 마이그레이션으로 넣었다. §6 에 추가해 달라 |
+| ~~**`ref_height_px_at_m` 이 응답에서는 스칼라인데 계산에는 두 값이 필요하다**~~ **해소됨** — §6 이 `ref_height`(jsonb · `{height_px, at_m}`)로 바꿨다. 마이그레이션 `0008` 이 컬럼 이름과 JSON 키를 함께 옮겼고, `GET /cameras` 가 객체를 그대로 반환하며, 설정 화면에 「기준 인물 찍기」(발끝·머리끝 두 점 + 실측 좌표)가 생겼다 | §4.5 `GET /cameras` 예시는 `"ref_height_px_at_m": 0.42` 로 **높이 하나**다. 그런데 기대 높이 곡선을 정하려면 「그 높이를 **어느 위치에서** 쟀는가」(`reference_person.at_m`)가 함께 있어야 한다. DB 는 `{px_height, at_m}` 을 통째로 들고 있고 응답에는 높이만 싣는다 — 설정 화면이 기준점 위치를 되그릴 수 없다. 응답에 위치를 함께 실을지 정해 달라 |
+| ~~**정지 판정 임계 두 개의 자리**~~ **부분 해소** — `stillness_move_px`(0.008) · `stillness_window_s`(1.0)가 §4.5 정책 키로 승격됐다. 형태 변화 임계만 `edge/config.yaml` 에 남았다(카메라 설치에 종속). 창 방식으로 바뀌면서 쓰러짐 판정이 약 0.9초 늦어졌고(`fall_detected`: 7.5s → 8.375s) 시나리오 시각을 실제 게이지에 맞춰 옮겼다 | `stillness_move_max` · `stillness_shape_change_max` 는 §4.5 정책 키 목록에 없다. 카메라 화각·설치 높이에 종속되는 값이라 `edge/config.yaml` 의 `posture` 절에 두었다(지속 시간 `fall_stillness_s` 는 정책값 그대로다). 화면에서 조정할 값이라면 `policies` 로 옮겨야 한다 |
+
+#### M8 에서 새로 드러난 것
+
+| 내용 | 상세 |
+|---|---|
+| **★ §4.3 `SceneSearchItem.similarity` 가 필수인데 `mode:"sql"` 경로에는 유사도가 없다** | §4.3 은 세 경로(`sql` / `vector` / `hybrid`)를 정의하는데, `sql` 경로에는 질의 임베딩 자체가 없다 — 「지난주 1번 카메라 안전모」처럼 조건이 전부 구조화되면 벡터를 만들 이유가 없기 때문이다. 그런데 응답 항목의 `similarity` 는 필수 `float` 이라 **재지 않은 값을 채워야** 스키마를 만족한다. 계약을 `float \| None` 로 바꾸고 화면은 `null` 일 때 숫자를 그리지 않게 했다(`thumbnail_url` · `clip_url` 도 같은 이유로 nullable — 확정 직후에는 키프레임·클립이 아직 없다). **§4.3 예시가 `hybrid` 응답이라 이 칸이 채워져 있는 것이니, `sql` 경로의 표기를 정해 달라** |
+| **§4.5 `GET /cameras` 예시가 아직 `ref_height_px_at_m` 스칼라다** | §6 은 `ref_height`(jsonb · `{height_px, at_m}`)로 바꿨는데 §4.5 응답 예시(773행 부근)는 옛 이름과 스칼라 그대로다. 구현은 **§6 을 따랐다**(사용자 지시). §4.5 예시도 함께 고쳐 달라 |
+| **요청과 저장의 이름이 다르다 — `px_height` 대 `height_px`** | §4.5 `POST /cameras/{id}/calibration` 의 `reference_person.px_height` 와 §6 `cameras.ref_height.height_px` 가 같은 값인데 이름이 뒤집혀 있다. 라우터 경계에서 한 번만 바꾸고 그 사실을 주석에 적었다. 한쪽으로 통일할지 정해 달라 |
+| **§4.4 에 보고서 조회 경로가 없다** | `POST /reports/weekly` 가 `report_id` 를 돌려주는데 그것으로 받아올 경로가 §4.4 에 없다. `GET /reports/{report_id}` 를 같은 이름 공간에 두었다(`status` · `body` · `stats`). 경로와 스키마를 정해 달라 |
+| **이상 탐지 임계값이 명세서에 없다** | §6.8 은 「임계 초과 시 이상 플래그」라고만 적는다. 판정 임계(0.35) · k(5) · 최소 풀 크기(12) · 시간대 버킷(3시간)을 서버가 정했고 `server/ai/service.py` 상수로 두었다. 현장에서 조정할 값이라면 `policies` 로 올려야 한다 |
+| **`anomaly.keyframe_url` 을 채우지 않는다** | §5.3 `anomaly` 는 `keyframe_url` 을 정의하지만, 이상 프레임을 `media/` 에 저장하는 규칙이 §4.4 에 없다(그쪽은 이벤트 클립·키프레임 전용이다). 지금은 `null` 로 보낸다 — 없는 URL 을 문자열로 내보내지 않는 §5.2 규약과 같은 처리다. 저장 위치를 정해 달라 |
 
 #### M6 에서 드러나 아직 열려 있는 것
 

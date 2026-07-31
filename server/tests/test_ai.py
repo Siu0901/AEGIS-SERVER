@@ -538,7 +538,10 @@ def test_sql_answer_works_without_a_cloud() -> None:
     assert response.route == "sql"
     assert "87%" in response.answer
     assert "판정 불가 5%" in response.answer, "시정률과 판정 불가율은 항상 병기한다"
-    assert response.attachments and response.attachments[0].kind == "table"
+    table = response.attachments[0]
+    assert isinstance(table, TableAttachment)
+    # ★ 단위가 항목 이름에 있고 값은 백분율 정수다 — 화면이 숫자의 뜻을 추측하지 않는다.
+    assert table.rows[0] == ["방송 후 시정률 (%)", 87]
 
 
 def test_sql_table_keeps_null_as_null() -> None:
@@ -549,7 +552,7 @@ def test_sql_table_keeps_null_as_null() -> None:
     response = asyncio.run(service.chat(ChatRequest(session_id="s1", message="시정률 통계"), empty))
     table = response.attachments[0]
     assert isinstance(table, TableAttachment)
-    assert table.rows[0] == ["방송 후 시정률", None]
+    assert table.rows[0] == ["방송 후 시정률 (%)", None]
     assert "–" in response.answer
 
 
