@@ -30,8 +30,9 @@ from aegis_contracts import ClipRequest, ClipResponse, ErrorBody, ErrorResponse,
 from aegis_vision.clock import RealClock
 from recorder import clips
 from recorder.config import get_rec_settings
-from recorder.ffmpeg import FfmpegError
+from recorder.ffmpeg import FfmpegError, require_ffmpeg
 from recorder.service import RecorderService
+from recorder.snapshots import decode_slice
 
 __all__ = ["app", "create_app"]
 
@@ -120,19 +121,24 @@ def create_app() -> FastAPI:
     ) -> Response:
         """단일 프레임 JPEG. 이벤트 확정 시 즉시 호출되므로 지연 없이 응답한다.
 
-        **버퍼 안이면 메모리에서, 밖이면 세그먼트에서**(기능명세서 §4.4). 확정 시점의
-        프레임은 아직 어떤 파일에도 없으므로 세그먼트만으로는 답할 수 없다 — 그 경로만
-        있던 시절에는 확정 직후 요청이 500 으로 끝나 이벤트 상세 화면이 비어 있었다.
+        **버퍼 안이면 메모리 비트스트림에서, 밖이면 세그먼트에서**(기능명세서 §4.4).
+        확정 시점의 프레임은 아직 어떤 파일에도 없으므로 세그먼트만으로는 답할 수 없다 —
+        그 경로만 있던 시절에는 확정 직후 요청이 500 으로 끝나 이벤트 상세 화면이
+        비어 있었다.
+
+        **어느 경로든 요청한 시각의 프레임을 낸다.** 가까운 IDR 로 근사하지 않는다.
         """
         wanted = at.astimezone(UTC)
         buffer = service.snapshots(cam_id)
-        if buffer is not None and (hit := buffer.nearest(wanted)) is not None:
-            found_at, payload = hit
+        piece = None if buffer is None else buffer.slice_for(wanted)
+        if piece is not None:
+            payload = await decode_slice(piece, ffmpeg=require_ffmpeg())
             log.debug(
-                "cam%d %s 키프레임을 스냅샷 버퍼에서 냈다 (%+.2f초)",
+                "cam%d %s 키프레임을 스냅샷 버퍼에서 냈다 (%+.3f초 · %d프레임 디코딩)",
                 cam_id,
                 wanted.isoformat(),
-                (found_at - wanted).total_seconds(),
+                (piece.at - wanted).total_seconds(),
+                piece.frames,
             )
             return Response(content=payload, media_type="image/jpeg")
         payload = await clips.extract_keyframe(settings, cam_id=cam_id, at=wanted)

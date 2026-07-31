@@ -52,19 +52,28 @@ async def run(argv: list[str], *, timeout_s: float = 120.0) -> str:
     return (await run_bytes(argv, timeout_s=timeout_s)).decode("utf-8", "replace")
 
 
-async def run_bytes(argv: list[str], *, timeout_s: float = 120.0) -> bytes:
+async def run_bytes(
+    argv: list[str],
+    *,
+    timeout_s: float = 120.0,
+    stdin: bytes | None = None,
+) -> bytes:
     """자식 프로세스를 끝까지 돌리고 stdout 을 돌려준다.
 
     실패하면 stderr 를 그대로 붙여 올린다. ffmpeg 의 실패 원인은 대부분 stderr 마지막
     몇 줄에만 있고, 그것을 버리면 무엇이 잘못됐는지 알 수 없다.
+
+    `stdin` 을 주면 파이프로 먹인다 — 스냅샷 버퍼의 비트스트림 조각이 파일이 아니라
+    메모리에 있어서다(`recorder/snapshots.py`).
     """
     process = await asyncio.create_subprocess_exec(
         *argv,
+        stdin=asyncio.subprocess.PIPE if stdin is not None else None,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
     try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_s)
+        stdout, stderr = await asyncio.wait_for(process.communicate(stdin), timeout=timeout_s)
     except TimeoutError:
         process.kill()
         await process.wait()

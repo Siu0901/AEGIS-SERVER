@@ -342,7 +342,7 @@ class CaseRec:
                 total_gb=500, used_gb=0, free_gb=500, retention_days=7, oldest_segment_at=None
             ),
             recording=RecRecordingStatus(
-                segment_seconds=self.segment_seconds, snapshot_fps=1, snapshot_window_s=60
+                segment_seconds=self.segment_seconds, snapshot_window_s=60, snapshot_bytes=0
             ),
         )
 

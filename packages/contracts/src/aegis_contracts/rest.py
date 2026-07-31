@@ -621,30 +621,64 @@ class CalibrationResponse(SpecModel):
 
 
 class CameraCalibration(SpecModel):
-    """카메라 한 대의 캘리브레이션 상태. `GET /cameras`
+    """카메라 한 대의 설정과 저장된 캘리브레이션. `GET /cameras`. API명세서 §4.5
 
-    ⚠ **§4.5 에 이 조회 경로가 없다.** 설정 화면(FN-UI-07)은 저장된 구역을 영상 위에
-    다시 그려야 하는데, `zones.polygon_m` 은 지면 좌표라 화면에 그리려면 호모그래피가
-    필요하다. 캘리브레이션 직후의 `POST` 응답만으로는 **새로고침 뒤에 아무것도 그릴 수
-    없다.** `docs/INDEX.md` 「명세서 확인 필요」에 올려 두었다(CLAUDE.md 절대규칙 8).
+    설정 화면이 **새로고침 뒤에도** 구역과 기준점을 다시 그리려면 이 경로가 필요하다.
+    `zones.polygon_m` 은 지면 좌표라 화면에 그리려면 호모그래피가 있어야 하고,
+    캘리브레이션 직후의 `POST` 응답만으로는 다음 방문에 아무것도 그릴 수 없다.
     """
 
     cam_id: int
     name: str
+    rtsp_main: str
+    """1080p 메인 — 서버(라이브 · 녹화 · 클립 원본)."""
+    rtsp_sub: str
+    """640×360 서브 — 엣지(추론). **메인과 16:9 로 같아야** 정규화 좌표가 대응한다."""
     homography: Homography | None
     """3×3 픽셀→지면 변환. 아직 캘리브레이션하지 않았으면 `null`."""
-    ref_height_calibrated: bool
+    calib_points: list[CalibrationPoint] | None
+    """캘리브레이션에 쓴 대응점. **화면에 다시 표시하고 수정하려면 원본이 필요**하므로
+    `homography` 와 함께 보존한다(§4.5). 행렬만으로는 어느 점을 찍었는지 복원할 수 없다."""
+    reproj_error_m: float | None
+    """재투영 오차(RMS·m). 4점이면 자유도가 일치해 0이며, 5점 이상부터 의미를 갖는다."""
+    ref_height_px_at_m: float | None
+    """기준 인물의 화면상 높이(정규화). `height_ratio` 기반 쓰러짐 판정(FN-DET-10)의 기준이다.
+
+    **모형 시연에서도 실제 작업자 신장(약 1.7m) 기준으로 입력한다**(기능명세서 §4.7
+    FN-CFG-01). 모형 축척으로 넣으면 임계값을 전부 다시 정해야 한다.
+    """
     calibrated_at: AwareDatetime | None
 
 
+class CameraPatch(SpecModel):
+    """`PATCH /cameras/{cam_id}` 요청. API명세서 §4.5
+
+    **캘리브레이션은 여기서 고치지 않는다.** 4점 대응은
+    `POST /cameras/{cam_id}/calibration` 이 받아 행렬까지 함께 계산해 저장한다 —
+    행렬과 대응점이 따로 갱신될 수 있으면 둘이 어긋난 카메라가 생긴다.
+    """
+
+    name: str | None = None
+    rtsp_main: str | None = None
+    rtsp_sub: str | None = None
+
+
 class Zone(SpecModel):
-    """금지구역. `GET /zones` / `POST /zones`. API명세서 §4.5"""
+    """금지구역. `GET /zones` / `POST /zones`. API명세서 §4.5
+
+    **두 표현을 모두 들고 있다.** 판정은 `polygon_m` 으로 하지만, 설정 화면이 구역을
+    다시 그리려면 픽셀 좌표가 필요하다. 매번 역변환하면 캘리브레이션이 바뀔 때마다
+    화면의 도형이 미세하게 움직인다 — **사용자가 화면에서 그린 위치가 원본이다.**
+    """
 
     zone_id: str
     cam_id: int
     name: str
     polygon_m: list[PointM]
-    """**지면 실좌표 기준** 꼭짓점 배열. 화면 픽셀 좌표는 서버가 호모그래피로 변환해 저장."""
+    """**지면 실좌표** 꼭짓점 배열. 판정에 쓰이는 값이며 클라이언트가 직접 보내지 않는다."""
+    polygon: list[PointPx]
+    """**정규화 픽셀** 꼭짓점 배열. 사용자가 그린 원본이고, 캘리브레이션이 갱신되면
+    서버가 이것을 기준으로 `polygon_m` 을 다시 계산한다(§4.5)."""
     buffer_m: float
     """경계 여유. 호모그래피 오차 흡수 및 사전 경고용."""
     active: bool
@@ -653,29 +687,16 @@ class Zone(SpecModel):
 class ZoneUpsertRequest(SpecModel):
     """`POST /zones` 요청. API명세서 §4.5
 
-    §4.5 는 「화면에서 그린 **픽셀 좌표를 서버가 호모그래피로 변환해 저장**한다」고 적었다.
-    그래서 폴리곤을 두 방식으로 받는다.
-
-    | 필드 | 좌표 | 쓰임 |
-    |---|---|---|
-    | `polygon` | 정규화 픽셀(§1.2) | 설정 화면에서 그린 그대로 — 서버가 변환한다 |
-    | `polygon_m` | 지면 미터 | 실측값을 직접 넣을 때 · 시드 · 마이그레이션 |
-
-    **둘 중 정확히 하나만** 싣는다. 둘 다 오면 어느 쪽이 진짜인지 알 수 없고, 둘 다
-    없으면 구역이 없는 구역이 된다.
-
-    ⚠ §4.5 의 요청 예시에는 `polygon_m` 만 있다. 픽셀 폴리곤을 받을 자리가 없으면
-    **변환을 클라이언트가 해야 하고**, 그러면 호모그래피 적용 코드가 서버(`packages/vision`)와
-    프론트 두 곳에 생긴다. `docs/INDEX.md` 「명세서 확인 필요」 참조.
+    화면에서 그린 **정규화 픽셀 좌표**를 보낸다. `polygon_m` 은 서버가 그 카메라의
+    호모그래피로 만들며 **클라이언트가 직접 보내지 않는다** — 받아주면 변환 코드가
+    프론트에 한 벌 더 생기고, 두 벌이 갈리는 순간 화면의 구역과 판정의 구역이 달라진다.
     """
 
     zone_id: str
     cam_id: int
     name: str
-    polygon: list[PointPx] | None = None
+    polygon: list[PointPx]
     """화면에서 그린 폴리곤(정규화 픽셀). 서버가 카메라 호모그래피로 미터로 바꾼다."""
-    polygon_m: list[PointM] | None = None
-    """지면 실좌표 폴리곤. 변환이 필요 없는 경우에만 쓴다."""
     buffer_m: float = 0.0
     active: bool = True
 
@@ -893,7 +914,10 @@ class StorageStatus(SpecModel):
     total_gb: int | None
     used_gb: int | None
     free_gb: int | None
-    retention_days: int | None
+    retention_days: float | None
+    """보존 기간(일). **정수로 반올림하지 않는다** — 시험용으로 1시간(0.0417일)을 걸어
+    두면 반올림된 `0` 이 화면에 「보존 0일」로 뜨고, 그것은 "보존하지 않는다"로 읽힌다.
+    1일 미만은 화면이 시간 단위로 표시한다(`front/src/types/labels.ts`)."""
     oldest_segment_at: AwareDatetime | None
     """보존된 가장 오래된 세그먼트 시각. **영상 검색 가능 범위의 하한이다.**
 
@@ -992,7 +1016,8 @@ class RecStorageStatus(SpecModel):
     total_gb: int
     used_gb: int
     free_gb: int
-    retention_days: int
+    retention_days: float
+    """보존 기간(일). 설정값(`REC_RETENTION_DAYS`)을 **반올림 없이** 그대로 보고한다."""
     oldest_segment_at: AwareDatetime | None = None
 
 
@@ -1006,10 +1031,17 @@ class RecRecordingStatus(SpecModel):
 
     segment_seconds: int
     """세그먼트 길이(초). 클립 예약 실행 시각의 한 항이다(기능명세서 §4.4)."""
-    snapshot_fps: int
-    """스냅샷 버퍼 샘플링(초당 장수). 기본 1."""
     snapshot_window_s: int
-    """스냅샷 버퍼 보관 구간(초). 기본 60. 이 안의 시각은 메모리에서 즉시 응답한다."""
+    """스냅샷 버퍼 보관 구간(초). 기본 60. 이 안의 시각은 메모리 비트스트림에서 답한다."""
+    snapshot_bytes: int
+    """지금 스냅샷 버퍼가 들고 있는 바이트 수(전 카메라 합).
+
+    **샘플링 주기(`snapshot_fps`)가 사라진 자리다.** REC 은 프레임을 미리 뽑아 두지
+    않고 압축 비트스트림을 그대로 들고 있다가 요청이 올 때만 1프레임을 푼다
+    (기능명세서 §4.4). 그래서 「초당 몇 장」이 아니라 「지금 몇 바이트」가 관측값이다 —
+    2.5 Mbps × 60초 ≈ 카메라당 19MB 이며, 이 값이 예상보다 크면 비트레이트가 올라간
+    것이므로 메모리 예산을 다시 봐야 한다.
+    """
 
 
 class RecStatusResponse(SpecModel):

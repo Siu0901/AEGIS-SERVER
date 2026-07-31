@@ -782,8 +782,8 @@ def test_rec_status_example_parses() -> None:
             },
             "recording": {
                 "segment_seconds": 10,
-                "snapshot_fps": 1,
                 "snapshot_window_s": 60,
+                "snapshot_bytes": 19922944,
             },
         }
     )
@@ -791,6 +791,10 @@ def test_rec_status_example_parses() -> None:
     # 서버가 클립 예약 실행 시각에 더하는 항이다(기능명세서 §4.4). 상수로 두지 않는다.
     assert response.recording.segment_seconds == 10
     assert response.recording.snapshot_window_s == 60
+    # 「초당 몇 장」이 아니라 「지금 몇 바이트」다 — REC 은 프레임을 미리 뽑아 두지 않고
+    # 압축 비트스트림을 들고 있다가 요청이 올 때만 1프레임을 푼다(기능명세서 §4.4).
+    assert response.recording.snapshot_bytes == 19922944
+    assert "snapshot_fps" not in response.recording.model_dump()
 
 
 def test_clip_ready_example_parses() -> None:

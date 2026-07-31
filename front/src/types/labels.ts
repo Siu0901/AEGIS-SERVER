@@ -114,12 +114,16 @@ export function relativeTime(value: string | null, now: number = Date.now()): st
 /**
  * 보존 기간(일). **개발 환경은 1시간(`REC_RETENTION_DAYS=0.0417`)으로 낮춰 쓴다.**
  *
- * 그대로 반올림하면 「0일」이 되어 "보존하지 않음"으로 읽힌다. 운용 값(7일)과
- * 개발 값이 화면에서 구분되어야 하므로 1일 미만을 따로 적는다.
+ * 그대로 반올림하면 「0일」이 되어 "보존하지 않음"으로 읽힌다 — 실제로 개발 중
+ * 사이드바에 「녹화 · 보존 0일」이 떠 있었다. **1일 미만은 시간 단위로 적는다.**
+ * 1시간 미만이면 다시 분으로 내려간다.
  */
 export function retentionLabel(days: number | null): string {
   if (days === null) return UNMEASURED
-  return days < 1 ? '1일 미만' : `${Math.round(days)}일`
+  if (days >= 1) return `${Math.round(days)}일`
+  const hours = days * 24
+  if (hours >= 1) return `${Math.round(hours)}시간`
+  return `${Math.max(1, Math.round(hours * 60))}분`
 }
 
 /** `37초 만에 시정` 처럼 쓰는 소요 시간. */

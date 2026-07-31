@@ -88,7 +88,7 @@ REC_STATUS = RecStatusResponse(
         retention_days=7,
         oldest_segment_at=datetime(2026, 8, 7, 5, 37, 0, tzinfo=UTC),
     ),
-    recording=RecRecordingStatus(segment_seconds=10, snapshot_fps=1, snapshot_window_s=60),
+    recording=RecRecordingStatus(segment_seconds=10, snapshot_window_s=60, snapshot_bytes=0),
 )
 
 
@@ -327,6 +327,8 @@ class FakeCameraStore:
         self.homography: dict[int, list[list[float]]] = {}
         self.reference: dict[int, dict[str, Any] | None] = {}
         self.calibrated_at: dict[int, datetime] = {}
+        self.calib_points: dict[int, list[dict[str, Any]] | None] = {}
+        self.reproj_error_m: dict[int, float | None] = {}
         self.fail_with: Exception | None = None
 
     async def list_cameras(self) -> list[dict[str, Any]]:
@@ -336,8 +338,12 @@ class FakeCameraStore:
             {
                 "cam_id": cam_id,
                 "name": name,
+                "rtsp_main": f"rtsp://127.0.0.1:8554/cam{cam_id}/main",
+                "rtsp_sub": f"rtsp://127.0.0.1:8554/cam{cam_id}/sub",
                 "homography": self.homography.get(cam_id),
                 "ref_height_px_at_m": self.reference.get(cam_id),
+                "calib_points": self.calib_points.get(cam_id),
+                "reproj_error_m": self.reproj_error_m.get(cam_id),
                 "calibrated_at": self.calibrated_at.get(cam_id),
             }
             for cam_id, name in sorted(self.names.items())
@@ -354,6 +360,8 @@ class FakeCameraStore:
         homography: list[list[float]],
         ref_height_px_at_m: dict[str, Any] | None,
         calibrated_at: datetime,
+        calib_points: list[dict[str, Any]] | None = None,
+        reproj_error_m: float | None = None,
     ) -> None:
         if self.fail_with is not None:
             raise self.fail_with
@@ -363,6 +371,18 @@ class FakeCameraStore:
         self.homography[cam_id] = homography
         self.reference[cam_id] = ref_height_px_at_m
         self.calibrated_at[cam_id] = calibrated_at
+        self.calib_points[cam_id] = calib_points
+        self.reproj_error_m[cam_id] = reproj_error_m
+
+    async def patch_camera(self, cam_id: int, changes: dict[str, Any]) -> dict[str, Any] | None:
+        if self.fail_with is not None:
+            raise self.fail_with
+        if cam_id not in self.names:
+            return None
+        if "name" in changes:
+            self.names[cam_id] = str(changes["name"])
+        rows = await self.list_cameras()
+        return next(row for row in rows if row["cam_id"] == cam_id)
 
 
 class FakeVehicleClassStore:

@@ -18,7 +18,7 @@ from recorder import retention
 from recorder.capture import CameraRecorder
 from recorder.config import RecSettings
 from recorder.segments import Segment, scan_segments
-from recorder.snapshots import SnapshotBuffer, SnapshotSampler
+from recorder.snapshots import BitstreamBuffer, BitstreamTap
 
 __all__ = ["RecorderService"]
 
@@ -36,11 +36,11 @@ class RecorderService:
         self._recorders = {
             cam_id: CameraRecorder(cam_id, settings, clock) for cam_id in settings.rec_cam_ids
         }
-        self._samplers = {
-            cam_id: SnapshotSampler(cam_id, settings, clock) for cam_id in settings.rec_cam_ids
+        self._taps = {
+            cam_id: BitstreamTap(cam_id, settings, clock) for cam_id in settings.rec_cam_ids
         }
         """카메라별 스냅샷 버퍼(기능명세서 §4.4). 녹화와 **별도 프로세스**다 —
-        리먹스 녹화는 디코딩하지 않으므로 같은 ffmpeg 에서 JPEG 을 뽑을 수 없다."""
+        이쪽이 죽어도 증거 영상은 계속 쌓여야 한다. 둘 다 리먹스라 디코딩 부하는 없다."""
         self._tasks: list[asyncio.Task[None]] = []
         self._snapshot: dict[int, list[Segment]] | None = None
         """스윕이 남겨두는 카메라별 세그먼트 목록. `GET /status` 가 이걸 읽는다."""
@@ -53,8 +53,8 @@ class RecorderService:
         self._settings.rec_media_root.mkdir(parents=True, exist_ok=True)
         for cam_id, recorder in self._recorders.items():
             self._tasks.append(asyncio.create_task(recorder.run(), name=f"rec-cam{cam_id}"))
-        for cam_id, sampler in self._samplers.items():
-            self._tasks.append(asyncio.create_task(sampler.run(), name=f"rec-snap{cam_id}"))
+        for cam_id, tap in self._taps.items():
+            self._tasks.append(asyncio.create_task(tap.run(), name=f"rec-snap{cam_id}"))
         self._tasks.append(asyncio.create_task(self._sweep_loop(), name="rec-sweep"))
         log.info(
             "REC 기동 — cams=%s root=%s 보존 %.4g일 / 상한 %.1fGB",
@@ -64,14 +64,14 @@ class RecorderService:
             self._settings.rec_max_disk_gb,
         )
 
-    def snapshots(self, cam_id: int) -> SnapshotBuffer | None:
+    def snapshots(self, cam_id: int) -> BitstreamBuffer | None:
         """카메라의 스냅샷 버퍼. 등록되지 않은 카메라면 `None`."""
-        sampler = self._samplers.get(cam_id)
-        return None if sampler is None else sampler.buffer
+        tap = self._taps.get(cam_id)
+        return None if tap is None else tap.buffer
 
     async def stop(self) -> None:
-        for sampler in self._samplers.values():
-            await sampler.stop()
+        for tap in self._taps.values():
+            await tap.stop()
         for recorder in self._recorders.values():
             await recorder.stop()
         for task in self._tasks:
@@ -179,8 +179,8 @@ class RecorderService:
         """
         return RecRecordingStatus(
             segment_seconds=self._settings.rec_segment_seconds,
-            snapshot_fps=self._settings.rec_snapshot_fps,
             snapshot_window_s=self._settings.rec_snapshot_window_s,
+            snapshot_bytes=sum(tap.buffer.nbytes for tap in self._taps.values()),
         )
 
     def _storage(self, used_bytes: int, oldest: datetime | None) -> RecStorageStatus:
@@ -204,7 +204,7 @@ class RecorderService:
             total_gb=round(budget / _GB),
             used_gb=round(used_bytes / _GB),
             free_gb=round(max(budget - used_bytes, 0) / _GB),
-            retention_days=round(self._settings.rec_retention_days),
+            retention_days=self._settings.rec_retention_days,
             oldest_segment_at=oldest,
         )
 
