@@ -633,18 +633,34 @@ v2.0 · 2026-07-18
 { "homography": [[..],[..],[..]], "reprojection_error_m": 0.11, "ref_height_calibrated": true }
 ```
 
-#### `GET /zones` / `POST /zones`
+#### `GET /zones` / `POST /zones` / `DELETE /zones/{zone_id}`
+
+**응답 (`GET`)**
 
 ```json
 { "zone_id":"forklift_lane","cam_id":1,"name":"지게차 통행로",
   "polygon_m": [[1.2,2.0],[6.4,2.0],[6.4,7.5],[1.2,7.5]],
+  "polygon": [[0.10,0.72],[0.55,0.72],[0.55,0.41],[0.10,0.41]],
+  "buffer_m": 0.4, "active": true }
+```
+
+**요청 (`POST`)** — 화면에서 그린 **정규화 픽셀 좌표**를 보낸다.
+
+```json
+{ "zone_id":"press_area","cam_id":1,"name":"프레스 구역",
+  "polygon": [[0.10,0.72],[0.55,0.72],[0.55,0.41],[0.10,0.41]],
   "buffer_m": 0.4, "active": true }
 ```
 
 | 필드 | 설명 |
 |---|---|
-| `polygon_m` | **지면 실좌표 기준** 꼭짓점 배열. 화면에서 그린 픽셀 좌표를 서버가 호모그래피로 변환해 저장 |
+| `polygon` | **정규화 픽셀** 꼭짓점 배열. 클라이언트가 보내는 값이며, 서버가 호모그래피로 변환해 `polygon_m` 을 만든다 |
+| `polygon_m` | **지면 실좌표** 꼭짓점 배열. 판정에 쓰이는 값이다. 클라이언트가 직접 보내지 않는다 |
 | `buffer_m` | 경계 여유. 호모그래피 오차 흡수 및 사전 경고용 |
+
+**두 표현을 모두 저장하고 반환하는 이유**: 판정은 `polygon_m` 으로 하지만, 설정 화면이 구역을 다시 그리려면 픽셀 좌표가 필요하다. 매번 역변환하면 캘리브레이션이 바뀔 때마다 화면의 도형이 미세하게 움직인다. **캘리브레이션이 갱신되면 서버가 `polygon` 을 기준으로 `polygon_m` 을 다시 계산**하고 `zone_updated` 를 발행한다(§5.4) — 사용자가 화면에서 그린 위치가 원본이기 때문이다.
+
+`DELETE /zones/{zone_id}` 는 구역을 삭제하고 `zone_updated`(`action: "delete"`)를 발행한다.
 
 #### `GET /vehicle-classes` / `PATCH /vehicle-classes/{name}`
 
@@ -721,6 +737,25 @@ v2.0 · 2026-07-18
 | `mute_default_duration_s` | 경고 일시중지 기본 지속시간(초). 기본 900 |
 | `clip_extract_margin_s` | 세그먼트가 닫힌 뒤 클립 추출까지의 여유(초). 기본 2. **세그먼트 길이는 이 값에 포함되지 않으며 REC이 보고하는 값을 따로 더한다**(기능명세서 §4.4) |
 | `alert_duration_s` | 경광등·부저 지속 시간(초). 기본 5. `AlertCommand.duration_s` 로 나간다 |
+
+#### `GET /cameras` / `PATCH /cameras/{cam_id}`
+
+카메라 설정과 **저장된 캘리브레이션**을 조회·수정한다. 설정 화면이 새로고침 후에도 구역과 기준점을 다시 그리려면 이 경로가 필요하다.
+
+```json
+[ { "cam_id":1, "name":"작업장 A",
+    "rtsp_main":"rtsp://.../cam1/main", "rtsp_sub":"rtsp://.../cam1/sub",
+    "homography":[[...],[...],[...]],
+    "calib_points":[ {"px":[0.12,0.88],"m":[0.0,0.0]}, ... ],
+    "reproj_error_m":0.031,
+    "ref_height_px_at_m":0.42,
+    "calibrated_at":"2026-08-14T04:10:00Z" } ]
+```
+
+| 필드 | 설명 |
+|---|---|
+| `calib_points` | 캘리브레이션에 쓴 대응점. **화면에 다시 표시하고 수정하려면 원본이 필요**하므로 `homography` 와 함께 보존한다 |
+| `reproj_error_m` | 재투영 오차(RMS). 4점이면 자유도가 일치해 0이며, 5점 이상부터 의미를 갖는다 |
 
 #### `GET /alert-sounds` / `PUT /alert-sounds/{violation_type}`
 
@@ -888,8 +923,8 @@ REC은 메인 스트림 녹화와 구간 추출만 담당하는 독립 컴포넌
   "storage": { "total_gb":500, "used_gb":378, "free_gb":122,
                "retention_days":7,
                "oldest_segment_at":"2026-08-07T05:37:00Z" },
-  "recording": { "segment_seconds":10,
-                 "snapshot_fps":1, "snapshot_window_s":60 } }
+  "recording": { "segment_seconds":10, "snapshot_window_s":60,
+                 "snapshot_bytes":19922944 } }
 ```
 
 서버는 이 응답을 `GET /system/status`(§4.6)의 `storage` 절에 그대로 전달한다. **서버가 자체 디스크를 조회해 채우지 않는다.** 운용 시 녹화 디스크는 서버가 아니라 엣지에 있기 때문이다.
