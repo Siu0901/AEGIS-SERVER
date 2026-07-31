@@ -25,6 +25,7 @@ import sys
 from typing import Any
 
 from sqlalchemy.dialects.postgresql import insert
+from sqlmodel import Session, col, select
 
 from aegis_vision import Correspondence, Homography
 from server.infra.db import Camera, create_db_engine
@@ -140,6 +141,41 @@ def seed(*, force: bool) -> int:
     return int(result.rowcount)
 
 
+#: 시드가 채우지만 `on_conflict_do_nothing` 으로는 채워지지 않는 칸들.
+#:
+#: 명세서가 컬럼을 추가할 때마다 이 목록이 늘어난다. 기존 행이 있으면 기본 시드는
+#: 아무것도 하지 않으므로 **새 칸만 빈 채로 남는다** — M7 에서 실제로 겪었고, 화면이
+#: 「캘리브레이션 완료」라고 말하면서 대응점은 하나도 못 그렸다.
+_LATE_COLUMNS = ("calib_points", "reproj_error_m", "ref_height")
+
+
+def unseeded() -> list[str]:
+    """새 컬럼이 빈 채로 남은 카메라들. 사람이 읽을 문장으로 돌려준다."""
+    problems: list[str] = []
+    with Session(create_db_engine()) as session:
+        for row in session.exec(select(Camera).order_by(col(Camera.cam_id))):
+            empty = [name for name in _LATE_COLUMNS if getattr(row, name, None) in (None, {}, [])]
+            if empty:
+                problems.append(f"cam{row.cam_id}: {', '.join(empty)}")
+    return problems
+
+
+def warn_if_unseeded() -> None:
+    """빈 칸이 있으면 **눈에 띄게** 알리고 고칠 명령을 준다.
+
+    ★ 조용히 넘기지 않는다(CLAUDE.md 절대규칙 9). 빈 `calib_points` 는 설정 화면에서
+    「대응점 없음」으로 보일 뿐이고, 빈 `ref_height` 는 쓰러짐 판정의 기준이 없다는
+    뜻인데 어느 쪽도 화면이 스스로 말해주지 않는다.
+    """
+    problems = unseeded()
+    if not problems:
+        return
+    print("  ! 새 컬럼이 빈 카메라가 있다 — 기본 시드는 기존 행을 건드리지 않는다:")
+    for line in problems:
+        print(f"      {line}")
+    print("    개발용 기본값으로 채우려면: uv run python -m scripts.seed_cameras --force")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="cameras 테이블 개발용 기본값 시드")
     parser.add_argument(
@@ -162,6 +198,7 @@ def main(argv: list[str] | None = None) -> int:
         error = homography_for(cam_id).reprojection_error_m(points)
         print(f"  cam{cam_id} 재투영 오차 {error:.4f} m (실측점 {len(points)}개)")
     print(f"cameras 시드 완료 — {count} {mode}")
+    warn_if_unseeded()
     return 0
 
 

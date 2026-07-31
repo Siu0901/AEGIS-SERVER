@@ -28,6 +28,7 @@ import sys
 from typing import cast
 
 from sqlalchemy.dialects.postgresql import insert
+from sqlmodel import Session, select
 
 from scripts.seed_cameras import homography_for
 from server.infra.db import Zone, create_db_engine
@@ -93,6 +94,23 @@ def seed(*, force: bool) -> int:
     return int(result.rowcount)
 
 
+def warn_if_unseeded() -> None:
+    """픽셀 폴리곤이 빈 구역을 알린다. **조용히 넘기지 않는다**(절대규칙 9).
+
+    기본 시드는 기존 행을 건드리지 않으므로 마이그레이션 `0007` 이 추가한 `polygon`
+    (정규화 픽셀)은 빈 배열로 남는다. 그 상태에서는 설정 화면이 구역을 되그릴 때
+    미터 역변환 경로를 타고, 캘리브레이션을 다시 하면 **도형이 따라오지 못한다** —
+    사용자가 그린 위치가 원본인데 그 원본이 없기 때문이다.
+    """
+    with Session(create_db_engine()) as session:
+        empty = [row.zone_id for row in session.exec(select(Zone)) if not row.polygon]
+    if not empty:
+        return
+    print(f"  ! 픽셀 폴리곤이 빈 구역이 있다: {', '.join(sorted(empty))}")
+    print("    개발용 기본값으로 채우려면: uv run python -m scripts.seed_zones --force")
+    print("    사람이 그린 구역이라면 설정 화면에서 다시 그려야 한다(역변환으로 지어내지 않는다).")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="zones 테이블 개발용 기본값 시드")
     parser.add_argument(
@@ -107,6 +125,7 @@ def main(argv: list[str] | None = None) -> int:
     mode = "덮어씀" if args.force else "신규"
     count = f"{affected}/{total} 구역" if affected >= 0 else f"{total} 구역 중 일부(개수 미보고)"
     print(f"zones 시드 완료 — {count} {mode}")
+    warn_if_unseeded()
     return 0
 
 

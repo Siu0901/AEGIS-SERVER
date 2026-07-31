@@ -22,6 +22,7 @@ import argparse
 import io
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -129,6 +130,121 @@ def capture(argv: Sequence[str], *, cwd: Path | None = None, echo: bool = True) 
 
 def uv(*args: str) -> list[str]:
     return ["uv", "run", *args]
+
+
+# ---------------------------------------------------------------------------
+# 포트 선점 감시 (dev)
+# ---------------------------------------------------------------------------
+# ★ **경고가 아니라 중단이다.**
+#
+# 이전 세션의 서버·REC 가 살아 있으면 새 프로세스는 포트를 못 잡고 죽는데, 그동안
+# **옛 프로세스가 옛 코드로 정상 응답한다.** 화면도 API 도 멀쩡해 보이므로 새 코드를
+# 확인한 줄 알고 옛 코드를 보게 된다 — M7 에서 실제로 겪었고, 이틀 된 프로세스가
+# 사라진 컬럼을 그대로 내려주고 있었다(`docs/INDEX.md` M7 절).
+#
+# 경고로 두면 화면이 스크롤되어 지나가고, 정작 확인해야 할 순간에는 이미 위로 밀려 있다.
+
+#: `dev` 가 직접 띄우는 것들이 잡는 포트. docker compose 가 관리하는 포트(postgres ·
+#: redis · mosquitto · mediamtx)는 여기 없다 — 그쪽은 compose 가 스스로 재사용한다.
+DEV_PORTS: tuple[tuple[int, str], ...] = (
+    (8000, "server (uvicorn)"),
+    (9100, "rec (recorder)"),
+    (5173, "front (vite)"),
+)
+
+
+def listeners_on(port: int) -> list[tuple[int, str]]:
+    """그 포트를 **듣고 있는** 프로세스들의 (PID, 이름). 없으면 빈 목록.
+
+    `psutil` 을 새로 넣지 않고 표준 라이브러리와 OS 도구만 쓴다. 실패하면 조용히 빈
+    목록을 돌려주지 않고 예외를 올린다 — "확인할 수 없었다"를 "비어 있다"로 바꾸면
+    이 가드가 있으나 마나가 된다(절대규칙 9).
+    """
+    if sys.platform == "win32":
+        argv = ["netstat", "-ano", "-p", "TCP"]
+    else:
+        argv = ["ss", "-ltnp"]
+    exe = shutil.which(argv[0])
+    if exe is None:
+        raise TaskError(
+            f"포트 점유를 확인할 도구가 없다: {argv[0]}\n"
+            "  이 확인은 건너뛰지 않는다. 옛 프로세스가 포트를 쥔 채로 dev 를 띄우면\n"
+            "  새 코드를 확인한 줄 알고 옛 코드를 보게 된다."
+        )
+    proc = subprocess.run(
+        [exe, *argv[1:]], capture_output=True, text=True, encoding="utf-8",
+        errors="replace", check=False,
+    )  # fmt: skip
+    if proc.returncode != 0:
+        raise TaskError(f"포트 점유 확인 실패 ({argv[0]}): {proc.stderr.strip()}")
+
+    pids: set[int] = set()
+    for line in proc.stdout.splitlines():
+        if f":{port}" not in line:
+            continue
+        if sys.platform == "win32":
+            parts = line.split()
+            # PROTO  LOCAL  FOREIGN  STATE  PID  — LISTENING 만 본다. 나가는 연결이
+            # 우연히 같은 번호를 원격 포트로 쓰면 여기 걸리는데, 그건 선점이 아니다.
+            if len(parts) < 5 or parts[3] != "LISTENING":
+                continue
+            if not parts[1].endswith(f":{port}"):
+                continue
+            pids.add(int(parts[4]))
+        else:
+            for token in line.split():
+                if token.startswith("users:"):
+                    pids.update(int(value) for value in _PID_RE.findall(token))
+    return sorted((pid, process_name(pid)) for pid in pids)
+
+
+#: `ss -ltnp` 의 `users:(("uvicorn",pid=1234,fd=7))` 에서 PID 만 뽑는다.
+_PID_RE = re.compile(r"pid=(\d+)")
+
+
+def process_name(pid: int) -> str:
+    """PID 의 실행 파일 이름. 알 수 없으면 `?`.
+
+    이름이 있어야 사람이 "내가 띄운 uvicorn 이구나"를 알고 안심하고 죽일 수 있다.
+    번호만 주면 그 프로세스가 무엇인지 다시 찾아봐야 한다.
+    """
+    if sys.platform == "win32":
+        argv = ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"]
+    else:
+        argv = ["ps", "-p", str(pid), "-o", "comm="]
+    exe = shutil.which(argv[0])
+    if exe is None:
+        return "?"
+    proc = subprocess.run(
+        [exe, *argv[1:]], capture_output=True, text=True, encoding="utf-8",
+        errors="replace", check=False,
+    )  # fmt: skip
+    output = proc.stdout.strip()
+    if not output:
+        return "?"
+    if sys.platform == "win32":
+        return output.split(",")[0].strip('"') or "?"
+    return output.splitlines()[0].strip() or "?"
+
+
+def ensure_ports_free(ports: Sequence[tuple[int, str]] = DEV_PORTS) -> None:
+    """포트를 쥔 프로세스가 있으면 **PID 와 함께 알리고 중단한다.**"""
+    held: list[str] = []
+    for port, who in ports:
+        for pid, name in listeners_on(port):
+            held.append(f"  {port:>5}  {who:<18} PID {pid} ({name})")
+    if not held:
+        return
+
+    kill = "taskkill /PID <PID> /F" if sys.platform == "win32" else "kill <PID>"
+    raise TaskError(
+        "포트가 이미 잡혀 있다 — dev 를 띄우지 않는다.\n"
+        + "\n".join(held)
+        + "\n\n  이전 세션의 프로세스가 살아 있으면 새 프로세스는 포트를 못 잡고 죽는데,\n"
+        "  그동안 **옛 프로세스가 옛 코드로 정상 응답한다.** 화면도 API 도 멀쩡해 보여서\n"
+        "  새 코드를 확인한 줄 알고 옛 코드를 보게 된다.\n"
+        f"\n  정리: {kill}"
+    )
 
 
 def alembic(*args: str) -> list[str]:
@@ -328,6 +444,12 @@ def task_dev() -> int:
     어렵다. 실제로 카메라만 죽은 채 화면을 보면 "전부 끊김"으로 보이는데 원인이
     어디인지 바로 드러나지 않는다.
     """
+    # ★ 무엇을 띄우기 **전에** 확인한다. compose 를 올리고 마이그레이션을 돌린 뒤에
+    #   막히면, 그 사이의 출력이 "정상 기동"처럼 보여 더 헷갈린다.
+    say("[dev] 포트 점유 확인")
+    ensure_ports_free()
+    say("      8000 · 9100 · 5173 모두 비어 있다")
+
     say("[dev] docker compose up -d")
     run(["docker", "compose", "up", "-d"])
     say("      postgres/redis/mosquitto/mediamtx 기동")

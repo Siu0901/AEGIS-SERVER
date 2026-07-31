@@ -98,3 +98,56 @@ def test_16_9_sizes_pass(size: str) -> None:
 def test_malformed_size_is_rejected() -> None:
     with pytest.raises(fake_cams.CamsError, match="해상도 형식 오류"):
         fake_cams.require_16_9("SUB_SIZE", "640-360")
+
+
+# ---------------------------------------------------------------------------
+# 포트 선점 가드 (`tasks.py dev`)
+# ---------------------------------------------------------------------------
+# ★ 경고가 아니라 중단이어야 한다. 이전 세션 프로세스가 살아 있으면 새 프로세스는
+#   포트를 못 잡고 죽는데, 그동안 **옛 프로세스가 옛 코드로 정상 응답한다.**
+
+
+def test_a_held_port_aborts_and_names_the_pid(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        tasks, "listeners_on", lambda port: [(4242, "python.exe")] if port == 8000 else []
+    )
+    with pytest.raises(tasks.TaskError) as caught:
+        tasks.ensure_ports_free()
+    message = str(caught.value)
+    assert "8000" in message
+    assert "4242" in message, "PID 를 알려주지 않으면 무엇을 죽여야 할지 알 수 없다"
+    assert "python.exe" in message
+
+
+def test_free_ports_pass_quietly(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(tasks, "listeners_on", lambda port: [])
+    tasks.ensure_ports_free()
+
+
+def test_a_missing_probe_is_an_error_not_an_empty_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    """도구가 없으면 「비어 있다」가 아니라 오류다 (CLAUDE.md 절대규칙 9).
+
+    빈 목록을 돌려주면 가드가 있으나 마나가 되고, 그 사실은 아무 데도 드러나지 않는다.
+    """
+    monkeypatch.setattr(tasks.shutil, "which", lambda name: None)
+    with pytest.raises(tasks.TaskError, match="포트 점유를 확인할 도구가 없다"):
+        tasks.listeners_on(8000)
+
+
+def test_listeners_on_reports_a_real_listener() -> None:
+    """가짜가 아니라 **실제로 연 소켓**을 찾아내는지 본다.
+
+    파싱은 OS 도구 출력에 기대므로, 형식이 바뀌면 조용히 0건이 되어 가드가 죽는다.
+    그때 이 검사만 실패해야 한다.
+    """
+    import socket
+
+    with socket.socket() as server:
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        port = server.getsockname()[1]
+        found = tasks.listeners_on(port)
+
+    import os
+
+    assert [pid for pid, _ in found] == [os.getpid()], f"{port} 를 연 것은 이 프로세스다: {found}"
