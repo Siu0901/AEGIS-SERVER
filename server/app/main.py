@@ -43,6 +43,9 @@ from fastapi.staticfiles import StaticFiles
 from aegis_contracts import ComponentSystemMsg, Policies
 from aegis_contracts.enums import ComponentState, StreamState
 from aegis_vision.clock import Clock, RealClock
+from server.ai.gemini import create_cloud
+from server.ai.guard import CloudGuard
+from server.ai.service import AiService
 from server.app.alert_service import SOUND_REFRESH_SECONDS, AlertService
 from server.app.config import ServerSettings, get_server_settings
 from server.app.event_service import (
@@ -53,10 +56,12 @@ from server.app.event_service import (
     PolicyReader,
 )
 from server.app.routes import alerts as alert_routes
+from server.app.routes import assistant as assistant_routes
 from server.app.routes import cameras as camera_routes
 from server.app.routes import events as event_routes
 from server.app.routes import metrics as metric_routes
 from server.app.routes import policies as policy_routes
+from server.app.routes import search as search_routes
 from server.app.routes import sounds as sound_routes
 from server.app.routes import system as system_routes
 from server.app.routes import vehicles as vehicle_routes
@@ -71,6 +76,7 @@ from server.domain.overlay import LiveTracks
 from server.infra.audio import SoundLibrary, SoundReader, resolve_player
 from server.infra.clip import CLIP_POLL_SECONDS, ClipService
 from server.infra.db.repository import (
+    DbAiRepository,
     DbCameraRepository,
     DbEventRepository,
     DbPolicyRepository,
@@ -218,6 +224,28 @@ def create_app(
         alerts=alert_service,
         clips=clip_service,
     )
+    # FN-AI — 지능 기능. **안전 루프와 분리된 경로다**(FN-SYS-03).
+    #
+    # 어댑터가 없어도(키 미설정 · 인터넷 없음) 서비스는 만든다. 규정 매핑(FN-AI-06)과
+    # SQL 통계는 클라우드와 무관하게 돌아야 하고, 화면이 「지능 기능 없음」과
+    # 「서버가 그 경로를 아예 모른다」를 구분할 수 있어야 하기 때문이다.
+    cloud_adapter = create_cloud()
+    ai_service = AiService(
+        clock=ticker,
+        guard=CloudGuard(cloud, ticker, hub.broadcast),
+        events=event_store,  # type: ignore[arg-type]
+        store=DbAiRepository(engine) if engine else None,
+        frames=storage if isinstance(storage, RecClient) else None,
+        embedder=cloud_adapter,
+        llm=cloud_adapter,
+        publish=hub.broadcast,
+        media_root=resolved.media_root,
+        cam_ids=resolved.cam_ids,
+        report_stats=event_service.summary,
+    )
+    # ★ 확정 시 분석을 건다. **`EventService` 는 기다리지 않는다** — `on_confirmed` 가
+    #   하는 일은 배경 태스크 하나를 띄우는 것뿐이고, 그 시그니처는 클립 예약과 같다.
+    event_service.set_analysis(ai_service)
     watcher: StreamObserver = stream_watcher or StreamWatcher(
         client=MediaMtxClient(resolved.mediamtx_api),
         cam_ids=resolved.cam_ids,
@@ -242,6 +270,9 @@ def create_app(
         # 재시작 전에 열려 있던 이벤트를 되살린다. 두지 않으면 그 이벤트들이
         # 영원히 미해소로 남아 시정률 분모를 오염시킨다.
         await event_service.start()
+        # FN-AI-07 — 사례 벡터는 **프로세스마다 한 번** 만든다. 실패해도 기동을 막지
+        # 않는다(클라우드 없이 도는 것이 정상 경로 중 하나다).
+        await ai_service.start()
         # 위험 등급(§3 `level` · §5.2 `severity`)의 원천은 DB `alert_sounds.level` 이다
         # (§6 · FN-CFG-03 · 절대규칙 6). 상태머신은 그것을 **주입받아** 순수성을 지킨다.
         # `alert_service.start()` 가 이미 매핑을 읽었으므로 여기서 넘긴다.
@@ -261,6 +292,10 @@ def create_app(
             # 첫 순회가 곧 **재시작 복구**다 — 서버가 죽어 있는 동안 실행 시각이 지난
             # `pending` 잡이 여기서 집힌다(기능명세서 §4.4).
             tasks.append(asyncio.create_task(_run_clips(clip_service), name="clip-jobs"))
+        if ai_service.enabled:
+            # FN-AI-04 — 5분 주기 정상 풀 축적. **경고를 발동하지 않는다.**
+            # 어댑터가 없으면 띄우지 않는다 — 부를 곳이 없는 루프를 도는 것은 낭비다.
+            tasks.append(asyncio.create_task(_sample_normal(ai_service), name="anomaly-sample"))
         log.info(
             "서버 기동 — cams=%s mediamtx=%s rec=%s mqtt=%s:%s",
             resolved.cam_ids,
@@ -281,6 +316,9 @@ def create_app(
                 # 내린 서버가 그 이벤트의 그림을 영영 남기지 않는다 — 클립과 달리
                 # 키프레임은 DB 에 예약이 없어 재시작이 되살려주지 못한다.
                 await clip_service.wait_idle()
+            # 분석 태스크는 **기다리지 않고 취소한다.** 클라우드 왕복이 종료를 매달면
+            # 인터넷이 느린 현장에서 서버가 내려가지 않는다 — 분석은 다시 부르면 된다.
+            await ai_service.aclose()
             await watcher.stop()
             if mqtt_client is not None:
                 await mqtt_client.stop()
@@ -324,6 +362,8 @@ def create_app(
         DbVehicleClassRepository(engine) if engine else None
     )
     application.state.policies = policy_reader
+    # FN-AI — 검색·챗봇·보고서 라우터가 읽는 자리.
+    application.state.ai = ai_service
 
     application.include_router(system_routes.router, prefix=API_PREFIX)
     application.include_router(event_routes.router, prefix=API_PREFIX)
@@ -334,6 +374,9 @@ def create_app(
     application.include_router(sound_routes.router, prefix=API_PREFIX)
     application.include_router(camera_routes.router, prefix=API_PREFIX)
     application.include_router(vehicle_routes.router, prefix=API_PREFIX)
+    # FN-AI-02 · 08 · 09 · 10 — 지능 기능. **안전 루프와 다른 경로다**(FN-SYS-03).
+    application.include_router(search_routes.router, prefix=API_PREFIX)
+    application.include_router(assistant_routes.router, prefix=API_PREFIX)
 
     # §5 「경로 규약」 — 클라이언트에는 URL 만 나가고(`clip_url` · `keyframe_urls`),
     # 그 URL 이 가리키는 곳이 여기다. 파일시스템 경로는 응답에 실리지 않는다.
@@ -413,6 +456,23 @@ async def _run_clips(service: ClipService) -> None:
         except Exception:
             log.exception("클립 예약 처리가 실패했다 — 다음 주기에 다시 시도한다")
         await asyncio.sleep(CLIP_POLL_SECONDS)
+
+
+async def _sample_normal(service: AiService) -> None:
+    """FN-AI-04 — 정상 풀 축적과 이상 판정. **경고 방송을 발동하지 않는다.**
+
+    주기는 `anomaly_sample_interval_min`(기본 5분 · 절대규칙 6)이다. 카메라 2대 기준
+    일 576회로, 이벤트 임베딩을 포함해도 무료 한도 안에서 돈다(기능명세서 §4.5).
+
+    예외를 삼키지 않는다(절대규칙 9) — 한 번의 실패로 루프를 죽이면 이상 탐지가
+    조용히 멎고, 화면에는 「이상 0건」이 정상처럼 보인다.
+    """
+    while True:
+        await asyncio.sleep(service.sample_interval_s)
+        try:
+            await service.sample_once()
+        except Exception:
+            log.exception("정상 풀 샘플링이 실패했다 — 다음 주기에 다시 시도한다")
 
 
 async def _tick_events(

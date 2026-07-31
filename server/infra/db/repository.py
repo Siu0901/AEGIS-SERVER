@@ -42,12 +42,15 @@ from aegis_contracts import (
     Zone,
 )
 from aegis_contracts.enums import AlertLevel
+from server.domain.aggregates import AggregateRow
 from server.domain.alerts import MINIMUM_LEVEL, LevelFloorError, SoundEntry, check_level
 from server.domain.event_machine import format_event_id
 from server.domain.metrics import MetricsRow
 from server.infra.db.models import AlertSound as SoundRow
+from server.infra.db.models import Anomaly as AnomalyRow
 from server.infra.db.models import Camera as CameraRow
 from server.infra.db.models import Event as EventRow
+from server.infra.db.models import NormalPoolSample as NormalPoolRow
 from server.infra.db.models import Policy as PolicyRow
 from server.infra.db.models import VehicleClassRow
 from server.infra.db.models import Zone as ZoneRow
@@ -56,6 +59,7 @@ __all__ = [
     "DEFAULT_PAGE_SIZE",
     "MAX_PAGE_SIZE",
     "OPEN_STATUSES",
+    "DbAiRepository",
     "DbCameraRepository",
     "DbEventRepository",
     "DbPolicyRepository",
@@ -435,6 +439,327 @@ class DbEventRepository:
         """
         stamp = _STATUS_STAMP.get(status)
         await self.update(event_id, {"status": status.value, **(stamp(at) if stamp else {})})
+
+    # -- 분석 화면 집계 (FN-UI-05 · FN-SYS-04) ---------------------------
+
+    async def aggregate_rows(
+        self,
+        from_: datetime | None,
+        to: datetime | None,
+    ) -> list[AggregateRow]:
+        """추이·분포가 보는 행들. `metrics_rows` 에 **시각·카메라·구역**을 더한 것이다.
+
+        요약과 같은 판정 규칙을 쓰기 위해 `MetricsRow` 를 그대로 품는다 — §6.7 표가
+        두 벌이 되면 요약과 추이가 서로 다른 시정률을 말하게 된다.
+        """
+        return await asyncio.to_thread(self._aggregate_rows, from_, to)
+
+    def _aggregate_rows(
+        self,
+        from_: datetime | None,
+        to: datetime | None,
+    ) -> list[AggregateRow]:
+        # 여덟 칸만 읽는다. `embedding`(halfvec 3072)과 jsonb 를 끌고 오면 한 달치
+        # 추이 한 번에 수백 MB 가 넘어온다.
+        statement = sa_select(
+            col(EventRow.violation_type),
+            col(EventRow.status),
+            col(EventRow.resolution_sec),
+            col(EventRow.is_false_positive),
+            col(EventRow.alert_suppressed),
+            col(EventRow.detected_at),
+            col(EventRow.cam_id),
+            col(EventRow.zone_id),
+        ).where(col(EventRow.detected_at).is_not(None))
+        if from_ is not None:
+            statement = statement.where(col(EventRow.detected_at) >= from_)
+        if to is not None:
+            statement = statement.where(col(EventRow.detected_at) <= to)
+        with Session(self._engine) as session:
+            rows = list(session.execute(statement).all())
+        return [
+            AggregateRow(
+                row=MetricsRow(
+                    violation_type=ViolationType(violation_type),
+                    status=EventStatus(status),
+                    resolution_sec=resolution_sec,
+                    is_false_positive=is_false_positive,
+                    alert_suppressed=alert_suppressed,
+                ),
+                detected_at=detected_at,
+                cam_id=cam_id,
+                zone_id=zone_id,
+            )
+            for (
+                violation_type,
+                status,
+                resolution_sec,
+                is_false_positive,
+                alert_suppressed,
+                detected_at,
+                cam_id,
+                zone_id,
+            ) in rows
+        ]
+
+    async def repeat_ranking(
+        self, since: datetime, limit: int
+    ) -> list[tuple[str, str, str, int, datetime]]:
+        """§4.2 `GET /metrics/repeat` — (subject, key, violation_type, count, last_at).
+
+        ★ **작업자 개인 단위 누적은 하지 않는다**(§4.2). `track` 축은 세션 내 추적
+        번호일 뿐 신원이 아니므로, 같은 사람이 다른 날 잡혀도 다른 트랙이다. 이 숫자는
+        「이 사람이 몇 번」이 아니라 「이 자리·이 추적에서 몇 번」으로 읽어야 한다.
+
+        라벨 붙이기는 라우터가 한다 — 구역 이름은 `zones` 테이블에 있고 이 저장소는
+        `events` 만 본다.
+        """
+        return await asyncio.to_thread(self._repeat_ranking, since, limit)
+
+    def _repeat_ranking(
+        self, since: datetime, limit: int
+    ) -> list[tuple[str, str, str, int, datetime]]:
+        found: list[tuple[str, str, str, int, datetime]] = []
+        axes: tuple[tuple[str, Any], ...] = (
+            ("zone", col(EventRow.zone_id)),
+            ("camera", col(EventRow.cam_id)),
+            ("track", col(EventRow.track_id)),
+        )
+        with Session(self._engine) as session:
+            for subject, column in axes:
+                statement = (
+                    sa_select(
+                        column,
+                        col(EventRow.violation_type),
+                        func.count(),
+                        func.max(col(EventRow.detected_at)),
+                    )
+                    .where(col(EventRow.detected_at) >= since)
+                    .where(col(EventRow.is_false_positive).is_(False))
+                    # 확정된 적이 없는 후보는 「반복 위반」이 아니다(§4.2 · FN-EVT-06).
+                    .where(col(EventRow.status) != EventStatus.DROPPED.value)
+                    .where(column.is_not(None))
+                    .group_by(column, col(EventRow.violation_type))
+                    .order_by(func.count().desc())
+                    .limit(limit)
+                )
+                for key, violation_type, count, last_at in session.execute(statement).all():
+                    found.append((subject, str(key), str(violation_type), int(count), last_at))
+        # 축이 섞인 목록을 다시 정렬한다 — 화면은 "무엇이 가장 자주 반복되는가"를
+        # 한 표로 보여주고, 축은 그 안에서 라벨로 구분된다.
+        found.sort(key=lambda item: (-item[3], item[0], item[1]))
+        return found[:limit]
+
+    # -- 임베딩 · 장면 검색 (FN-AI-01 · 02) -------------------------------
+
+    async def save_embedding(self, event_id: str, vector: list[float]) -> None:
+        """FN-AI-01 — 키프레임 임베딩을 그 이벤트 행에 붙인다.
+
+        **벡터는 로컬에만 남는다**(기능명세서 §4.5 · §7 보안). 클라우드로 나간 것은
+        키프레임이고 돌아온 숫자는 여기서 끝난다.
+        """
+        await self.update(event_id, {"embedding": vector})
+
+    async def search_events(
+        self,
+        *,
+        vector: list[float] | None,
+        from_: datetime | None,
+        to: datetime | None,
+        cam_id: int | None,
+        violation_type: str | None,
+        limit: int,
+    ) -> list[tuple[EventSummary, float | None, str | None]]:
+        """FN-AI-02 — **하이브리드**. 구조화 조건은 SQL, 자유 문장만 벡터 랭킹.
+
+        ★ 통계 질문에 벡터 검색을 쓰지 않는다(기능명세서 §4.5). 기간·카메라·유형은
+        `WHERE` 로 먼저 좁히고, 남은 것만 코사인 거리로 정렬한다. 순서가 반대면
+        「지난주 1번 카메라」 같은 조건이 유사도에 밀려 무시된다.
+
+        `vector` 가 `None` 이면 순수 SQL 검색이며 유사도는 `None` 이다 — 재지 않은
+        숫자를 지어내지 않는다.
+
+        세 번째 칸은 **클립 URL** 이다. `EventSummary`(§4.1 목록)에는 그 칸이 없고
+        경로 → URL 변환은 이 파일에만 있으므로(§5 경로 규약), 저장소가 함께 낸다 —
+        호출자가 `event_id` 로 URL 을 조립하면 그 규칙이 두 곳이 된다.
+        """
+        return await asyncio.to_thread(
+            self._search_events, vector, from_, to, cam_id, violation_type, limit
+        )
+
+    def _search_events(
+        self,
+        vector: list[float] | None,
+        from_: datetime | None,
+        to: datetime | None,
+        cam_id: int | None,
+        violation_type: str | None,
+        limit: int,
+    ) -> list[tuple[EventSummary, float | None, str | None]]:
+        statement = select(EventRow)
+        # ① 구조화 조건 — 벡터를 꺼내기 전에 좁힌다.
+        if from_ is not None:
+            statement = statement.where(col(EventRow.detected_at) >= from_)
+        if to is not None:
+            statement = statement.where(col(EventRow.detected_at) <= to)
+        if cam_id is not None:
+            statement = statement.where(col(EventRow.cam_id) == cam_id)
+        if violation_type is not None:
+            statement = statement.where(col(EventRow.violation_type) == violation_type)
+        # 오탐으로 정정된 건은 검색 결과에도 넣지 않는다 — 위반이 아니었기 때문이다.
+        statement = statement.where(col(EventRow.is_false_positive).is_(False))
+
+        with Session(self._engine) as session:
+            if vector is None:
+                rows = list(
+                    session.exec(
+                        statement.order_by(col(EventRow.detected_at).desc()).limit(limit)
+                    ).all()
+                )
+                return [(_summary(row, 0), None, _media_url(row.clip_path)) for row in rows]
+
+            # ② 자유 문장 — 좁혀진 집합 안에서만 코사인 거리로 정렬한다.
+            #    임베딩이 없는 이벤트는 비교 대상이 아니다(확정 전이거나 클라우드가
+            #    꺼져 있던 구간). 조용히 0점으로 섞으면 순위가 오염된다.
+            # `EventRow.embedding` 의 타입 스텁에는 pgvector 연산자가 없다. 테이블
+            # 컬럼에서 직접 꺼내야 `cosine_distance` 를 쓸 수 있다.
+            embedding_column = cast("Any", EventRow).__table__.c.embedding
+            distance = embedding_column.cosine_distance(vector)
+            ranked = (
+                statement.where(col(EventRow.embedding).is_not(None))
+                .order_by(distance)
+                .limit(limit)
+            )
+            rows = list(session.exec(ranked).all())
+            scores: dict[str, float] = {
+                str(event_id): float(value)
+                for event_id, value in session.execute(
+                    sa_select(col(EventRow.event_id), distance).where(
+                        col(EventRow.event_id).in_([row.event_id for row in rows])
+                    )
+                ).all()
+            }
+        return [
+            # §4.3 `similarity` 는 **코사인 유사도**다. pgvector 가 주는 것은 거리이므로
+            # 1에서 뺀다 — 그대로 실으면 "가장 닮은 것"이 가장 낮은 숫자가 된다.
+            (
+                _summary(row, 0),
+                round(1.0 - float(scores.get(row.event_id, 1.0)), 4),
+                _media_url(row.clip_path),
+            )
+            for row in rows
+        ]
+
+
+class DbAiRepository:
+    """정상 풀과 이상 플래그. 기능명세서 §6 `normal_pool` · `anomalies` · FN-AI-04
+
+    이벤트와 **다른 저장소로 나눈 이유**: 이상 탐지는 이벤트가 없어도 돌고(5분 주기
+    샘플링), 안전 루프의 어떤 판정도 이 표를 읽지 않는다. 경계를 나눠 두면 그 사실이
+    코드에서도 보인다.
+    """
+
+    def __init__(self, engine: Engine) -> None:
+        self._engine = engine
+
+    async def add_sample(
+        self, cam_id: int, time_bucket: str, vector: list[float], at: datetime
+    ) -> None:
+        """정상 풀에 한 건 쌓는다. **시간대별로 분리 축적한다**(기능명세서 §4.5)."""
+        await asyncio.to_thread(self._add_sample, cam_id, time_bucket, vector, at)
+
+    def _add_sample(self, cam_id: int, time_bucket: str, vector: list[float], at: datetime) -> None:
+        with Session(self._engine) as session:
+            session.add(
+                NormalPoolRow(
+                    cam_id=cam_id, time_bucket=time_bucket, embedding=vector, sampled_at=at
+                )
+            )
+            session.commit()
+
+    async def pool(self, cam_id: int, time_bucket: str, limit: int) -> list[list[float]]:
+        """그 카메라·그 시간대의 최근 정상 샘플들. 이상 점수의 비교 대상이다(§6.8)."""
+        return await asyncio.to_thread(self._pool, cam_id, time_bucket, limit)
+
+    def _pool(self, cam_id: int, time_bucket: str, limit: int) -> list[list[float]]:
+        statement = (
+            select(NormalPoolRow)
+            .where(col(NormalPoolRow.cam_id) == cam_id)
+            .where(col(NormalPoolRow.time_bucket) == time_bucket)
+            .where(col(NormalPoolRow.embedding).is_not(None))
+            .order_by(col(NormalPoolRow.sampled_at).desc())
+            .limit(limit)
+        )
+        with Session(self._engine) as session:
+            return [
+                [float(value) for value in row.embedding]
+                for row in session.exec(statement).all()
+                if row.embedding is not None
+            ]
+
+    async def create_anomaly(
+        self,
+        cam_id: int,
+        score: float,
+        at: datetime,
+        *,
+        keyframe_path: str | None = None,
+        llm_note: str | None = None,
+    ) -> int:
+        """이상 플래그 한 건. **경고 방송을 발동하지 않는다**(FN-AI-04)."""
+        return await asyncio.to_thread(
+            self._create_anomaly, cam_id, score, at, keyframe_path, llm_note
+        )
+
+    def _create_anomaly(
+        self,
+        cam_id: int,
+        score: float,
+        at: datetime,
+        keyframe_path: str | None,
+        llm_note: str | None,
+    ) -> int:
+        with Session(self._engine) as session:
+            row = AnomalyRow(
+                cam_id=cam_id,
+                score=score,
+                detected_at=at,
+                keyframe_path=keyframe_path,
+                llm_note=llm_note,
+            )
+            session.add(row)
+            session.commit()
+            session.refresh(row)
+            return int(row.id or 0)
+
+    async def list_anomalies(
+        self, from_: datetime | None, limit: int
+    ) -> list[tuple[int, int, float, datetime, str | None, str | None]]:
+        """최근 이상 플래그. 분석 화면(FN-UI-05)과 지표의 `anomaly_flags` 가 쓴다."""
+        return await asyncio.to_thread(self._list_anomalies, from_, limit)
+
+    def _list_anomalies(
+        self, from_: datetime | None, limit: int
+    ) -> list[tuple[int, int, float, datetime, str | None, str | None]]:
+        statement = select(AnomalyRow).order_by(col(AnomalyRow.detected_at).desc()).limit(limit)
+        if from_ is not None:
+            statement = statement.where(col(AnomalyRow.detected_at) >= from_)
+        with Session(self._engine) as session:
+            rows = list(session.exec(statement).all())
+        return [
+            (
+                int(row.id or 0),
+                row.cam_id,
+                row.score,
+                # `detected_at` 은 항상 채워 넣는 칸이다. 비어 있으면 행이 깨진 것이므로
+                # 자정 같은 그럴듯한 값으로 메우지 않고 건너뛴다.
+                row.detected_at,
+                row.keyframe_path,
+                row.llm_note,
+            )
+            for row in rows
+            if row.detected_at is not None
+        ]
 
 
 class DbZoneRepository:

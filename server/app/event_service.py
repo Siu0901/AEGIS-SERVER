@@ -103,6 +103,19 @@ class ClipScheduler(Protocol):
     async def on_confirmed(self, event_id: str, cam_id: int, confirmed_at: datetime) -> None: ...
 
 
+class AnalysisScheduler(Protocol):
+    """확정 시 심층 분석을 거는 부품. 구현은 `server/ai/service.py`. FN-AI-05
+
+    ★ **시그니처가 `ClipScheduler` 와 같은 것은 우연이 아니다.** 둘 다 확정 순간에
+    걸리는 후속 작업이고, 둘 다 **안전 루프를 막지 않아야 한다** — `on_confirmed` 가
+    하는 일은 배경 작업을 띄우는 것뿐이다(FN-SYS-03).
+    """
+
+    async def on_confirmed(self, event_id: str, cam_id: int, confirmed_at: datetime) -> None: ...
+
+    async def anomaly_flags(self, since: datetime | None) -> int: ...
+
+
 def today_window(now: datetime) -> tuple[datetime, datetime]:
     """`period = "today"` 의 구간. 저장이 UTC 이므로 **UTC 자정**으로 끊는다(§1.2).
 
@@ -135,6 +148,15 @@ class EventService:
         self._policies = policies
         self._alerts = alerts
         self._clips = clips
+        self._analysis: AnalysisScheduler | None = None
+
+    def set_analysis(self, analysis: AnalysisScheduler | None) -> None:
+        """FN-AI-05 — 확정 시 심층 분석을 걸 부품을 붙인다.
+
+        생성자가 아니라 별도 메서드인 이유: 분석 서비스는 지표 집계(`summary`)를
+        되받아 쓰므로 서로를 참조한다. 조립 순서를 한 방향으로 만들어 순환을 없앤다.
+        """
+        self._analysis = analysis
 
     @property
     def machine(self) -> EventMachine:
@@ -306,10 +328,21 @@ class EventService:
             rows,
             period=period,
             resolve_window_s=self._machine.policies.resolve_window_s,
-            # 이상 탐지(FN-AI-04)는 M8 이다. 0 은 "아직 세지 않는다"가 아니라
-            # "이상 플래그를 만드는 기능이 없다"는 뜻이며, 화면에도 그렇게 나온다.
-            anomaly_flags=0,
+            # FN-AI-04 — 같은 구간의 이상 플래그 수. 이상 탐지가 꺼져 있으면 0이고,
+            # 그것은 "이상이 없었다"가 아니라 "세는 기능이 돌지 않는다"는 뜻이다.
+            # 그 구분은 `GET /system/status` 의 `cloud` 절이 한다.
+            anomaly_flags=await self._count_anomalies(start),
         )
+
+    async def _count_anomalies(self, since: datetime | None) -> int:
+        if self._analysis is None:
+            return 0
+        try:
+            return await self._analysis.anomaly_flags(since)
+        except Exception:
+            # 지표 전체를 실패시키지 않는다 — 시정률은 이상 탐지와 무관하게 나와야 한다.
+            log.warning("이상 플래그를 세지 못했다 — 0으로 보고한다")
+            return 0
 
     # ------------------------------------------------------------------
     # 내부
@@ -389,12 +422,20 @@ class EventService:
         이 칸을 건드리지 않으므로 예약이 두 번 걸리지 않는다.
         """
         confirmed_at = effect.changes.get("confirmed_at")
-        if confirmed_at is None or self._clips is None:
+        if confirmed_at is None:
             return
-        try:
-            await self._clips.on_confirmed(effect.event_id, effect.cam_id, confirmed_at)
-        except Exception:
-            log.exception("클립 예약이 실패했다 — %s", effect.event_id)
+        if self._clips is not None:
+            try:
+                await self._clips.on_confirmed(effect.event_id, effect.cam_id, confirmed_at)
+            except Exception:
+                log.exception("클립 예약이 실패했다 — %s", effect.event_id)
+        if self._analysis is not None:
+            # FN-AI-05 — 심층 분석. **여기서 기다리지 않는다**(FN-SYS-03) — 배경 태스크
+            # 하나가 뜰 뿐이고, 클라우드가 죽어 있어도 이 호출은 즉시 돌아온다.
+            try:
+                await self._analysis.on_confirmed(effect.event_id, effect.cam_id, confirmed_at)
+            except Exception:
+                log.exception("심층 분석 예약이 실패했다 — %s", effect.event_id)
 
     async def _persist(self, effect: Effect) -> None:
         if self._store is None:

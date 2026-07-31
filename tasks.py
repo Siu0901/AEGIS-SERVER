@@ -160,10 +160,7 @@ def listeners_on(port: int) -> list[tuple[int, str]]:
     목록을 돌려주지 않고 예외를 올린다 — "확인할 수 없었다"를 "비어 있다"로 바꾸면
     이 가드가 있으나 마나가 된다(절대규칙 9).
     """
-    if sys.platform == "win32":
-        argv = ["netstat", "-ano", "-p", "TCP"]
-    else:
-        argv = ["ss", "-ltnp"]
+    argv = ["netstat", "-ano", "-p", "TCP"] if _IS_WINDOWS else ["ss", "-ltnp"]
     exe = shutil.which(argv[0])
     if exe is None:
         raise TaskError(
@@ -182,7 +179,7 @@ def listeners_on(port: int) -> list[tuple[int, str]]:
     for line in proc.stdout.splitlines():
         if f":{port}" not in line:
             continue
-        if sys.platform == "win32":
+        if _IS_WINDOWS:
             parts = line.split()
             # PROTO  LOCAL  FOREIGN  STATE  PID  — LISTENING 만 본다. 나가는 연결이
             # 우연히 같은 번호를 원격 포트로 쓰면 여기 걸리는데, 그건 선점이 아니다.
@@ -201,6 +198,11 @@ def listeners_on(port: int) -> list[tuple[int, str]]:
 #: `ss -ltnp` 의 `users:(("uvicorn",pid=1234,fd=7))` 에서 PID 만 뽑는다.
 _PID_RE = re.compile(r"pid=(\d+)")
 
+#: 지금 윈도우인가. **`sys.platform` 을 직접 비교하지 않는다** — 타입 검사기가 그것을
+#: 상수로 좁혀 반대편 분기를 「도달 불가」로 지워 버리고, 그러면 젯슨(리눅스) 경로가
+#: 검사에서 통째로 빠진다. 같은 명령이 두 OS 에서 다 돌아야 하는 파일이다.
+_IS_WINDOWS = os.name == "nt"
+
 
 def process_name(pid: int) -> str:
     """PID 의 실행 파일 이름. 알 수 없으면 `?`.
@@ -208,10 +210,11 @@ def process_name(pid: int) -> str:
     이름이 있어야 사람이 "내가 띄운 uvicorn 이구나"를 알고 안심하고 죽일 수 있다.
     번호만 주면 그 프로세스가 무엇인지 다시 찾아봐야 한다.
     """
-    if sys.platform == "win32":
-        argv = ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"]
-    else:
-        argv = ["ps", "-p", str(pid), "-o", "comm="]
+    argv = (
+        ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"]
+        if _IS_WINDOWS
+        else ["ps", "-p", str(pid), "-o", "comm="]
+    )
     exe = shutil.which(argv[0])
     if exe is None:
         return "?"
@@ -222,7 +225,7 @@ def process_name(pid: int) -> str:
     output = proc.stdout.strip()
     if not output:
         return "?"
-    if sys.platform == "win32":
+    if _IS_WINDOWS:
         return output.split(",")[0].strip('"') or "?"
     return output.splitlines()[0].strip() or "?"
 
@@ -236,7 +239,7 @@ def ensure_ports_free(ports: Sequence[tuple[int, str]] = DEV_PORTS) -> None:
     if not held:
         return
 
-    kill = "taskkill /PID <PID> /F" if sys.platform == "win32" else "kill <PID>"
+    kill = "taskkill /PID <PID> /F" if _IS_WINDOWS else "kill <PID>"
     raise TaskError(
         "포트가 이미 잡혀 있다 — dev 를 띄우지 않는다.\n"
         + "\n".join(held)

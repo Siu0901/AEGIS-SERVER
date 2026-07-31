@@ -952,12 +952,12 @@ export interface SceneSearchFilters {
  */
 export interface SceneSearchItem {
   event_id: string
-  similarity: number
+  similarity: number | null
   title: string
   cam_id: number
   occurred_at: string
-  thumbnail_url: string
-  clip_url: string
+  thumbnail_url: string | null
+  clip_url: string | null
 }
 
 /**

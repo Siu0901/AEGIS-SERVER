@@ -38,8 +38,13 @@ PERSON: dict[str, Any] = {
 #: 같은 사람인데 이번 프레임에서 지게차가 가깝다. §2.1 `nearby` 가 실려 있다.
 NEAR_PERSON: dict[str, Any] = PERSON | {
     "nearby": [
-        {"track_id": 11, "class": "vehicle", "dist_m": 1.55, "basis": "mask_nearest",
-         "in_danger_zone": True}
+        {
+            "track_id": 11,
+            "class": "vehicle",
+            "dist_m": 1.55,
+            "basis": "mask_nearest",
+            "in_danger_zone": True,
+        }
     ]
 }
 

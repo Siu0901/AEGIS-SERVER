@@ -129,7 +129,7 @@ def test_a_missing_probe_is_an_error_not_an_empty_result(monkeypatch: pytest.Mon
 
     빈 목록을 돌려주면 가드가 있으나 마나가 되고, 그 사실은 아무 데도 드러나지 않는다.
     """
-    monkeypatch.setattr(tasks.shutil, "which", lambda name: None)
+    monkeypatch.setattr("tasks.shutil.which", lambda name: None)
     with pytest.raises(tasks.TaskError, match="포트 점유를 확인할 도구가 없다"):
         tasks.listeners_on(8000)
 

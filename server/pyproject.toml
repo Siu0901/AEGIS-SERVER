@@ -8,7 +8,9 @@ dependencies = [
     "aegis-vision",
     "alembic>=1.14",
     "fastapi>=0.115",
+    "google-genai>=1.0",
     "httpx2>=2.0",     # mediamtx 제어 API · REC 호출 (httpx 는 deprecated)
+    "langgraph>=0.2",
     "paho-mqtt>=2.1",
     "pgvector>=0.3.6",
     "psycopg[binary]>=3.2",

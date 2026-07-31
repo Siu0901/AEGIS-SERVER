@@ -457,13 +457,24 @@ class SceneSearchItem(SpecModel):
     """`POST /search/scenes` 결과 항목. API명세서 §4.3"""
 
     event_id: str
-    similarity: float
-    """질의 임베딩과 키프레임 임베딩의 코사인 유사도."""
+    similarity: float | None
+    """질의 임베딩과 키프레임 임베딩의 코사인 유사도.
+
+    ★ **`mode == "sql"` 이면 `null` 이다.** §4.3 은 세 경로(`sql` / `vector` / `hybrid`)를
+    정의하는데, `sql` 경로에는 질의 임베딩 자체가 없다 — 「지난주 1번 카메라 안전모」
+    처럼 조건이 전부 구조화되면 벡터를 만들 이유가 없기 때문이다. 그때 유사도 자리에
+    숫자를 채우면 **재지 않은 값이 순위의 근거처럼** 보인다.
+
+    (§4.3 예시는 `hybrid` 응답이라 이 칸이 채워져 있다. `sql` 경로를 표현하려면
+    `null` 이 필요하다 — `docs/INDEX.md` 「명세서 확인 필요」에 올려 두었다.)
+    """
     title: str
     cam_id: int
     occurred_at: AwareDatetime
-    thumbnail_url: str
-    clip_url: str
+    thumbnail_url: str | None
+    """키프레임이 아직 없으면 `null`(§5.2 와 같은 규약 — 없는 URL 을 문자열로 내보내지 않는다)."""
+    clip_url: str | None
+    """클립이 `ready` 가 아니면 `null`. `pending` 인 이벤트도 검색 결과에는 나와야 한다."""
 
 
 class SceneSearchResponse(SpecModel):

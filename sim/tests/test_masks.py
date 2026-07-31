@@ -340,9 +340,7 @@ def test_frame_carries_the_same_distance_as_the_candidate(case: str) -> None:
                 f"{label} frame {actual}m · candidate {expected}m — 두 경로가 다른 값을 잰다"
             )
         if actual is not None:
-            basis = next(
-                item.basis for item in person.nearby if item.track_id == vehicle_id
-            )
+            basis = next(item.basis for item in person.nearby if item.track_id == vehicle_id)
             if basis != "mask_nearest":
                 problems.append(f"{label} basis: 기대 mask_nearest · 실제 {basis}")
 

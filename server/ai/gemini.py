@@ -1,0 +1,147 @@
+"""Gemini 어댑터 — `google-genai` 를 아는 **유일한** 파일. FN-AI-01 · 05
+
+기능명세서 §4.5 — 임베딩은 Gemini Embedding, 심층 분석은 Gemini Flash.
+
+**여기 말고 어디서도 `google.genai` 를 import 하지 않는다**(`ports.py`). 공급자를
+바꾸면 이 파일 하나가 교체되고, 그 사실을 테스트가 잠근다.
+
+---
+
+**키가 없으면 만들지 않는다.** `GEMINI_API_KEY` 가 비어 있으면 `create_cloud()` 가
+`None` 을 돌려주고, 서버는 클라우드 없이 기동한다 — 감지 → 확정 → 경고 → 시정 루프는
+클라우드를 부르지 않으므로 아무것도 달라지지 않는다(FN-SYS-03). 화면에는
+`GET /system/status` 의 `cloud.available = false` 로 드러난다.
+
+**동기 SDK 를 스레드로 넘긴다.** `google-genai` 의 호출은 블로킹이라 이벤트 루프에서
+그대로 부르면 그동안 `/ws/edge` 수신과 상태머신 틱이 멈춘다 — 그게 곧 클라우드 지연이
+안전 루프를 건드리는 경로다. `asyncio.to_thread` 로 밀어낸다.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+from dataclasses import dataclass
+from typing import Any
+
+from server.ai.ports import CloudError
+
+__all__ = ["GeminiCloud", "create_cloud"]
+
+log = logging.getLogger("server.ai.gemini")
+
+#: 기능명세서 §4.5 — 키프레임 임베딩은 3,072차원이며 `halfvec(3072)` 과 짝이다.
+EMBEDDING_DIM = 3072
+
+#: 기본 모델. 배포마다 바꿀 수 있게 환경변수로 뺀다(절대규칙 6 — 코드에 박지 않는다).
+_DEFAULT_EMBED_MODEL = "gemini-embedding-001"
+_DEFAULT_TEXT_MODEL = "gemini-flash-latest"
+
+
+@dataclass(slots=True)
+class GeminiCloud:
+    """`Embedder` 와 `Llm` 을 함께 구현한다. 둘 다 같은 클라이언트를 쓴다."""
+
+    client: Any
+    embed_model: str = _DEFAULT_EMBED_MODEL
+    text_model: str = _DEFAULT_TEXT_MODEL
+
+    @property
+    def dimensions(self) -> int:
+        return EMBEDDING_DIM
+
+    async def embed_image(self, image: bytes, *, mime_type: str = "image/jpeg") -> list[float]:
+        """키프레임 한 장 → 벡터. FN-AI-01"""
+        # 어댑터 안에서만 import 한다 — 이 파일 밖에서는 `google.genai` 를 모른다.
+        from google.genai import types
+
+        part = types.Part.from_bytes(data=image, mime_type=mime_type)
+        return await self._embed([types.Content(parts=[part])])
+
+    async def embed_text(self, text: str) -> list[float]:
+        """질의 문장 → 벡터. FN-AI-02"""
+        return await self._embed([text])
+
+    async def _embed(self, contents: list[Any]) -> list[float]:
+        def call() -> list[float]:
+            response = self.client.models.embed_content(
+                model=self.embed_model,
+                contents=contents,
+            )
+            embeddings = getattr(response, "embeddings", None)
+            if not embeddings:
+                msg = "임베딩 응답이 비어 있다"
+                raise CloudError(msg)
+            values = list(embeddings[0].values or [])
+            if len(values) != EMBEDDING_DIM:
+                # 차원이 다르면 pgvector 가 저장을 거부한다. 여기서 먼저 막아야
+                # "왜 임베딩이 하나도 없지"가 아니라 원인이 로그에 남는다.
+                msg = f"임베딩 차원이 {len(values)} 다 — {EMBEDDING_DIM} 이어야 한다"
+                raise CloudError(msg)
+            return values
+
+        return await self._guarded(call)
+
+    async def generate(self, prompt: str, *, images: list[bytes] | None = None) -> str:
+        """맥락 → 분석문. FN-AI-05 · 08 · 09 · 10"""
+        from google.genai import types
+
+        parts: list[Any] = [types.Part.from_text(text=prompt)]
+        for image in images or []:
+            parts.append(types.Part.from_bytes(data=image, mime_type="image/jpeg"))
+
+        def call() -> str:
+            response = self.client.models.generate_content(
+                model=self.text_model,
+                contents=[types.Content(role="user", parts=parts)],
+            )
+            text = getattr(response, "text", None)
+            if not text:
+                msg = "생성 응답이 비어 있다"
+                raise CloudError(msg)
+            return str(text).strip()
+
+        return await self._guarded(call)
+
+    @staticmethod
+    async def _guarded[T](call: Any) -> T:
+        """블로킹 SDK 를 스레드로 넘기고, 어떤 실패든 `CloudError` 로 좁힌다.
+
+        SDK 예외 종류를 그대로 올리면 호출자가 공급자별 예외를 알아야 하고, 그러면
+        어댑터 계층이 이름만 남는다.
+        """
+        try:
+            return await asyncio.to_thread(call)
+        except CloudError:
+            raise
+        except Exception as exc:  # SDK 예외 계층을 바깥으로 새게 두지 않는다
+            raise CloudError(str(exc)) from exc
+
+
+def create_cloud(
+    api_key: str | None = None,
+    *,
+    embed_model: str | None = None,
+    text_model: str | None = None,
+) -> GeminiCloud | None:
+    """설정이 갖춰졌을 때만 어댑터를 만든다. 아니면 `None`.
+
+    ★ **키가 없다고 기동을 막지 않는다.** 클라우드는 지능 기능 전용이고, 안전 루프는
+    클라우드 없이 완결된다(기능명세서 §4.8 · 아키텍처 Tier 2). 여기서 예외를 던지면
+    인터넷 없는 현장에서 서버가 아예 뜨지 않는다 — 그건 격리의 반대다.
+    """
+    key = api_key or os.environ.get("GEMINI_API_KEY") or ""
+    if not key.strip():
+        log.info("GEMINI_API_KEY 가 없다 — 지능 기능은 꺼진 채로 기동한다 (안전 기능은 무관)")
+        return None
+    try:
+        from google import genai
+    except ImportError:  # pragma: no cover - 설치되어 있다
+        log.warning("google-genai 를 불러오지 못했다 — 지능 기능을 끈다")
+        return None
+    return GeminiCloud(
+        client=genai.Client(api_key=key),
+        embed_model=embed_model or os.environ.get("GEMINI_EMBED_MODEL") or _DEFAULT_EMBED_MODEL,
+        text_model=text_model or os.environ.get("GEMINI_TEXT_MODEL") or _DEFAULT_TEXT_MODEL,
+    )
