@@ -60,6 +60,19 @@ depth:
   engine: models/engines/depth_anything_v2_small_fp16.engine
   weights: models/weights/depth_anything_v2_small.pt
 
+posture:
+  # 쓰러짐 3조건 중 ③(정지 지속)의 판정 임계 (FN-DET-10 · API명세서 §6.4).
+  #
+  # 지속 시간 자체(`fall_stillness_s`)와 높이·각도 임계는 서버 policies 에서 받는다 —
+  # 현장에서 화면으로 조정하는 값이기 때문이다. 여기 있는 둘은 **무엇을 정지로 볼
+  # 것인가**이고, 카메라 화각과 설치 높이에 종속되므로 장비 설정에 속한다.
+  #
+  # 중심 이동량과 형태 변화량을 **모두** 봐야 한다. 중심만 보면 제자리에서 팔을
+  # 휘두르는 사람이 정지로 잡히고, 형태만 보면 자세를 유지한 채 미끄러지듯 이동하는
+  # 것을 놓친다.
+  stillness_move_max: 0.02        # 정규화 픽셀 / 초
+  stillness_shape_change_max: 0.15  # 면적·종횡비 변화 비율 / 초
+
 track:
   # ByteTrack (CPU). person·vehicle 모두에 track_id 를 부여한다(FN-DET-03).
   backend: bytetrack
