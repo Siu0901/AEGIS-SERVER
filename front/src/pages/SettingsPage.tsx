@@ -315,7 +315,6 @@ function CameraPanel({
         cam_id: camId,
         name: zoneName.trim() || zoneId.trim(),
         polygon,
-        polygon_m: null,
         buffer_m: Number(buffer),
         active: true,
       })
@@ -338,14 +337,24 @@ function CameraPanel({
   const measured = points.every((item) => item.x !== '' && item.y !== '')
   const calibrated = camera?.homography ?? null
 
-  // 저장된 구역을 화면에 되그린다. 캘리브레이션이 없으면 그릴 방법이 없다.
-  const drawnZones = useMemo(() => {
-    if (!calibrated) return []
-    return zones.map((zone) => ({
-      zone,
-      shape: zone.polygon_m.map((point) => groundToPixel(calibrated, point)),
-    }))
-  }, [calibrated, zones])
+  // 저장된 구역을 화면에 되그린다.
+  //
+  // **저장된 픽셀 폴리곤이 있으면 그것을 그대로 그린다**(§4.5). 사용자가 그린 위치가
+  // 원본이고, 미터를 매번 역변환하면 캘리브레이션을 다시 할 때마다 도형이 미세하게
+  // 움직인다. 픽셀이 없는 옛 구역(마이그레이션 0007 이전)만 역변환으로 대신한다.
+  const drawnZones = useMemo(
+    () =>
+      zones.map((zone) => ({
+        zone,
+        shape:
+          zone.polygon.length > 0
+            ? zone.polygon.map((point) => point as [number, number] | null)
+            : calibrated
+              ? zone.polygon_m.map((point) => groundToPixel(calibrated, point))
+              : [],
+      })),
+    [calibrated, zones],
+  )
 
   return (
     <section className="card">
@@ -376,7 +385,7 @@ function CameraPanel({
         <video ref={videoRef} muted playsInline className="settings__video" />
         <svg className="settings__overlay" viewBox="0 0 100 100" preserveAspectRatio="none">
           {drawnZones.map(({ zone, shape }) =>
-            shape.every((point) => point !== null) ? (
+            shape.length > 0 && shape.every((point) => point !== null) ? (
               <polygon
                 key={zone.zone_id}
                 className="settings__zone"
@@ -459,6 +468,31 @@ function CameraPanel({
             찍은 네 점의 <strong>실측 지면 좌표(m)</strong>를 입력해라. 첫 점을 원점(0, 0)으로
             두는 것이 편하다. 네 점이 한 직선 위에 있으면 서버가 거부한다.
           </p>
+          {/* 기능명세서 §4.7 FN-CFG-01 「캘리브레이션과 축척」.
+              현장에서 잘못 입력하면 M9 에서 임계값을 전부 다시 만져야 하므로,
+              규칙을 입력란 바로 옆에 둔다. */}
+          <ul className="settings__rules">
+            <li>
+              기준점 4개는 <strong>모두 같은 바닥 평면</strong> 위에 있어야 한다. 높이가 다른
+              점을 섞으면 지면 대 지면 변환이 성립하지 않는다.
+            </li>
+            <li>
+              모형 시연에서는 모형의 실측 치수가 아니라 <strong>환산 미터</strong>를 넣는다 —
+              1:20 모형에서 15cm 떨어진 두 점이면 <code>0.15</code> 가 아니라{' '}
+              <code>3.0</code> 이다.
+            </li>
+            <li>
+              <strong>임계값을 축척에 맞춰 바꾸지 마라.</strong> 위험 반경 3.0m · 근접 2.0m ·
+              보행 속도 1.5m/s 는 KOSHA 기준과 실제 보행 속도에서 나온 값이고, 축척 변환은
+              캘리브레이션이 혼자 흡수한다. 실물 현장으로 옮길 때 다시 하는 것은
+              캘리브레이션뿐이다.
+            </li>
+            <li>
+              기준 인물 높이(<code>ref_height_px_at_m</code>)도 <strong>실제 작업자 신장
+              (약 1.7m)</strong> 기준으로 입력해야 쓰러짐 판정이 명세서 임계값 그대로 돈다.
+            </li>
+            <li>카메라를 고정한 뒤에 찍어라. 이후 카메라를 움직이면 캘리브레이션은 무효다.</li>
+          </ul>
           <table className="settings__table">
             <thead>
               <tr>
