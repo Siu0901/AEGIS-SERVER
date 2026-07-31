@@ -321,6 +321,7 @@ candidate ─→ active ─→ alerted ⇄ re_alerted
 
 유형별 해소 조건:
 - `no_helmet`: 분류 결과가 `helmet_on`으로 전환된 상태 지속
+- `proximity`: **후보를 만든 것과 동일한 거리 기준**(`frame.objects[].nearby[].dist_m`)이 위험 반경 밖으로 벗어난 상태 지속. 서버가 접지점↔`anchor_m` 로 다시 계산하지 않는다
 - `zone_intrusion`: 접지점이 구역 밖(이탈 히스테리시스 적용)
 - `proximity`: 거리가 임계값 초과
 - `fall`: 자세가 `standing`으로 복귀. **관리자 수동 확인으로도 종결 가능**
@@ -746,8 +747,13 @@ stride 32에 맞춘 `640×384` 로 rect 추론하면 패딩이 12px씩으로 줄
 | `regulation_refs` | jsonb | 매핑 조항 |
 | `is_false_positive` | bool | 수동 정정 |
 
-**zones** `zone_id`, `cam_id`, **`name`**(표시 이름, 예: 지게차 통행로), `polygon_m`, `buffer_m`, `active`
-**cameras** `cam_id`, `name`, `rtsp_main`, `rtsp_sub`, `homography`, `ref_height_px_at_m`(높이 비율 기준값), `calibrated_at`
+**zones** `zone_id`, `cam_id`, **`name`**, `polygon`(정규화 픽셀 원본), `polygon_m`(지면 실좌표, 서버 산출), `buffer_m`, `active`
+**cameras** `cam_id`, `name`, `rtsp_main`, `rtsp_sub`, `homography`, `calib_points`(jsonb 대응점 원본), `reproj_error_m`, `ref_height`(jsonb), `calibrated_at`
+
+　→ **`ref_height` 는 스칼라가 아니다.** `{ "height_px": 0.42, "at_m": [4.0, 7.0] }` 형태로 저장한다.
+　　 높이 비율을 거리로 정규화하려면 **그 기준 높이를 어느 지면 위치에서 쟀는지**가 필요하다.
+　　 같은 사람이라도 카메라에서 멀수록 픽셀 높이가 줄어들므로, 위치 없는 스칼라만으로는
+　　 다른 거리에서의 기대 높이를 구할 수 없다.
 **vehicle_classes** `class_name`, `danger_radius_m`(지게차 기본 3.0), `active`
 **policies** `key`, `value`
 **alert_sounds** `violation_type`, `file_path`, `level`(1/2/3), `label`, `active`

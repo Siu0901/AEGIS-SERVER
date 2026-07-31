@@ -95,7 +95,11 @@ v2.0 · 2026-07-18
       "height_ratio": 0.97,
       "axis_angle_deg": 8.2,
       "stillness_s": 0.4,
-      "in_zone": "forklift_lane"
+      "in_zone": "forklift_lane",
+      "nearby": [
+        { "track_id": 11, "class": "vehicle", "dist_m": 1.55,
+          "basis": "mask_nearest", "in_danger_zone": true }
+      ]
     },
     {
       "class": "vehicle",
@@ -137,6 +141,18 @@ v2.0 · 2026-07-18
 | `axis_angle_deg` | float | 마스크 주축과 수직축의 각도(도). 0에 가까우면 수직, 90에 가까우면 수평 |
 | `stillness_s` | float | 정지 상태 지속 시간(초) |
 | `in_zone` | string·null | 접지점이 포함된 구역 ID. **필드는 항상 싣고, 해당 없으면 `null`** |
+| `nearby[]` | object[] | 이 사람과 차량 사이의 거리. 없으면 빈 배열 |
+| `nearby[].dist_m` | float | 지면 거리 |
+| `nearby[].basis` | string | `mask_nearest`(P1, 기본) / `anchor`(마스크 없을 때 대체) |
+| `nearby[].in_danger_zone` | bool | `danger_radius_m` 이내 여부 |
+
+**`nearby` 를 `frame` 에 싣는 이유 (중요)**
+
+**확정과 해소는 반드시 같은 양을 보아야 한다.** 엣지는 마스크 최근접 거리(§6.5)로 `proximity` 후보를 만드는데, 서버가 이 값을 받지 못하면 접지점↔`anchor_m` 거리로 대체 계산하게 된다. 두 값은 **FN-DET-09가 존재하는 바로 그 상황**(지게차 포크가 뻗은 형상)에서 크게 갈린다(실측 1.55m 대 3.50m).
+
+그 결과 엣지가 근접이라고 올린 순간 서버는 이미 해소로 판정해 **이벤트가 확정에 도달하지 못한다.** `overlay` 의 거리선도 같은 값을 쓰므로 화면에 표시되는 거리와 위반의 근거가 어긋난다.
+
+엣지는 후보 생성을 위해 이 값을 이미 계산하고 있으므로 추가 연산 비용은 없다. **판정의 원천은 하나여야 한다.**
 
 **vehicle(지게차) 전용 필드**
 
@@ -700,6 +716,8 @@ v2.0 · 2026-07-18
   "fall_height_ratio_max": 0.5,
   "fall_axis_angle_min_deg": 55.0,
   "fall_stillness_s": 5.0,
+  "stillness_move_px": 0.008,
+  "stillness_window_s": 1.0,
   "anomaly_sample_interval_min": 5,
   "mute_default_duration_s": 900,
   "clip_extract_margin_s": 2,
@@ -733,6 +751,10 @@ v2.0 · 2026-07-18
 | `fall_height_ratio_max` | 높이 비율이 이 값 이하이면 쓰러짐 조건 ① 충족 |
 | `fall_axis_angle_min_deg` | 주축 각도가 이 값 이상이면 조건 ② 충족 |
 | `fall_stillness_s` | 정지 지속이 이 값 이상이면 조건 ③ 충족 |
+| `stillness_move_px` | 정지 판정 기준. 이 값(정규화 픽셀) 이하 이동이면 정지로 본다 |
+| `stillness_window_s` | 정지 여부를 평가하는 이동 평균 창 |
+
+※ 정지 판정 임계는 **오탐 억제의 핵심 조건**이며 현장 튜닝이 잦으므로 `edge/config.yaml` 이 아니라 정책 테이블에 둔다.
 | `anomaly_sample_interval_min` | 정상 풀 샘플링 주기(분). 기본 5 |
 | `mute_default_duration_s` | 경고 일시중지 기본 지속시간(초). 기본 900 |
 | `clip_extract_margin_s` | 세그먼트가 닫힌 뒤 클립 추출까지의 여유(초). 기본 2. **세그먼트 길이는 이 값에 포함되지 않으며 REC이 보고하는 값을 따로 더한다**(기능명세서 §4.4) |
