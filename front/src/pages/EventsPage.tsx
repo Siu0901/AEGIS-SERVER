@@ -11,7 +11,7 @@
  * · **`clip_status` 로 재생 가능 여부를 판단한다.** `pending` 이면 클립 대신 키프레임을
  *   보여준다 — 아직 없는 파일에 `<video>` 를 붙이면 조용히 재생에 실패한다(§4.1 은
  *   그 상황에 404 를 준다)
- * · **LLM 분석 · 유사 사례 · 규정 매핑은 자리를 만들고 비워 둔다**(M8). 값이 없는
+ * · **LLM 분석 · 유사 사례 · 규정 매핑은 비어 있을 수 있다**(FN-AI-05·06·07). 값이 없는
  *   이유가 "아직 그 기능이 없다"임을 화면에 적는다 — 빈 칸은 "생성 실패"와 구분되지
  *   않는다(§4.6 null 규약)
  * · **`alert_suppressed` 를 상세에 표시한다.** 그 이벤트가 시정률에서 빠진 이유이며,
@@ -407,23 +407,62 @@ function EventDetailPanel({
         </dl>
       </div>
 
-      {/* --- M8 자리 (FN-AI-05 · 06 · 07) --- */}
+      {/* --- 지능 기능 (FN-AI-05 · 06 · 07) --- */}
       <div className="pending-panels">
-        <PendingPanel
-          title="LLM 심층 분석"
-          value={detail.llm_analysis}
-          why="FN-AI-05 · M8. 클라우드가 죽어도 안전 기능은 무영향이므로(FN-SYS-03) 이 칸은 비어 있을 수 있다"
-        />
-        <PendingPanel
-          title="유사 사고사례"
-          value={detail.similar_incidents.map((item) => item.title).join(' · ') || null}
-          why="FN-AI-07 · M8 (P2). 임베딩 유사도로 매칭한다"
-        />
-        <PendingPanel
-          title="규정 매핑"
-          value={detail.regulation_refs.map((item) => item.code).join(' · ') || null}
-          why="FN-AI-06 · M8. 사전 구축 매핑 테이블로 연결하며 LLM 이 조항을 생성하지 않는다"
-        />
+        <section className="pending">
+          <h4 className="pending__title">LLM 심층 분석</h4>
+          {detail.llm_analysis ? (
+            <p className="pending__body">{detail.llm_analysis}</p>
+          ) : (
+            /* ★ 비어 있는 것과 기능이 없는 것은 다르다. 클라우드가 죽어도 안전
+               기능은 무영향이므로(FN-SYS-03) 이 칸만 비는 것이 정상 경로다. */
+            <p className="pending__why">
+              아직 없다 — 확정 직후 배경에서 생성된다. 클라우드가 꺼져 있으면 비어 있고,
+              그래도 감지 → 경고 → 시정 판정은 정상 동작한다(FN-SYS-03).
+            </p>
+          )}
+        </section>
+
+        <section className="pending">
+          <h4 className="pending__title">유사 사고사례</h4>
+          {detail.similar_incidents.length > 0 ? (
+            <ul className="pending__list">
+              {detail.similar_incidents.map((item) => (
+                <li key={item.title}>
+                  <span>{item.title}</span>
+                  {/* 유사도는 **잰 값**이다. 없는 항목은 애초에 실리지 않는다(§4.3). */}
+                  <em>
+                    {item.source} · 유사도 {Math.round(item.similarity * 100)}%
+                  </em>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="pending__why">
+              아직 없다 — 키프레임 임베딩으로 확정 시 1회 매칭한다(FN-AI-07). 임베딩이
+              없으면 <strong>유사도를 지어내지 않고 비워 둔다</strong>.
+            </p>
+          )}
+        </section>
+
+        <section className="pending">
+          <h4 className="pending__title">규정 매핑</h4>
+          {detail.regulation_refs.length > 0 ? (
+            <ul className="pending__list">
+              {detail.regulation_refs.map((item) => (
+                <li key={item.code}>
+                  <span>{item.code}</span>
+                  <em>{item.title}</em>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="pending__why">
+              아직 없다 — 위반 유형 → 조항은 <strong>사전 매핑 테이블</strong>로 연결되며
+              LLM 이 조항을 생성하지 않는다(FN-AI-06). 이 칸은 클라우드와 무관하다.
+            </p>
+          )}
+        </section>
       </div>
 
       {/* --- 수동 정정 (FN-EVT-05) --- */}
@@ -470,20 +509,6 @@ function EventDetailPanel({
           놓친 시정을 사람이 닫는 것이고, 쓰러짐은 이 절차로 종결하는 것이 기본이다.
         </p>
       </div>
-    </section>
-  )
-}
-
-function PendingPanel({ title, value, why }: { title: string; value: string | null; why: string }) {
-  return (
-    <section className="pending">
-      <h4 className="pending__title">{title}</h4>
-      {value ? (
-        <p className="pending__body">{value}</p>
-      ) : (
-        /* 빈 칸을 그냥 두지 않는다 — "아직 그 기능이 없다"와 "생성에 실패했다"는 다르다. */
-        <p className="pending__why">아직 없다 — {why}</p>
-      )}
     </section>
   )
 }

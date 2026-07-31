@@ -459,3 +459,26 @@
 .btn--primary:hover:not(:disabled) {
   background: var(--accent-hover);
 }
+
+/* 유사 사례 · 규정 조항 목록. 값이 있는 경우의 표시다(FN-AI-06 · 07). */
+.pending__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pending__list li {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.pending__list em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--text-dim);
+}

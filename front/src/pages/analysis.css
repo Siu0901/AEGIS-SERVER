@@ -1,0 +1,434 @@
+/* 분석 · 검색 · 챗봇 (FN-UI-04 · 05 · 06). 시안의 카드 체계를 그대로 쓴다.
+ *
+ * 색 규약은 다른 화면과 같다 — `--ok` 는 시정된 것, `--danger` 는 위반, `--text-dim`
+ * 은 판정하지 못한 것. **이상 탐지를 위반색으로 그리지 않는다**(FN-AI-04): 그것은
+ * '주의'이고 경고 방송이 나가지 않은 신호다. */
+
+.analysis {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.analysis__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.analysis__row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.analysis__error {
+  color: var(--danger);
+  font-size: 13px;
+  margin: 8px 0 0;
+}
+
+.analysis__facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin: 12px 0 0;
+}
+
+.analysis__facts dt {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.analysis__facts dd {
+  margin: 4px 0 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+/* 시정률은 병기 형식이라 길다. 한 줄에 들어가게 조금 작게 잡는다. */
+.analysis__headline {
+  font-size: 20px;
+  letter-spacing: -0.4px;
+}
+
+.analysis__table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 12px;
+  font-size: 13px;
+}
+
+.analysis__table th,
+.analysis__table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+
+.analysis__table th {
+  color: var(--text-muted);
+  font-weight: 500;
+  font-size: 12px;
+}
+
+.analysis__num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.analysis__report {
+  margin: 12px 0 0;
+  padding: 14px 16px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  white-space: pre-wrap;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+/* --- 추이 그래프 --------------------------------------------------------- */
+/* 선이 아니라 막대다. 모집단이 빈 버킷은 서버가 점을 만들지 않으므로, 선으로 이으면
+ * 없는 구간을 지나가는 직선이 생기고 그것이 관측된 값처럼 보인다. */
+
+.chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 12px 0 0;
+  min-height: 180px;
+}
+
+.chart__col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 44px;
+}
+
+.chart__stack {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 120px;
+}
+
+.chart__bar {
+  width: 12px;
+  border-radius: 2px 2px 0 0;
+  min-height: 2px;
+}
+
+.chart__bar--ok {
+  background: var(--ok);
+}
+
+/* 판정 불가는 위험색이 아니다 — 위반이 계속됐다는 뜻이 아니라 못 봤다는 뜻이다. */
+.chart__bar--muted {
+  background: var(--text-dim);
+  opacity: 0.7;
+}
+
+.chart__label {
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.chart__value {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.chart__value em {
+  font-style: normal;
+  color: var(--text-muted);
+  margin-left: 2px;
+}
+
+/* --- 분포 막대 ----------------------------------------------------------- */
+
+.bars {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bars__row {
+  display: grid;
+  grid-template-columns: 140px 1fr 90px;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.bars__track {
+  height: 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.bars__fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.bars__count {
+  text-align: right;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- 시간대 히트맵 ------------------------------------------------------- */
+
+.heatmap {
+  display: grid;
+  grid-template-columns: repeat(24, 1fr);
+  gap: 3px;
+  margin-top: 12px;
+}
+
+.heatmap__cell {
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: 3px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.heatmap__fill {
+  position: absolute;
+  inset: 0;
+  background: var(--danger);
+}
+
+.heatmap__hour {
+  position: relative;
+  font-size: 9px;
+  color: var(--text-muted);
+  padding-bottom: 2px;
+}
+
+/* --- 검색 --------------------------------------------------------------- */
+
+.search__form {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.search__input {
+  flex: 1;
+  padding: 10px 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.search__examples {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.search__examples-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.search__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.search__card {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg-panel);
+  color: inherit;
+  text-decoration: none;
+}
+
+.search__thumb {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.search__thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.search__thumb-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.search__score {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.65);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.search__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  font-size: 12px;
+}
+
+.search__id {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.search__pending {
+  color: var(--warn);
+  font-size: 11px;
+}
+
+/* --- 챗봇 --------------------------------------------------------------- */
+
+.analysis--chat {
+  height: 100%;
+}
+
+.chat {
+  display: flex;
+  flex-direction: column;
+}
+
+.chat__log {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 12px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.chat__turn {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chat__ask {
+  align-self: flex-end;
+  max-width: 70%;
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+}
+
+.chat__answer {
+  align-self: flex-start;
+  max-width: 90%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chat__route {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.chat__text {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  font-size: 14px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.chat__pending {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin: 0;
+}
+
+.chat__sources {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.chat__table {
+  margin-top: 0;
+}
+
+.chat__clip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: inherit;
+  text-decoration: none;
+  font-size: 12px;
+}
+
+.chat__clip img {
+  width: 96px;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 3px;
+}
+
+.chat__image {
+  margin: 0;
+}
+
+.chat__image img {
+  max-width: 100%;
+  border-radius: var(--radius-sm);
+}
