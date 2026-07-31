@@ -19,9 +19,10 @@ from sim.case_check import cases_with_expectations, check_case, run_case
 
 CASES = cases_with_expectations()
 
-#: 시나리오 11종. 이름이 바뀌거나 사라지면 여기서 드러난다.
+#: 시나리오 16종. 이름이 바뀌거나 사라지면 여기서 드러난다.
 #:
-#: 앞의 아홉은 M3(상태머신·지표), 뒤의 둘은 M4(경고·클립)에서 추가됐다.
+#: 앞의 아홉은 M3(상태머신·지표), 다음 둘은 M4(경고·클립),
+#: 마지막 다섯은 M7(P1 감지 정밀화 — FN-DET-08~11)에서 추가됐다.
 REQUIRED = {
     "normal_resolve",
     "no_resolve",
@@ -34,6 +35,11 @@ REQUIRED = {
     "dropped",
     "clip_recovery",
     "alert_muted",
+    "proximity_forklift",
+    "fall_detected",
+    "crouch_not_fall",
+    "bend_not_fall",
+    "mask_vs_center",
 }
 
 

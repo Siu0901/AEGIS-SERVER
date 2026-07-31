@@ -1,0 +1,237 @@
+# fall_detected — 세 조건이 모두 충족되어야 쓰러짐이다 (FN-DET-10)
+#
+#   +0s    작업자(track 3)가 서서 일한다 — 높이 비율 ≈ 1 · 주축 ≈ 0° · 계속 움직인다
+#   +2.5s  쓰러진다. bbox 가 낮고 넓어지고 움직임이 멈춘다
+#          ①(높이 비율)과 ②(주축 각도)는 이 순간 바로 충족된다
+#   +7.5s  ③(정지 지속 5초)이 채워져 `posture` 가 `fallen` 으로 바뀐다
+#   +8.0s~ 엣지가 `fall` 후보를 올린다
+#   +11s   서버가 확정하고 **level 3** 긴급 경고를 낸다 (§3 · FN-ALM-03)
+#
+# ★ **세 조건 중 ③이 5초를 채우기 전에는 `fallen` 이 아니다.** ①②만으로 판정하면
+#   쭈그려 앉는 순간마다 긴급 경고가 나간다. `crouch_not_fall` · `bend_not_fall` 이
+#   그 반대편을 잠근다.
+#
+# ★ **쓰러짐은 시정률 모집단이 아니다**(§4.8 · §6.7). 대상자가 스스로 시정할 수 없는
+#   상황이라 「방송 후 시정률」의 분모에 넣을 수 없다. 그래서 이 시나리오의
+#   `correction_rate` 는 0.0 이 아니라 `null` 이다 — 판정 가능한 이벤트가 없다는 뜻이다.
+#
+# 자세와 게이지는 시나리오가 적지 않는다. `mask: {posture, motion}` 에서
+# `packages/vision` 이 계산한다(`sim/edge_sim/derive.py`).
+
+name: fall_detected
+description: 쓰러짐 3조건 충족 → fall 확정 → level 3 긴급 경고 (FN-DET-10 · FN-ALM-03)
+cam_id: 1
+frame_fps: 8
+
+timeline:
+  - at: 0.0
+    type: heartbeat
+    cameras:
+      - {cam_id: 1, sub_state: ok, fps: 8.1}
+      - {cam_id: 2, sub_state: ok, fps: 8.0}
+    gpu_util: 0.42
+    mem_used_mb: 3840
+    cls_calls_per_min: 95
+    cls_cache_hit_rate: 0.87
+    depth_calls_per_min: 11
+
+  # ── ①  서서 일한다 (지면 x 6m · y 8m) ──
+  - at: 0.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.94
+        bbox: [0.4597, 0.260, 0.5397, 0.7576]
+        helmet: "on"
+        helmet_conf: 0.93
+        foot_point: [0.4997, 0.7576]
+        foot_conf: 0.91
+        in_zone: forklift_lane
+        mask: {posture: standing, motion: working}
+
+  - at: 2.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.94
+        bbox: [0.4597, 0.260, 0.5397, 0.7576]
+        helmet: "on"
+        helmet_conf: 0.93
+        foot_point: [0.4997, 0.7576]
+        foot_conf: 0.91
+        in_zone: forklift_lane
+        mask: {posture: standing, motion: working}
+
+  # ── ②  쓰러진다. 낮고 넓은 bbox · 움직임 없음 ──
+  - at: 2.5
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.89
+        bbox: [0.4130, 0.7200, 0.5972, 0.7576]
+        helmet: "on"
+        helmet_conf: 0.85
+        foot_point: [0.4997, 0.7576]
+        foot_conf: 0.72
+        in_zone: forklift_lane
+        mask: {posture: lying, motion: still}
+
+  # 그대로 누워 있다. 이 사이에 ③(정지 지속)이 채워진다.
+  - at: 12.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.88
+        bbox: [0.4130, 0.7200, 0.5972, 0.7576]
+        helmet: "on"
+        helmet_conf: 0.84
+        foot_point: [0.4997, 0.7576]
+        foot_conf: 0.71
+        in_zone: forklift_lane
+        mask: {posture: lying, motion: still}
+
+  - at: 5.0
+    type: heartbeat
+    cameras:
+      - {cam_id: 1, sub_state: ok, fps: 8.0}
+      - {cam_id: 2, sub_state: ok, fps: 8.0}
+    gpu_util: 0.43
+    mem_used_mb: 3852
+    cls_calls_per_min: 92
+    cls_cache_hit_rate: 0.88
+    depth_calls_per_min: 13
+
+  # ── ③  세 조건이 모두 채워진 뒤에야 후보가 올라간다 ──
+  - at: 8.0
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violation_type: fall
+    zone_id: forklift_lane
+    bbox: [0.4130, 0.7200, 0.5972, 0.7576]
+    conf: 0.88
+    foot_point: [0.4997, 0.7576]
+    posture: fallen
+    observed_ms: 500
+    nearby: []
+
+  - at: 9.5
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violation_type: fall
+    zone_id: forklift_lane
+    bbox: [0.4130, 0.7200, 0.5972, 0.7576]
+    conf: 0.88
+    foot_point: [0.4997, 0.7576]
+    posture: fallen
+    observed_ms: 2000
+    nearby: []
+
+  - at: 11.0
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violation_type: fall
+    zone_id: forklift_lane
+    bbox: [0.4130, 0.7200, 0.5972, 0.7576]
+    conf: 0.88
+    foot_point: [0.4997, 0.7576]
+    posture: fallen
+    observed_ms: 3500
+    nearby: []
+
+  - at: 12.5
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violation_type: fall
+    zone_id: forklift_lane
+    bbox: [0.4130, 0.7200, 0.5972, 0.7576]
+    conf: 0.88
+    foot_point: [0.4997, 0.7576]
+    posture: fallen
+    observed_ms: 5000
+    nearby: []
+
+  # 마지막 후보 뒤에도 관측이 이어져야 한다. 프레임이 끊기고 1.5초
+  # (`track_miss_timeout_ms`)가 지나면 `lost` 로 가는데, 그건 「쓰러진 사람이
+  # 사라졌다」는 다른 사건이다. 쓰러진 사람은 화면에 계속 있다.
+  - at: 25.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.88
+        bbox: [0.4130, 0.7200, 0.5972, 0.7576]
+        helmet: "on"
+        helmet_conf: 0.84
+        foot_point: [0.4997, 0.7576]
+        foot_conf: 0.71
+        in_zone: forklift_lane
+        mask: {posture: lying, motion: still}
+
+  - at: 15.0
+    type: heartbeat
+    cameras:
+      - {cam_id: 1, sub_state: ok, fps: 8.0}
+      - {cam_id: 2, sub_state: ok, fps: 7.9}
+    gpu_util: 0.45
+    mem_used_mb: 3870
+    cls_calls_per_min: 90
+    cls_cache_hit_rate: 0.88
+    depth_calls_per_min: 19
+
+expect:
+  tail_s: 1.0
+  events:
+    - track_id: 3
+      violation_type: fall
+      status: alerted
+      zone_id: forklift_lane
+      alert_count: 1
+      confirmed_at_s: 11.0
+      alerted_at_s: 11.0
+  alerts:
+    # ★ `fall` 은 항상 level 3 다. 설정으로 3 미만으로 내릴 수 없다(§3 · FN-CFG-03).
+    - at_s: 11.0
+      violation_type: fall
+      level: 3
+      repeat: false
+      sound: fall.wav
+  metrics:
+    # 분모가 0이라 비율은 `null` 이다. `0.00` 은 "시정률 0%"라는 주장이고
+    # 사실은 "판정 가능한 이벤트가 없다"이다(§6.7).
+    correction_rate: null
+    undetermined_rate: null
+    total_violations: 0
+    resolved: 0
+    resolved_late: 0
+    unresolved: 0
+    undetermined: 0
+  # ★ 자세별 판정표 — 세 조건이 각각 언제 충족되는지.
+  postures:
+    - at_s: 1.5
+      track_id: 3
+      posture: standing
+      meets: []
+      fails: [height_ratio, axis_angle, stillness]
+    - at_s: 5.0
+      track_id: 3
+      posture: standing
+      meets: [height_ratio, axis_angle]
+      fails: [stillness]
+    - at_s: 9.0
+      track_id: 3
+      posture: fallen
+      meets: [height_ratio, axis_angle, stillness]
+      fails: []

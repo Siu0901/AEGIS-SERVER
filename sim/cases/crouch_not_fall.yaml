@@ -1,0 +1,113 @@
+# crouch_not_fall — 쭈그려 앉아 작업하는 사람은 쓰러짐이 아니다 (FN-DET-10 오탐 억제)
+#
+# ★ **이 시나리오가 잠그는 것은 「아무 일도 일어나지 않는다」이다.**
+#
+# 쭈그린 사람은 실제로 낮고(①) 실제로 옆으로 퍼져 있다(②). 두 조건만으로 판정하면
+# 부품을 줍거나 바닥을 닦는 작업마다 긴급 경고(level 3)가 나가고, 그런 시스템은
+# 일주일이면 꺼진다. 두 자세를 갈라내는 것은 ③(정지 지속)뿐이다 —
+# **쭈그린 사람은 상체·팔이 계속 움직이고 쓰러진 사람은 움직이지 않는다**(§6.4).
+#
+#   +0s ~ +25s   작업자(track 3)가 같은 자리에서 쭈그린 채 계속 작업한다
+#   기대          `posture` 는 내내 `standing` · 후보 0건 · 이벤트 0건 · 경고 0건
+#
+# `expect.postures` 가 ①②는 충족하고 ③만 미충족임을 확인한다. 그것이 없으면 이
+# 시나리오는 "후보를 안 적었으니 이벤트가 없다"는 동어반복이 된다.
+
+name: crouch_not_fall
+description: 쭈그린 자세가 fall 로 잡히지 않는다 — ①② 충족 · ③ 미충족 (FN-DET-10)
+cam_id: 1
+frame_fps: 8
+
+timeline:
+  - at: 0.0
+    type: heartbeat
+    cameras:
+      - {cam_id: 1, sub_state: ok, fps: 8.0}
+      - {cam_id: 2, sub_state: ok, fps: 8.0}
+    gpu_util: 0.41
+    mem_used_mb: 3830
+    cls_calls_per_min: 94
+    cls_cache_hit_rate: 0.88
+    depth_calls_per_min: 9
+
+  # 지면 (6, 8) m 에서 쭈그려 작업한다. bbox 는 낮고 넓다.
+  - at: 0.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.90
+        bbox: [0.4457, 0.6600, 0.5537, 0.7576]
+        helmet: "on"
+        helmet_conf: 0.90
+        foot_point: [0.4997, 0.7576]
+        foot_conf: 0.84
+        in_zone: forklift_lane
+        mask: {posture: crouch, motion: working}
+
+  - at: 12.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.91
+        bbox: [0.4457, 0.6600, 0.5537, 0.7576]
+        helmet: "on"
+        helmet_conf: 0.91
+        foot_point: [0.4997, 0.7576]
+        foot_conf: 0.85
+        in_zone: forklift_lane
+        mask: {posture: crouch, motion: working}
+
+  - at: 15.0
+    type: heartbeat
+    cameras:
+      - {cam_id: 1, sub_state: ok, fps: 8.1}
+      - {cam_id: 2, sub_state: ok, fps: 8.0}
+    gpu_util: 0.42
+    mem_used_mb: 3838
+    cls_calls_per_min: 96
+    cls_cache_hit_rate: 0.87
+    depth_calls_per_min: 10
+
+  - at: 25.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.90
+        bbox: [0.4457, 0.6600, 0.5537, 0.7576]
+        helmet: "on"
+        helmet_conf: 0.90
+        foot_point: [0.4997, 0.7576]
+        foot_conf: 0.84
+        in_zone: forklift_lane
+        mask: {posture: crouch, motion: working}
+
+expect:
+  tail_s: 2.0
+  events: []
+  alerts: []
+  metrics:
+    correction_rate: null
+    undetermined_rate: null
+    total_violations: 0
+    resolved: 0
+    resolved_late: 0
+    unresolved: 0
+    undetermined: 0
+  # ★ 오탐 억제의 증거 — ①②는 통과하는데도 `fallen` 이 되지 않는다.
+  postures:
+    - at_s: 8.0
+      track_id: 3
+      posture: standing
+      meets: [height_ratio, axis_angle]
+      fails: [stillness]
+    - at_s: 20.0
+      track_id: 3
+      posture: standing
+      meets: [height_ratio, axis_angle]
+      fails: [stillness]

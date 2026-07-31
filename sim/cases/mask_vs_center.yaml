@@ -1,0 +1,189 @@
+# mask_vs_center — 포크가 뻗은 지게차에서 두 거리 방식이 갈린다 (FN-DET-09)
+#
+# ★ **이 시나리오는 판정이 아니라 숫자를 잠근다.**
+#
+# 지게차의 질량은 차체에 있지만 **부딪히는 것은 포크 끝**이다. bbox 아래변 중앙끼리
+# 재면 차체를 기준으로 삼게 되어 실제 접촉 위험을 과소평가한다 — 포크가 1.5m 뻗어
+# 있으면 그만큼 통째로 빠진다.
+#
+#   기대   같은 순간에
+#            마스크 최근접 거리 < 경고 임계(2.0m)   → 근접 후보가 나야 한다
+#            bbox 중심 거리     > 위험 반경(3.0m)   → 중심으로 쟀다면 안전으로 보였다
+#
+# 두 값이 **하나의 임계값을 사이에 두고 갈리는** 형상을 일부러 만들었다. 차이가
+# 작으면 FN-DET-09 를 따로 둘 이유를 설명할 수 없다.
+#
+# 후보는 나가지만 확정 전에 지게차가 물러나 이벤트는 `dropped` 로 끝난다 — 이 파일의
+# 주제는 상태 전이가 아니라 거리 산출이므로, 상태머신 쪽은 최소로만 건드린다.
+
+name: mask_vs_center
+description: 포크가 뻗은 형상에서 최근접 거리와 중심 거리가 임계값을 사이에 두고 갈린다 (FN-DET-09)
+cam_id: 1
+frame_fps: 8
+
+timeline:
+  - at: 0.0
+    type: heartbeat
+    cameras:
+      - {cam_id: 1, sub_state: ok, fps: 8.0}
+      - {cam_id: 2, sub_state: ok, fps: 8.0}
+    gpu_util: 0.44
+    mem_used_mb: 3866
+    cls_calls_per_min: 98
+    cls_cache_hit_rate: 0.86
+    depth_calls_per_min: 26
+
+  # 작업자는 지면 x ≈ 4.5m. 지게차 차체는 x 8.0~10m 에 있고 포크가 x 6.0m 까지 나온다.
+  # 차체 중앙(아래변)은 멀지만 포크 끝은 바로 앞이다.
+  - at: 0.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.93
+        bbox: [0.2973, 0.2600, 0.3773, 0.7576]
+        helmet: "on"
+        helmet_conf: 0.93
+        foot_point: [0.3373, 0.7576]
+        foot_conf: 0.90
+        in_zone: forklift_lane
+        mask: {posture: standing, motion: working}
+      - class: vehicle
+        track_id: 11
+        conf: 0.91
+        bbox: [0.4997, 0.6300, 0.9330, 0.7576]
+        anchor: [0.8247, 0.7576]
+        moving: true
+        danger_radius_m: 3.0
+        # 포크가 bbox 폭의 55% 를 차지한다 — 지면으로 약 2.4m 다.
+        mask: {fork: 0.55}
+
+  - at: 6.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.93
+        bbox: [0.2973, 0.2600, 0.3773, 0.7576]
+        helmet: "on"
+        helmet_conf: 0.93
+        foot_point: [0.3373, 0.7576]
+        foot_conf: 0.90
+        in_zone: forklift_lane
+        mask: {posture: standing, motion: working}
+      - class: vehicle
+        track_id: 11
+        conf: 0.91
+        bbox: [0.4997, 0.6300, 0.9330, 0.7576]
+        anchor: [0.8247, 0.7576]
+        moving: true
+        danger_radius_m: 3.0
+        mask: {fork: 0.55}
+
+  - at: 2.0
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violation_type: proximity
+    zone_id: forklift_lane
+    bbox: [0.2973, 0.2600, 0.3773, 0.7576]
+    conf: 0.93
+    foot_point: [0.3373, 0.7576]
+    foot_conf: 0.90
+    helmet: "on"
+    helmet_conf: 0.93
+    posture: standing
+    observed_ms: 500
+    nearby: auto
+
+  - at: 4.0
+    type: candidate
+    cam_id: 1
+    track_id: 3
+    violation_type: proximity
+    zone_id: forklift_lane
+    bbox: [0.2973, 0.2600, 0.3773, 0.7576]
+    conf: 0.93
+    foot_point: [0.3373, 0.7576]
+    foot_conf: 0.90
+    helmet: "on"
+    helmet_conf: 0.93
+    posture: standing
+    observed_ms: 2500
+    nearby: auto
+
+  # ── 지게차가 포크를 접고 물러난다. 확정 전이라 이벤트는 `dropped` 로 끝난다 ──
+  - at: 8.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.93
+        bbox: [0.2973, 0.2600, 0.3773, 0.7576]
+        helmet: "on"
+        helmet_conf: 0.93
+        foot_point: [0.3373, 0.7576]
+        foot_conf: 0.90
+        in_zone: forklift_lane
+        mask: {posture: standing, motion: working}
+
+  - at: 15.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.93
+        bbox: [0.2973, 0.2600, 0.3773, 0.7576]
+        helmet: "on"
+        helmet_conf: 0.93
+        foot_point: [0.3373, 0.7576]
+        foot_conf: 0.90
+        in_zone: forklift_lane
+        mask: {posture: standing, motion: working}
+
+  - at: 10.0
+    type: heartbeat
+    cameras:
+      - {cam_id: 1, sub_state: ok, fps: 8.0}
+      - {cam_id: 2, sub_state: ok, fps: 8.0}
+    gpu_util: 0.43
+    mem_used_mb: 3858
+    cls_calls_per_min: 96
+    cls_cache_hit_rate: 0.87
+    depth_calls_per_min: 14
+
+expect:
+  tail_s: 2.0
+  events:
+    # 후보가 4초에 끊겨 확정(3초)에 도달하지 못한다 → `dropped`.
+    # 지표 전량 제외이고 병합 키도 점유하지 않는다(§4.2).
+    - track_id: 3
+      violation_type: proximity
+      status: dropped
+  alerts: []
+  metrics:
+    correction_rate: null
+    undetermined_rate: null
+    total_violations: 0
+    resolved: 0
+    resolved_late: 0
+    unresolved: 0
+    undetermined: 0
+  # ★ 이 파일의 주제. 하나의 임계값을 사이에 두고 두 방식이 갈린다.
+  distances:
+    - at_s: 2.0
+      track_id: 3
+      vehicle_track_id: 11
+      mask_nearest_below_m: 2.0
+      bbox_center_above_m: 3.0
+      within_danger_radius: true
+    - at_s: 4.0
+      track_id: 3
+      vehicle_track_id: 11
+      mask_nearest_below_m: 2.0
+      bbox_center_above_m: 3.0
+      within_danger_radius: true

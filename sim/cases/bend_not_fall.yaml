@@ -1,0 +1,110 @@
+# bend_not_fall — 허리를 굽혀 작업하는 사람은 쓰러짐이 아니다 (FN-DET-10 오탐 억제)
+#
+# `crouch_not_fall` 과 짝이다. 굽힌 자세는 마스크가 ㄱ 자가 되어 **주축이 상체를 따라
+# 눕는다** — ②(주축 각도)를 통과한다. 높이도 서 있을 때의 절반 아래로 떨어져 ①도
+# 통과한다. 그런데도 쓰러짐이 아니어야 한다.
+#
+# 두 시나리오를 모두 두는 이유: 쭈그림과 허리 굽힘은 **다른 모양으로 같은 함정**을
+# 만든다. 하나만 검증하면 다른 하나에서 나는 오탐을 못 본다. 제조현장에서 이 두 자세는
+# 하루 종일 나오므로, 여기서 새면 시스템 전체의 신뢰가 무너진다.
+#
+#   +0s ~ +25s   작업자(track 3)가 설비 앞에서 허리를 굽힌 채 작업한다
+#   기대          `posture` 는 내내 `standing` · 후보 0건 · 이벤트 0건 · 경고 0건
+
+name: bend_not_fall
+description: 허리 굽힘이 fall 로 잡히지 않는다 — ①② 충족 · ③ 미충족 (FN-DET-10)
+cam_id: 1
+frame_fps: 8
+
+timeline:
+  - at: 0.0
+    type: heartbeat
+    cameras:
+      - {cam_id: 1, sub_state: ok, fps: 8.0}
+      - {cam_id: 2, sub_state: ok, fps: 8.0}
+    gpu_util: 0.41
+    mem_used_mb: 3826
+    cls_calls_per_min: 93
+    cls_cache_hit_rate: 0.88
+    depth_calls_per_min: 8
+
+  # 지면 (6, 8) m. 상체가 앞으로 넘어가 bbox 가 넓어지고 높이는 절반 이하다.
+  - at: 0.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.91
+        bbox: [0.4402, 0.6000, 0.5592, 0.7576]
+        helmet: "on"
+        helmet_conf: 0.92
+        foot_point: [0.4997, 0.7576]
+        foot_conf: 0.87
+        in_zone: forklift_lane
+        mask: {posture: bend, motion: working}
+
+  - at: 12.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.92
+        bbox: [0.4402, 0.6000, 0.5592, 0.7576]
+        helmet: "on"
+        helmet_conf: 0.92
+        foot_point: [0.4997, 0.7576]
+        foot_conf: 0.87
+        in_zone: forklift_lane
+        mask: {posture: bend, motion: working}
+
+  - at: 15.0
+    type: heartbeat
+    cameras:
+      - {cam_id: 1, sub_state: ok, fps: 8.0}
+      - {cam_id: 2, sub_state: ok, fps: 8.1}
+    gpu_util: 0.42
+    mem_used_mb: 3834
+    cls_calls_per_min: 95
+    cls_cache_hit_rate: 0.87
+    depth_calls_per_min: 9
+
+  - at: 25.0
+    type: frame
+    cam_id: 1
+    objects:
+      - class: person
+        track_id: 3
+        conf: 0.91
+        bbox: [0.4402, 0.6000, 0.5592, 0.7576]
+        helmet: "on"
+        helmet_conf: 0.92
+        foot_point: [0.4997, 0.7576]
+        foot_conf: 0.87
+        in_zone: forklift_lane
+        mask: {posture: bend, motion: working}
+
+expect:
+  tail_s: 2.0
+  events: []
+  alerts: []
+  metrics:
+    correction_rate: null
+    undetermined_rate: null
+    total_violations: 0
+    resolved: 0
+    resolved_late: 0
+    unresolved: 0
+    undetermined: 0
+  postures:
+    - at_s: 8.0
+      track_id: 3
+      posture: standing
+      meets: [height_ratio, axis_angle]
+      fails: [stillness]
+    - at_s: 20.0
+      track_id: 3
+      posture: standing
+      meets: [height_ratio, axis_angle]
+      fails: [stillness]
