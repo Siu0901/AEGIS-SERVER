@@ -357,7 +357,15 @@ function EventDetailPanel({
           <span className="tag tag--fall">자세 {detail.posture}</span>
         )}
         {detail.repeat_count_7d > 1 && (
-          <span className="tag tag--repeat">7일 내 {detail.repeat_count_7d}회 반복</span>
+          /* FN-EVT-06. ★ **작업자 개인 단위 누적이 아니다**(API명세서 §4.2) —
+             `track_id` 는 세션 내 추적 번호일 뿐 신원이 아니다. 라벨과 툴팁이
+             「이 사람이 4번」이 아니라 「이 자리에서 같은 위반이 4번」으로 읽히게 적는다. */
+          <span
+            className="tag tag--repeat"
+            title="같은 구역·추적에서 관측된 동일 유형 위반 횟수다. 작업자 개인 단위 누적이 아니다."
+          >
+            같은 자리 7일 내 {detail.repeat_count_7d}회
+          </span>
         )}
         {detail.helmet_conf !== null && (
           <span className="tag tag--dim">분류 신뢰도 {detail.helmet_conf}</span>
