@@ -135,7 +135,13 @@ def test_calibration_returns_matrix_and_reprojection_error() -> None:
     assert parts["cameras"].calibrated_at[1] == NOW
 
 
-def test_reference_person_is_recorded() -> None:
+def test_reference_person_is_recorded_with_the_place_it_was_measured() -> None:
+    """★ 기능명세서 §6 — 저장 형태는 `{height_px, at_m}` 이다. **스칼라가 아니다.**
+
+    기준 높이를 잰 지면 위치가 없으면 다른 거리의 기대 높이를 구할 수 없다 — 같은
+    사람도 카메라에서 멀수록 화면상 픽셀 높이가 줄어든다. 요청 이름(`px_height`,
+    §4.5)과 저장 이름(`height_px`, §6)이 다르므로 경계에서 바뀌는지도 함께 본다.
+    """
     client, parts = build()
     with client:
         response = client.post(
@@ -146,7 +152,24 @@ def test_reference_person_is_recorded() -> None:
             },
         )
     assert response.json()["ref_height_calibrated"] is True
-    assert parts["cameras"].reference[1] == {"px_height": 0.42, "at_m": [2.5, 3.0]}
+    assert parts["cameras"].reference[1] == {"height_px": 0.42, "at_m": [2.5, 3.0]}
+
+
+def test_camera_list_returns_the_reference_height_as_an_object() -> None:
+    """설정 화면이 기준점을 **다시 그리려면** 위치가 응답에 실려야 한다."""
+    client, parts = build()
+    with client:
+        client.post(
+            "/api/v1/cameras/1/calibration",
+            json={
+                "points": SPEC_POINTS,
+                "reference_person": {"px_height": 0.42, "at_m": [2.5, 3.0]},
+            },
+        )
+        rows = client.get("/api/v1/cameras").json()
+    camera = next(row for row in rows if row["cam_id"] == 1)
+    assert camera["ref_height"] == {"height_px": 0.42, "at_m": [2.5, 3.0]}
+    del parts
 
 
 def test_three_points_are_rejected() -> None:

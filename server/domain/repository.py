@@ -158,7 +158,7 @@ class CameraRepository(Protocol):
         self,
         cam_id: int,
         homography: list[list[float]],
-        ref_height_px_at_m: dict[str, Any] | None,
+        ref_height: dict[str, Any] | None,
         calibrated_at: datetime,
         calib_points: list[dict[str, Any]] | None = None,
         reproj_error_m: float | None = None,

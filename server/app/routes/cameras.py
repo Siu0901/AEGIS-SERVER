@@ -29,6 +29,7 @@ from aegis_contracts import (
     CameraPatch,
     ErrorBody,
     ErrorResponse,
+    RefHeight,
     Zone,
     ZoneUpdatedMsg,
     ZoneUpdatedPayload,
@@ -52,7 +53,7 @@ class CameraStore(Protocol):
         self,
         cam_id: int,
         homography: list[list[float]],
-        ref_height_px_at_m: dict[str, Any] | None,
+        ref_height: dict[str, Any] | None,
         calibrated_at: Any,
         calib_points: list[dict[str, Any]] | None = None,
         reproj_error_m: float | None = None,
@@ -72,12 +73,11 @@ class ZoneStore(Protocol):
 def _camera(row: dict[str, Any]) -> CameraCalibration:
     """§6 `cameras` 한 행 → §4.5 응답.
 
-    `ref_height_px_at_m` 은 **화면상 높이 하나**로 나간다(§4.5 예시 `0.42`). DB 는
-    `reference_person`(높이 + 그 위치)을 통째로 들고 있는데, 기대 높이 곡선을 보정하려면
-    "어느 거리에서 잰 높이인가"가 함께 있어야 하기 때문이다. 응답에 위치를 실을 자리가
-    없어 높이만 낸다 — `docs/INDEX.md` 「명세서 확인 필요」 참조.
+    ★ `ref_height` 은 **객체 그대로** 나간다 — `{height_px, at_m}`(기능명세서 §6).
+    예전에는 높이 하나만 냈는데, 그러면 설정 화면이 기준점을 다시 그릴 수 없고
+    다른 거리의 기대 높이도 구할 수 없다(같은 사람도 멀수록 화면상 높이가 줄어든다).
     """
-    reference = row.get("ref_height_px_at_m")
+    reference = row.get("ref_height")
     return CameraCalibration(
         cam_id=int(row["cam_id"]),
         name=str(row["name"]),
@@ -86,7 +86,7 @@ def _camera(row: dict[str, Any]) -> CameraCalibration:
         homography=row.get("homography"),
         calib_points=row.get("calib_points"),
         reproj_error_m=row.get("reproj_error_m"),
-        ref_height_px_at_m=None if reference is None else float(reference["px_height"]),
+        ref_height=None if reference is None else RefHeight.model_validate(reference),
         calibrated_at=row.get("calibrated_at"),
     )
 
@@ -164,7 +164,15 @@ async def calibrate(
         log.warning("cam%d 캘리브레이션을 거부했다: %s", cam_id, exc)
         raise _validation(str(exc)) from exc
 
-    reference = body.reference_person.model_dump(mode="json") if body.reference_person else None
+    # 요청은 `px_height`(§4.5), 저장은 `height_px`(기능명세서 §6). 이름이 다른 두 규약을
+    # 경계에서 한 번만 바꾼다 — 안쪽으로 흘려보내면 어느 쪽 이름인지 매번 따져야 한다.
+    reference = (
+        RefHeight(
+            height_px=body.reference_person.px_height, at_m=body.reference_person.at_m
+        ).model_dump(mode="json")
+        if body.reference_person
+        else None
+    )
     store = _cameras(request)
     try:
         await store.save_calibration(

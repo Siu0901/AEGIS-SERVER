@@ -193,10 +193,14 @@ class Camera(SQLModel, table=True):
         sa_column=Column(JSONB, nullable=True),
         description="3×3 픽셀→지면 변환 행렬",
     )
-    ref_height_px_at_m: dict[str, Any] | None = Field(
+    ref_height: dict[str, Any] | None = Field(
         default=None,
         sa_column=Column(JSONB, nullable=True),
-        description="높이 비율 기준값 (reference_person — px_height 와 at_m)",
+        description=(
+            "높이 비율 기준 — {height_px, at_m}. **스칼라가 아니다**(기능명세서 §6). "
+            "기준 높이를 어느 지면 위치에서 쟀는지가 없으면 다른 거리의 기대 높이를 "
+            "구할 수 없다 — 같은 사람도 멀수록 화면상 높이가 줄어들기 때문이다"
+        ),
     )
     calib_points: list[dict[str, Any]] | None = Field(
         default=None,

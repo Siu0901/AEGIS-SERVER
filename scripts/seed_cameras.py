@@ -33,7 +33,19 @@ from server.infra.db import Camera, create_db_engine
 if isinstance(sys.stdout, io.TextIOWrapper):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-__all__ = ["DEV_CALIBRATION", "DEV_CAMERAS", "homography_for", "seed"]
+__all__ = ["DEV_CALIBRATION", "DEV_CAMERAS", "DEV_REF_HEIGHT", "homography_for", "seed"]
+
+#: 개발용 기준 인물 — `cameras.ref_height`(기능명세서 §6).
+#:
+#: ★ **스칼라가 아니다.** 기준 높이를 잰 **지면 위치**가 함께 있어야 다른 거리의 기대
+#: 높이를 구할 수 있다(같은 사람도 카메라에서 멀수록 화면상 높이가 줄어든다).
+#:
+#: 지면 (6, 9) m 에 선 사람이 화면 높이의 0.42 를 차지한다 — 위 4점과 같은 평면 위의
+#: 값이며, **시뮬레이터가 쓰는 것과 같은 상수**다(`sim/edge_sim/derive.py`). 두 곳이
+#: 다른 기준을 쓰면 엣지가 싣는 `height_ratio` 와 서버·화면이 기대하는 값이 갈린다.
+#:
+#: **모형 시연에서도 실제 작업자 신장(약 1.7m) 기준으로 넣는다**(기능명세서 §4.7).
+DEV_REF_HEIGHT: dict[str, Any] = {"height_px": 0.42, "at_m": [6.0, 9.0]}
 
 #: 카메라별 실측 4점 — (화면에서 클릭한 정규화 좌표, 줄자로 잰 지면 좌표 m).
 #:
@@ -97,6 +109,7 @@ def _rows() -> list[dict[str, Any]]:
                 "homography": homography.to_rows(),
                 "calib_points": [{"px": list(px), "m": list(m)} for px, m in points],
                 "reproj_error_m": round(homography.reprojection_error_m(points), 4),
+                "ref_height": dict(DEV_REF_HEIGHT),
             }
         )
     return rows
@@ -114,6 +127,7 @@ def seed(*, force: bool) -> int:
                 "homography": statement.excluded.homography,
                 "calib_points": statement.excluded.calib_points,
                 "reproj_error_m": statement.excluded.reproj_error_m,
+                "ref_height": statement.excluded.ref_height,
             },
         )
     else:

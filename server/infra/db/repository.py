@@ -522,7 +522,7 @@ class DbCameraRepository:
         self,
         cam_id: int,
         homography: list[list[float]],
-        ref_height_px_at_m: dict[str, Any] | None,
+        ref_height: dict[str, Any] | None,
         calibrated_at: datetime,
         calib_points: list[dict[str, Any]] | None = None,
         reproj_error_m: float | None = None,
@@ -531,7 +531,7 @@ class DbCameraRepository:
             self._save_calibration,
             cam_id,
             homography,
-            ref_height_px_at_m,
+            ref_height,
             calibrated_at,
             calib_points,
             reproj_error_m,
@@ -541,7 +541,7 @@ class DbCameraRepository:
         self,
         cam_id: int,
         homography: list[list[float]],
-        ref_height_px_at_m: dict[str, Any] | None,
+        ref_height: dict[str, Any] | None,
         calibrated_at: datetime,
         calib_points: list[dict[str, Any]] | None,
         reproj_error_m: float | None,
@@ -554,7 +554,7 @@ class DbCameraRepository:
                 msg = f"등록되지 않은 카메라다: {cam_id}"
                 raise LookupError(msg)
             row.homography = homography
-            row.ref_height_px_at_m = ref_height_px_at_m
+            row.ref_height = ref_height
             row.calib_points = calib_points
             row.reproj_error_m = reproj_error_m
             row.calibrated_at = calibrated_at

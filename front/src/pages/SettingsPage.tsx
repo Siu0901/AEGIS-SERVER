@@ -74,6 +74,11 @@ const POLICY_FIELDS: { key: keyof Policies; label: string; unit: string; hint: s
   { key: 'cls_min_conf', label: '분류 최소 신뢰도', unit: '', hint: '미달이면 채택 안 함' },
   { key: 'cls_min_crop_px', label: '분류 최소 크롭', unit: 'px', hint: '미달이면 추론 생략' },
   { key: 'fall_stillness_s', label: '쓰러짐 정지', unit: '초', hint: '조건 ③' },
+  // ★ 명세서가 `edge/config.yaml` 에서 승격시킨 두 키(§4.5). 정지 판정은 오탐 억제의
+  //   핵심이라 현장 튜닝이 잦은데, 장비 설정 파일에 있으면 조정이 곧 배포가 된다.
+  //   둘은 **함께** 만져야 한다 — 창이 길면 짧은 움직임이 평균에 묻힌다.
+  { key: 'stillness_move_px', label: '정지 이동 한계', unit: 'px', hint: '이하면 정지' },
+  { key: 'stillness_window_s', label: '정지 평가 창', unit: '초', hint: '이동 평균 구간' },
   { key: 'fall_height_ratio_max', label: '쓰러짐 높이비', unit: '', hint: '조건 ①' },
   { key: 'fall_axis_angle_min_deg', label: '쓰러짐 주축각', unit: '°', hint: '조건 ②' },
   {
@@ -86,9 +91,36 @@ const POLICY_FIELDS: { key: keyof Policies; label: string; unit: string; hint: s
   { key: 'overlay_stale_ms', label: '오버레이 노후', unit: 'ms', hint: '넘으면 흐리게' },
 ]
 
-type Mode = 'idle' | 'calibrate' | 'zone'
+type Mode = 'idle' | 'calibrate' | 'zone' | 'reference'
 
 type PendingPoint = { px: [number, number]; x: string; y: string }
+
+/**
+ * 기준 인물 입력 중인 값 (FN-CFG-01 · 기능명세서 §6 `cameras.ref_height`).
+ *
+ * ★ **높이만으로는 부족하다.** 저장 형태가 `{height_px, at_m}` 인 이유가 이것이다 —
+ * 기준 높이를 **어느 지면 위치에서 쟀는지**가 없으면 다른 거리의 기대 높이를 구할 수
+ * 없다. 같은 사람도 카메라에서 멀수록 화면상 픽셀 높이가 줄어들기 때문이다.
+ *
+ * 화면상 높이는 발끝·머리끝 두 점을 클릭해 얻고, 그 사람이 서 있던 지면 좌표는 4점과
+ * 같은 줄자 실측으로 입력받는다. **저장되지 않은 호모그래피로 미리 환산하지 않는다** —
+ * 같은 제출에서 만들어지는 행렬이라 아직 존재하지 않는다.
+ */
+type PendingReference = {
+  foot: [number, number] | null
+  head: [number, number] | null
+  x: string
+  y: string
+}
+
+const EMPTY_REFERENCE: PendingReference = { foot: null, head: null, x: '', y: '' }
+
+/** 두 클릭 사이의 세로 거리 = 화면상 높이(정규화 픽셀). */
+function referenceHeightPx(reference: PendingReference): number | null {
+  if (!reference.foot || !reference.head) return null
+  const height = Math.abs(reference.foot[1] - reference.head[1])
+  return height > 0 ? Number(height.toFixed(4)) : null
+}
 
 export default function SettingsPage() {
   const { status } = useSystemStatus()
@@ -236,6 +268,7 @@ function CameraPanel({
   const [kind, setKind] = useState<PlaybackKind>('none')
   const [mode, setMode] = useState<Mode>('idle')
   const [points, setPoints] = useState<PendingPoint[]>([])
+  const [reference, setReference] = useState<PendingReference>(EMPTY_REFERENCE)
   const [polygon, setPolygon] = useState<[number, number][]>([])
   const [zoneId, setZoneId] = useState('')
   const [zoneName, setZoneName] = useState('')
@@ -262,6 +295,7 @@ function CameraPanel({
   useEffect(() => {
     setMode('idle')
     setPoints([])
+    setReference(EMPTY_REFERENCE)
     setPolygon([])
     setResult(null)
   }, [camId])
@@ -279,6 +313,15 @@ function CameraPanel({
       setPoints((current) =>
         current.length >= REQUIRED_POINTS ? current : [...current, { px: point, x: '', y: '' }],
       )
+    } else if (mode === 'reference') {
+      // 발끝 먼저, 머리끝 다음. 순서를 고정해야 어느 점이 지면 위치인지 알 수 있다.
+      setReference((current) =>
+        current.foot === null
+          ? { ...current, foot: point }
+          : current.head === null
+            ? { ...current, head: point }
+            : current,
+      )
     } else {
       setPolygon((current) => [...current, point])
     }
@@ -287,18 +330,32 @@ function CameraPanel({
   const submitCalibration = async () => {
     setBusy(true)
     try {
+      // 기준 인물은 **선택**이다(§4.5). 미입력이면 카메라 기하로 기대 높이를 추정한다.
+      // 다만 넣는다면 높이와 위치가 **함께** 가야 한다 — 한쪽만으로는 곡선이 정해지지 않는다.
+      const heightPx = referenceHeightPx(reference)
+      const referencePerson =
+        heightPx !== null && reference.x !== '' && reference.y !== ''
+          ? {
+              px_height: heightPx,
+              at_m: [Number(reference.x), Number(reference.y)] as [number, number],
+            }
+          : null
       const response = await calibrate(camId, {
         points: points.map((item) => ({
           px: item.px,
           m: [Number(item.x), Number(item.y)] as [number, number],
         })),
-        reference_person: null,
+        reference_person: referencePerson,
       })
       setResult(response.reprojection_error_m)
       setMode('idle')
       setPoints([])
+      setReference(EMPTY_REFERENCE)
       onDone(
-        `cam${camId} 캘리브레이션 저장 — 재투영 오차 ${response.reprojection_error_m.toFixed(3)} m`,
+        `cam${camId} 캘리브레이션 저장 — 재투영 오차 ${response.reprojection_error_m.toFixed(3)} m` +
+          (response.ref_height_calibrated
+            ? ` · 기준 인물 높이 ${heightPx} @ (${reference.x}, ${reference.y}) m`
+            : ' · 기준 인물 없음 (카메라 기하로 추정)'),
       )
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : String(cause))
@@ -419,13 +476,40 @@ function CameraPanel({
               r={0.8}
             />
           ))}
+          {/* 기준 인물 — 발끝에서 머리끝까지의 세로 선. 그 길이가 `height_px` 다. */}
+          {reference.foot && reference.head && (
+            <line
+              className="settings__reference"
+              x1={reference.foot[0] * 100}
+              y1={reference.foot[1] * 100}
+              x2={reference.head[0] * 100}
+              y2={reference.head[1] * 100}
+            />
+          )}
+          {[reference.foot, reference.head].map((point, index) =>
+            point ? (
+              <circle
+                key={`r${index}`}
+                className="settings__point settings__point--ref"
+                cx={point[0] * 100}
+                cy={point[1] * 100}
+                r={1}
+              />
+            ) : null,
+          )}
         </svg>
         <span className="settings__badge">{kind === 'none' ? '재생 불가' : kind.toUpperCase()}</span>
         {mode !== 'idle' && (
           <span className="settings__pick">
             {mode === 'calibrate'
               ? `지면의 표식을 클릭해라 (${points.length}/${REQUIRED_POINTS})`
-              : `구역 꼭짓점을 클릭해라 (${polygon.length}개)`}
+              : mode === 'reference'
+                ? reference.foot === null
+                  ? '기준 인물의 **발끝**을 클릭해라'
+                  : reference.head === null
+                    ? '이제 **머리끝**을 클릭해라'
+                    : '두 점을 찍었다 — 아래에 그 자리의 실측 좌표를 넣어라'
+                : `구역 꼭짓점을 클릭해라 (${polygon.length}개)`}
           </span>
         )}
       </div>
@@ -433,6 +517,19 @@ function CameraPanel({
       <div className="settings__actions">
         <button type="button" className="btn" onClick={() => setMode('calibrate')} disabled={busy}>
           4점 캘리브레이션
+        </button>
+        <button
+          type="button"
+          className="btn"
+          onClick={() => setMode('reference')}
+          disabled={busy || points.length !== REQUIRED_POINTS}
+          title={
+            points.length === REQUIRED_POINTS
+              ? ''
+              : '기준 인물은 4점과 함께 저장된다 — 먼저 네 점을 찍어라'
+          }
+        >
+          기준 인물 찍기
         </button>
         <button
           type="button"
@@ -449,6 +546,7 @@ function CameraPanel({
           onClick={() => {
             setMode('idle')
             setPoints([])
+            setReference(EMPTY_REFERENCE)
             setPolygon([])
           }}
           disabled={busy || mode === 'idle'}
@@ -459,6 +557,9 @@ function CameraPanel({
           {calibrated
             ? `캘리브레이션 완료 · ${stamp(camera?.calibrated_at ?? null)}`
             : '캘리브레이션 없음 — 구역을 저장할 수 없다'}
+          {camera?.ref_height
+            ? ` · 기준 인물 ${camera.ref_height.height_px} @ (${camera.ref_height.at_m[0]}, ${camera.ref_height.at_m[1]}) m`
+            : ' · 기준 인물 없음'}
         </span>
       </div>
 
@@ -488,8 +589,11 @@ function CameraPanel({
               캘리브레이션뿐이다.
             </li>
             <li>
-              기준 인물 높이(<code>ref_height_px_at_m</code>)도 <strong>실제 작업자 신장
-              (약 1.7m)</strong> 기준으로 입력해야 쓰러짐 판정이 명세서 임계값 그대로 돈다.
+              기준 인물(<code>ref_height</code>)도 <strong>실제 작업자 신장(약 1.7m)</strong>{' '}
+              기준으로 입력해야 쓰러짐 판정이 명세서 임계값 그대로 돈다.{' '}
+              <strong>화면상 높이와 그 사람이 서 있던 지면 좌표를 함께</strong> 넣는다 —
+              같은 사람도 카메라에서 멀수록 화면상 높이가 줄어들므로, 위치 없는 높이
+              하나로는 다른 거리의 기대 높이를 구할 수 없다.
             </li>
             <li>카메라를 고정한 뒤에 찍어라. 이후 카메라를 움직이면 캘리브레이션은 무효다.</li>
           </ul>
@@ -535,6 +639,13 @@ function CameraPanel({
               ))}
             </tbody>
           </table>
+          <ReferenceFields
+            reference={reference}
+            picking={false}
+            onPick={() => setMode('reference')}
+            onChange={setReference}
+            onClear={() => setReference(EMPTY_REFERENCE)}
+          />
           <button
             type="button"
             className="btn btn--primary"
@@ -542,6 +653,31 @@ function CameraPanel({
             onClick={() => void submitCalibration()}
           >
             호모그래피 산출·저장
+          </button>
+        </div>
+      )}
+
+      {mode === 'reference' && (
+        <div className="settings__form">
+          <p className="card__note">
+            기준 인물의 <strong>발끝 → 머리끝</strong> 순서로 두 점을 클릭한 뒤, 그 사람이
+            서 있던 자리의 <strong>실측 지면 좌표(m)</strong>를 넣어라. 4점과 같은 줄자 ·
+            같은 원점이어야 한다.
+          </p>
+          <ReferenceFields
+            reference={reference}
+            picking
+            onPick={() => setReference(EMPTY_REFERENCE)}
+            onChange={setReference}
+            onClear={() => setReference(EMPTY_REFERENCE)}
+          />
+          <button
+            type="button"
+            className="btn btn--primary"
+            disabled={busy || referenceHeightPx(reference) === null}
+            onClick={() => setMode('calibrate')}
+          >
+            4점 입력으로 돌아가기
           </button>
         </div>
       )}
@@ -598,6 +734,78 @@ function CameraPanel({
         </p>
       )}
     </section>
+  )
+}
+
+/**
+ * 기준 인물 입력란 (FN-CFG-01 · 기능명세서 §6 `cameras.ref_height`).
+ *
+ * 높이와 위치를 **한 칸에 묶어** 보여준다. 둘을 따로 두면 높이만 넣고 위치를 빠뜨린
+ * 채 저장하기 쉬운데, 그렇게 저장된 기준은 다른 거리에서 쓸 수 없다.
+ */
+function ReferenceFields({
+  reference,
+  picking,
+  onPick,
+  onChange,
+  onClear,
+}: {
+  reference: PendingReference
+  picking: boolean
+  onPick: () => void
+  onChange: (next: PendingReference) => void
+  onClear: () => void
+}) {
+  const heightPx = referenceHeightPx(reference)
+  return (
+    <div className="settings__reference-form">
+      <div className="settings__row">
+        <span className="settings__reference-label">
+          기준 인물 <em>(선택)</em>
+        </span>
+        <span className="settings__reference-value">
+          {heightPx === null
+            ? picking
+              ? '영상에서 발끝 · 머리끝을 클릭해라'
+              : '찍지 않음 — 카메라 기하로 기대 높이를 추정한다'
+            : `화면상 높이 ${heightPx}`}
+        </span>
+        <button type="button" className="btn btn--ghost" onClick={onPick}>
+          {picking ? '다시 찍기' : '영상에서 찍기'}
+        </button>
+        {heightPx !== null && (
+          <button type="button" className="btn btn--ghost" onClick={onClear}>
+            지우기
+          </button>
+        )}
+      </div>
+      <div className="settings__row">
+        <label>
+          기준 인물 실측 X (m)
+          <input
+            value={reference.x}
+            inputMode="decimal"
+            placeholder="6.0"
+            onChange={(event) => onChange({ ...reference, x: event.target.value })}
+          />
+        </label>
+        <label>
+          기준 인물 실측 Y (m)
+          <input
+            value={reference.y}
+            inputMode="decimal"
+            placeholder="9.0"
+            onChange={(event) => onChange({ ...reference, y: event.target.value })}
+          />
+        </label>
+      </div>
+      {heightPx !== null && (reference.x === '' || reference.y === '') && (
+        <p className="card__note">
+          위치를 넣지 않으면 <strong>기준 인물이 저장되지 않는다.</strong> 높이 하나만으로는
+          다른 거리의 기대 높이를 구할 수 없다(기능명세서 §6).
+        </p>
+      )}
+    </div>
   )
 }
 

@@ -104,6 +104,41 @@
   stroke-width: 0.2;
 }
 
+/* 기준 인물 — 4점(경고색)과 구역 꼭짓점(강조색) 어느 쪽과도 헷갈리지 않게 따로 둔다. */
+.settings__point--ref {
+  fill: var(--ok, #34d399);
+}
+
+.settings__reference {
+  stroke: var(--ok, #34d399);
+  stroke-width: 0.5;
+  stroke-dasharray: 2 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.settings__reference-form {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.settings__reference-label {
+  font-weight: 600;
+}
+
+.settings__reference-label em {
+  font-style: normal;
+  color: var(--text-dim);
+  font-weight: 400;
+}
+
+.settings__reference-value {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
 .settings__badge,
 .settings__pick {
   position: absolute;

@@ -596,13 +596,33 @@ class CalibrationPoint(SpecModel):
 
 
 class ReferencePerson(SpecModel):
-    """높이 비율 기준 보정용(선택). API명세서 §4.5
+    """높이 비율 기준 보정용(선택). `POST /cameras/{id}/calibration` 요청. API명세서 §4.5
 
     미입력 시 카메라 기하로 기대 높이를 추정한다.
+
+    **`at_m` 이 함께 필수다.** 높이 하나만으로는 다른 거리에서의 기대 높이를 구할 수
+    없다 — 같은 사람도 카메라에서 멀수록 화면상 픽셀 높이가 줄어들기 때문이다.
+    저장되는 형태는 `RefHeight`(기능명세서 §6 `cameras.ref_height`)이며, **필드 이름이
+    다르다**(`px_height` 대 `height_px`). 요청 이름은 §4.5 예시가, 저장 이름은 §6 이
+    정한 것이라 어느 한쪽으로 통일하지 않고 경계에서 바꾼다.
     """
 
     px_height: float
     at_m: PointM
+
+
+class RefHeight(SpecModel):
+    """저장된 높이 비율 기준. 기능명세서 §6 `cameras.ref_height`(jsonb)
+
+    ★ **스칼라가 아니다.** `{ "height_px": 0.42, "at_m": [4.0, 7.0] }` 형태다.
+    기준 높이를 잰 **지면 위치**가 없으면 다른 거리의 기대 높이를 구할 수 없고,
+    그러면 `height_ratio`(FN-DET-10 조건 ①)가 거리에 따라 제멋대로 흔들린다.
+    """
+
+    height_px: float
+    """그 사람의 화면상 높이(정규화 픽셀)."""
+    at_m: PointM
+    """그 사람이 서 있던 지면 좌표(m)."""
 
 
 class CalibrationRequest(SpecModel):
@@ -641,8 +661,11 @@ class CameraCalibration(SpecModel):
     `homography` 와 함께 보존한다(§4.5). 행렬만으로는 어느 점을 찍었는지 복원할 수 없다."""
     reproj_error_m: float | None
     """재투영 오차(RMS·m). 4점이면 자유도가 일치해 0이며, 5점 이상부터 의미를 갖는다."""
-    ref_height_px_at_m: float | None
-    """기준 인물의 화면상 높이(정규화). `height_ratio` 기반 쓰러짐 판정(FN-DET-10)의 기준이다.
+    ref_height: RefHeight | None
+    """기준 인물의 화면상 높이와 **그것을 잰 지면 위치**. 기능명세서 §6
+
+    `height_ratio` 기반 쓰러짐 판정(FN-DET-10 조건 ①)의 기준이다. 위치가 함께 있어야
+    설정 화면이 그 점을 다시 그릴 수 있고, 다른 거리의 기대 높이를 계산할 수 있다.
 
     **모형 시연에서도 실제 작업자 신장(약 1.7m) 기준으로 입력한다**(기능명세서 §4.7
     FN-CFG-01). 모형 축척으로 넣으면 임계값을 전부 다시 정해야 한다.

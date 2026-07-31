@@ -341,7 +341,7 @@ class FakeCameraStore:
                 "rtsp_main": f"rtsp://127.0.0.1:8554/cam{cam_id}/main",
                 "rtsp_sub": f"rtsp://127.0.0.1:8554/cam{cam_id}/sub",
                 "homography": self.homography.get(cam_id),
-                "ref_height_px_at_m": self.reference.get(cam_id),
+                "ref_height": self.reference.get(cam_id),
                 "calib_points": self.calib_points.get(cam_id),
                 "reproj_error_m": self.reproj_error_m.get(cam_id),
                 "calibrated_at": self.calibrated_at.get(cam_id),
@@ -358,7 +358,7 @@ class FakeCameraStore:
         self,
         cam_id: int,
         homography: list[list[float]],
-        ref_height_px_at_m: dict[str, Any] | None,
+        ref_height: dict[str, Any] | None,
         calibrated_at: datetime,
         calib_points: list[dict[str, Any]] | None = None,
         reproj_error_m: float | None = None,
@@ -369,7 +369,7 @@ class FakeCameraStore:
             msg = f"등록되지 않은 카메라다: {cam_id}"
             raise LookupError(msg)
         self.homography[cam_id] = homography
-        self.reference[cam_id] = ref_height_px_at_m
+        self.reference[cam_id] = ref_height
         self.calibrated_at[cam_id] = calibrated_at
         self.calib_points[cam_id] = calib_points
         self.reproj_error_m[cam_id] = reproj_error_m

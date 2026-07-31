@@ -85,7 +85,7 @@ SPEC_CAMERA_COLUMNS = {
     "rtsp_main",
     "rtsp_sub",
     "homography",
-    "ref_height_px_at_m",
+    "ref_height",
     "calib_points",
     "reproj_error_m",
     "calibrated_at",
