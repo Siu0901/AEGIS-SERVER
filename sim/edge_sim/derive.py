@@ -10,7 +10,12 @@ M6 가 미터에 대해 정한 규칙과 같은 규칙이다 — **결과를 시
 |---|---|
 | `mask: {posture, motion}` | `height_ratio` · `axis_angle_deg` · `stillness_s` · `posture` |
 | `mask: {fork}` (지게차) | 지게차 윤곽 — 최근접 거리의 입력 |
+| (자동) | `frame` 사람의 `nearby[]` — 거리 · `basis` · 위험 반경 이내 여부 (§2.1) |
 | `nearby: auto` (후보) | `nearby[]` 전량 — 거리 · 방식 · 위험 반경 · `depth_verified` |
+
+`frame` 의 `nearby` 는 시나리오가 켜고 끄는 것이 아니다. **매 프레임 항상 계산해서
+싣는다** — 서버의 근접 해소 판정(FN-EVT-03)이 이 값을 보므로, 없으면 "주변에 지게차가
+없다"로 읽혀 진행 중인 이벤트가 조용히 해소된다.
 
 **섞어 적으면 오류다.** `mask` 를 적었는데 `height_ratio` 도 적으면 어느 쪽이 진짜인지
 알 수 없다. 옛 시나리오(M2~M4)는 `mask` 를 적지 않으므로 손으로 적은 값을 그대로 쓴다 —
@@ -47,6 +52,7 @@ from aegis_vision import (
     StillnessTracker,
     depth_triggers,
     distance_mask_nearest_m,
+    ground_distance_m,
     height_ratio,
     mask_shape,
     posture_of,
@@ -54,6 +60,7 @@ from aegis_vision import (
     verify_depth,
     within_radius,
 )
+from scripts.seed_cameras import DEV_REF_HEIGHT
 from sim.edge_sim.masks import person_mask, vehicle_mask
 
 __all__ = ["DerivedState", "derive_entries"]
@@ -66,16 +73,21 @@ __all__ = ["DerivedState", "derive_entries"]
 #: 엣지도 마찬가지다 — 엣지가 정책을 받아오는 경로는 M9 의 일이다.
 _POLICIES = Policies()
 
-#: 기준 인물. `cameras.ref_height_px_at_m`(§4.5 `reference_person`)에 해당한다.
+#: 기준 인물. `cameras.ref_height`(기능명세서 §6 — `{height_px, at_m}`)에 해당한다.
 #:
-#: **모형 시연에서도 실제 작업자 신장(약 1.7m) 기준으로 입력한다**(기능명세서 §4.7
-#: FN-CFG-01). 개발용 카메라 기하에서 지면 (6, 9) m 에 선 사람이 화면 높이 0.42 를
-#: 차지하는 값이며, `scripts/seed_cameras.py` 의 격자와 같은 평면 위에 있다.
-_REFERENCE = ReferenceHeight(px_height=0.42, at_m=(6.0, 9.0))
+#: ★ **DB 시드와 같은 상수를 쓴다**(`scripts/seed_cameras.py`). 여기에 따로 적으면
+#: 시드를 바꿨을 때 엣지가 싣는 `height_ratio` 와 서버·화면의 기준이 조용히 갈린다 —
+#: 호모그래피 4점에 대해 M6 가 이미 정한 규칙과 같다.
+_REFERENCE = ReferenceHeight(
+    px_height=float(DEV_REF_HEIGHT["height_px"]),
+    at_m=(float(DEV_REF_HEIGHT["at_m"][0]), float(DEV_REF_HEIGHT["at_m"][1])),
+)
 
-#: 정지 판정 임계. 카메라 화각·설치 높이에 따라 달라지는 튜닝값이라 실물에서는
+#: 형태 변화 임계. 카메라 화각·설치 높이에 따라 달라지는 값이라 실물에서는
 #: `edge/config.yaml` 의 `posture` 절에서 온다(CLAUDE.md 절대규칙 6).
-_STILLNESS_MOVE_MAX = 0.02
+#:
+#: **이동량과 창 길이는 여기 없다** — 명세서가 정책 키(`stillness_move_px` ·
+#: `stillness_window_s`)로 승격시켜 `_POLICIES` 에서 읽는다(§4.5).
 _STILLNESS_SHAPE_MAX = 0.15
 
 #: 뎁스 캐시 무효화 이동량(m). §6.6 「임계 이상 이동하면 즉시 무효화」.
@@ -205,7 +217,68 @@ def _derive_frame(
                 )
         obj.pop("mask", None)
 
+    # `nearby` 는 지게차를 전부 훑은 **뒤에** 채운다. 사람이 목록 앞에 있어도 같은
+    # 프레임의 지게차를 보아야 하기 때문이다(§2.1).
+    for track_id, person in persons.items():
+        person["nearby"] = _frame_nearby(person, track_id, vehicles, contours, homography)
+
     return DerivedState(at_s=at_s, persons=persons, vehicles=vehicles, contours=contours)
+
+
+def _frame_nearby(
+    person: dict[str, Any],
+    person_track: int,
+    vehicles: dict[int, dict[str, Any]],
+    contours: dict[tuple[str, int], list[PointPx]],
+    homography: Homography,
+) -> list[dict[str, Any]]:
+    """`frame.objects[].nearby[]` — 매 프레임 흐르는 거리. API명세서 §2.1
+
+    ★ **후보의 `nearby[]`(§2.2)와 같은 계산을 쓴다.** 서버는 이 값으로 근접 해소를
+    판정하므로(FN-EVT-03), 두 경로가 다른 방식으로 재면 엣지가 근접이라고 올린 순간
+    서버가 해소로 판정하는 일이 생긴다 — 실측 1.55m 대 3.50m 의 어긋남이 그것이다.
+
+    마스크가 없는 시나리오(M2~M4)에서는 `basis: "anchor"` 로 떨어진다. 방식이 바뀌면
+    그 사실이 값과 함께 실려 나가야 사후에 어느 방식으로 잰 숫자인지 알 수 있다.
+    """
+    if "nearby" in person:
+        msg = (
+            "시나리오가 frame 의 nearby 를 직접 적었다 — 거리는 마스크에서 계산된다"
+            " (FN-DET-09 · §2.1). 그 줄을 지워라"
+        )
+        raise ValueError(msg)
+
+    person_contour = contours.get(("person", person_track))
+    readings: list[tuple[float, dict[str, Any]]] = []
+    for vehicle_track, vehicle in vehicles.items():
+        vehicle_contour = contours.get(("vehicle", vehicle_track))
+        if person_contour is not None and vehicle_contour is not None:
+            distance = distance_mask_nearest_m(person_contour, vehicle_contour, homography)
+            basis = "mask_nearest"
+        else:
+            # 마스크가 없으면 접지점↔앵커로 대체한다. 두 점 다 지면 위에 있으므로
+            # 호모그래피 값이며(절대규칙 4), 형상을 모르니 최근접보다 멀게 나온다.
+            distance = ground_distance_m(
+                homography.to_ground(_point(person["foot_point"])),
+                homography.to_ground(_point(vehicle["anchor"])),
+            )
+            basis = "anchor"
+        danger_m = float(vehicle.get("danger_radius_m", _POLICIES.vehicle_danger_radius_m))
+        if distance > _POLICIES.screening_radius_m:
+            continue
+        readings.append(
+            (
+                distance,
+                {
+                    "track_id": vehicle_track,
+                    "class": "vehicle",
+                    "dist_m": round(distance, 2),
+                    "basis": basis,
+                    "in_danger_zone": within_radius(distance, danger_m),
+                },
+            )
+        )
+    return [body for _, body in sorted(readings, key=lambda item: item[0])]
 
 
 def _apply_person_gauges(
@@ -231,7 +304,8 @@ def _apply_person_gauges(
         (cam_id, track_id),
         _Track(
             stillness=StillnessTracker(
-                move_max=_STILLNESS_MOVE_MAX,
+                move_px=_POLICIES.stillness_move_px,
+                window_s=_POLICIES.stillness_window_s,
                 shape_change_max=_STILLNESS_SHAPE_MAX,
             )
         ),

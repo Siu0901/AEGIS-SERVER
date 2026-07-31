@@ -38,6 +38,8 @@ export type MetricBucket = 'hour' | 'day' | 'week'
 
 export type MetricName = 'violations' | 'correction_rate' | 'avg_resolution_sec' | 'undetermined_rate'
 
+export type NearbyBasis = 'mask_nearest' | 'anchor'
+
 export type NonCameraComponent = 'edge' | 'mcu' | 'cloud_api' | 'storage' | 'db'
 
 export type ObjectClass = 'person' | 'vehicle'
@@ -155,7 +157,7 @@ export interface CameraCalibration {
   homography: number[][] | null
   calib_points: CalibrationPoint[] | null
   reproj_error_m: number | null
-  ref_height_px_at_m: number | null
+  ref_height: RefHeight | null
   calibrated_at: string | null
 }
 
@@ -319,6 +321,7 @@ export interface DetectedPerson {
   axis_angle_deg: number
   stillness_s: number
   in_zone: string | null
+  nearby: FrameNearby[]
 }
 
 /**
@@ -537,6 +540,17 @@ export interface FrameMsg {
   cam_id: number
   ts: string
   objects: (DetectedPerson | DetectedVehicle)[]
+}
+
+/**
+ * `frame.objects[].nearby[]` — 이 사람과 차량 사이의 거리. API명세서 §2.1
+ */
+export interface FrameNearby {
+  track_id: number
+  class: 'vehicle'
+  dist_m: number
+  basis: 'mask_nearest' | 'anchor'
+  in_danger_zone: boolean
 }
 
 /**
@@ -807,6 +821,8 @@ export interface Policies {
   fall_height_ratio_max: number
   fall_axis_angle_min_deg: number
   fall_stillness_s: number
+  stillness_move_px: number
+  stillness_window_s: number
   anomaly_sample_interval_min: number
 }
 
@@ -843,6 +859,8 @@ export interface PolicyPatch {
   fall_height_ratio_max: number | null
   fall_axis_angle_min_deg: number | null
   fall_stillness_s: number | null
+  stillness_move_px: number | null
+  stillness_window_s: number | null
   anomaly_sample_interval_min: number | null
 }
 
@@ -885,7 +903,15 @@ export interface RecStorageStatus {
 }
 
 /**
- * 높이 비율 기준 보정용(선택). API명세서 §4.5
+ * 저장된 높이 비율 기준. 기능명세서 §6 `cameras.ref_height`(jsonb)
+ */
+export interface RefHeight {
+  height_px: number
+  at_m: [number, number]
+}
+
+/**
+ * 높이 비율 기준 보정용(선택). `POST /cameras/{id}/calibration` 요청. API명세서 §4.5
  */
 export interface ReferencePerson {
   px_height: number

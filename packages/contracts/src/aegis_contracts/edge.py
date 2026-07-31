@@ -25,6 +25,7 @@ from ._base import Bbox, PointM, PointPx, SpecModel
 from .enums import (
     DistanceMethod,
     HelmetState,
+    NearbyBasis,
     ObjectClass,
     Posture,
     StreamState,
@@ -40,10 +41,38 @@ __all__ = [
     "DetectedVehicle",
     "EdgeMessage",
     "FrameMsg",
+    "FrameNearby",
     "HeartbeatMsg",
     "NearbyVehicle",
     "TrackLostMsg",
 ]
+
+
+class FrameNearby(SpecModel):
+    """`frame.objects[].nearby[]` — 이 사람과 차량 사이의 거리. API명세서 §2.1
+
+    **확정과 해소는 반드시 같은 양을 본다.** 엣지는 마스크 최근접 거리(§6.5)로
+    `proximity` 후보를 만드는데, 서버가 그 값을 받지 못하면 접지점↔`anchor_m` 거리로
+    대체 계산하게 된다. 두 값은 **FN-DET-09 가 존재하는 바로 그 상황**(포크가 뻗은
+    지게차)에서 크게 갈린다(실측 1.55m 대 3.50m) — 엣지가 근접이라고 올린 순간 서버는
+    이미 해소로 판정해 이벤트가 확정에 도달하지 못한다.
+
+    엣지는 후보 생성을 위해 이 값을 이미 계산하고 있으므로 추가 연산 비용은 없다.
+    **판정의 원천은 하나여야 한다.**
+
+    `candidate.nearby[]`(`NearbyVehicle` · §2.2)와 다른 모델이다. 저쪽은 후보의 근거를
+    담아 `method` · `depth_verified` · `moving` 을 싣고, 이쪽은 매 프레임 흐르는 관측값이라
+    해소 판정과 거리선에 필요한 것만 싣는다.
+    """
+
+    track_id: int
+    class_: Literal["vehicle"] = Field(alias="class")
+    dist_m: float
+    """지면 거리(m). **해소 판정(FN-EVT-03)과 오버레이 거리선이 같이 보는 값이다.**"""
+    basis: NearbyBasis
+    """`mask_nearest`(P1 · 기본) / `anchor`(마스크가 없을 때의 대체)."""
+    in_danger_zone: bool
+    """`danger_radius_m` 이내 여부."""
 
 
 class DetectedPerson(SpecModel):
@@ -73,6 +102,14 @@ class DetectedPerson(SpecModel):
 
     in_zone: str | None
     """구역 밖이면 `null`. **필드 자체는 항상 실린다**(기본값 없음)."""
+
+    nearby: list[FrameNearby]
+    """이 사람과 차량 사이의 거리. 주변에 없으면 **빈 배열**이며 필드는 항상 실린다.
+
+    기본값을 두지 않는 이유: 엣지가 이 필드를 빠뜨리기 시작하면 서버는 "주변에 지게차가
+    없다"로 읽고 진행 중인 `proximity` 이벤트를 해소로 판정한다. 빠진 것과 없는 것이
+    같아 보이면 안 되는 자리다.
+    """
 
 
 class DetectedVehicle(SpecModel):

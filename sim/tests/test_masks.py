@@ -44,6 +44,7 @@ from aegis_vision import (
     ReferenceHeight,
     StillnessTracker,
     distance_bbox_center_m,
+    ground_distance_m,
     height_ratio,
     mask_shape,
     posture_of,
@@ -178,7 +179,11 @@ def test_getting_up_returns_to_standing() -> None:
     )
     homography = homography_for(1)
     reference = ReferenceHeight(px_height=0.42, at_m=(6.0, 9.0))
-    tracker = StillnessTracker(move_max=0.02, shape_change_max=0.15)
+    tracker = StillnessTracker(
+        move_px=_POLICIES.stillness_move_px,
+        window_s=_POLICIES.stillness_window_s,
+        shape_change_max=0.15,
+    )
     lying = (0.4130, 0.7200, 0.5972, 0.7576)
     standing = (0.4597, 0.2600, 0.5397, 0.7576)
 
@@ -272,5 +277,73 @@ def test_distances_match_their_expectations(case: str) -> None:
                     f"{label} 중심 거리 {center:.2f}m 가 {want['bbox_center_above_m']}m 를 "
                     "넘지 않는다 — 두 방식이 갈리지 않으면 FN-DET-09 가 필요 없다"
                 )
+
+        if "anchor_above_m" in want:
+            # ★ 서버가 §2.1 `frame.nearby[].dist_m` 대신 접지점↔앵커로 해소를 판정하면
+            #   어떻게 되는지를 숫자로 남긴다. 이 값이 경고 임계 위인 동안에도 최근접은
+            #   임계 아래라, 옛 경로에서는 후보가 올라오는 내내 서버가 「이미 해소」로
+            #   보아 이벤트가 확정에 도달하지 못했다.
+            frame = _frame_at(messages, at_s, cam_id)
+            anchor_m = ground_distance_m(
+                candidates[0].foot_point_m,
+                _vehicle(frame, vehicle_id).anchor_m,
+            )
+            if anchor_m <= want["anchor_above_m"]:
+                problems.append(
+                    f"{label} 접지점↔앵커 거리 {anchor_m:.2f}m 가 "
+                    f"{want['anchor_above_m']}m 를 넘지 않는다 — 두 값이 갈리지 않으면 "
+                    "「확정과 해소가 같은 양을 보는가」를 확인할 수 없다"
+                )
+
+    assert not problems, "\n".join(problems)
+
+
+@pytest.mark.parametrize("case", DISTANCE_CASES)
+def test_frame_carries_the_same_distance_as_the_candidate(case: str) -> None:
+    """★ §2.1 — `frame` 의 `nearby[].dist_m` 이 후보의 근거와 같은 값인가.
+
+    **확정과 해소는 반드시 같은 양을 본다.** 후보(§2.2)는 마스크 최근접으로 올라오고
+    해소 판정(FN-EVT-03)은 `frame` 의 이 값을 보므로, 둘이 어긋나면 엣지가 근접이라고
+    올린 순간에 서버가 해소로 판정한다. 여기서 두 경로가 같은 숫자를 내는지 잠근다.
+    """
+    spec = _spec(case)
+    messages = load_case(case, START)
+    cam_id = int(spec.get("cam_id", 1))
+    problems: list[str] = []
+
+    for want in spec["expect"]["distances"]:
+        at_s = float(want["at_s"])
+        track_id = int(want["track_id"])
+        vehicle_id = int(want["vehicle_track_id"])
+        candidate = next(
+            (
+                item.message
+                for item in messages
+                if item.message.type == "candidate"
+                and abs(item.at_s - at_s) < 1e-6
+                and item.message.track_id == track_id
+            ),
+            None,
+        )
+        if candidate is None:
+            continue
+        expected = next(
+            (item.dist_m for item in candidate.nearby if item.track_id == vehicle_id), None
+        )
+        person = _person(_frame_at(messages, at_s, cam_id), track_id)
+        actual = next((item.dist_m for item in person.nearby if item.track_id == vehicle_id), None)
+        label = f"{case} t={at_s}s"
+        if actual is None:
+            problems.append(f"{label} frame.nearby 에 지게차 {vehicle_id} 이 없다")
+        elif expected is not None and abs(actual - expected) > 0.02:
+            problems.append(
+                f"{label} frame {actual}m · candidate {expected}m — 두 경로가 다른 값을 잰다"
+            )
+        if actual is not None:
+            basis = next(
+                item.basis for item in person.nearby if item.track_id == vehicle_id
+            )
+            if basis != "mask_nearest":
+                problems.append(f"{label} basis: 기대 mask_nearest · 실제 {basis}")
 
     assert not problems, "\n".join(problems)

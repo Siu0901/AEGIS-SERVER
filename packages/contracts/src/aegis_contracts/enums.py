@@ -21,6 +21,7 @@ __all__ = [
     "HelmetState",
     "MetricBucket",
     "MetricName",
+    "NearbyBasis",
     "NonCameraComponent",
     "ObjectClass",
     "Posture",
@@ -84,6 +85,13 @@ Posture = Literal["standing", "fallen", "unknown"]
 
 #: 사람↔지게차 거리 산출 방식. API명세서 §6.5.
 DistanceMethod = Literal["bbox_center", "mask_nearest"]
+
+#: `frame.objects[].nearby[].basis` — 그 거리를 **무엇으로 쟀는가**. API명세서 §2.1
+#:
+#: `DistanceMethod`(§2.2 `candidate.nearby[].method`)와 **합치지 않는다.** 저쪽의 대체
+#: 방식은 `bbox_center`(두 bbox 아래변 중앙)이고 이쪽은 `anchor`(접지점↔지게차 앵커)다.
+#: 값 집합이 다른데 하나로 열어두면 프레임이 `bbox_center` 를 실어 보내도 통과한다.
+NearbyBasis = Literal["mask_nearest", "anchor"]
 
 #: 트랙 소실 사유(진단용). API명세서 §2.3.
 TrackLostReason = Literal["occluded", "out_of_view", "low_conf"]

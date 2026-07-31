@@ -76,6 +76,15 @@ FRAME_EXAMPLE: dict[str, Any] = {
             "axis_angle_deg": 8.2,
             "stillness_s": 0.4,
             "in_zone": "forklift_lane",
+            "nearby": [
+                {
+                    "track_id": 11,
+                    "class": "vehicle",
+                    "dist_m": 1.55,
+                    "basis": "mask_nearest",
+                    "in_danger_zone": True,
+                }
+            ],
         },
         {
             "class": "vehicle",
@@ -101,6 +110,23 @@ def test_frame_example_parses() -> None:
     assert person.in_zone == "forklift_lane"
     assert vehicle.moving is True
     assert vehicle.danger_radius_m == 3.0
+    assert person.nearby[0].dist_m == 1.55
+    assert person.nearby[0].basis == "mask_nearest"
+    assert person.nearby[0].in_danger_zone is True
+
+
+def test_frame_nearby_is_mandatory_even_when_empty() -> None:
+    """`frame.objects[].nearby` 는 `·생략` 이 아니다 — 없으면 **빈 배열**이다 (§2.1).
+
+    빠뜨린 것과 "주변에 지게차가 없다"가 같아 보이면 안 된다. 서버는 뒤쪽을 해소
+    근거로 삼으므로(FN-EVT-03), 필드 누락이 조용히 이벤트를 종결시킨다.
+    """
+    obj = dict(FRAME_EXAMPLE["objects"][0])
+    assert DetectedPerson.model_validate({**obj, "nearby": []}).nearby == []
+
+    obj.pop("nearby")
+    with pytest.raises(ValueError, match="nearby"):
+        DetectedPerson.model_validate(obj)
 
 
 def test_frame_round_trips_to_spec_json() -> None:
@@ -865,6 +891,10 @@ POLICIES_EXAMPLE: dict[str, Any] = {
     "fall_height_ratio_max": 0.5,
     "fall_axis_angle_min_deg": 55.0,
     "fall_stillness_s": 5.0,
+    # ★ §4.5 가 `edge/config.yaml` 에서 승격시킨 두 키. 정지 판정은 오탐 억제의 핵심
+    #   조건이라 현장 튜닝이 잦은데, 장비 설정 파일에 있으면 조정이 곧 배포가 된다.
+    "stillness_move_px": 0.008,
+    "stillness_window_s": 1.0,
     "anomaly_sample_interval_min": 5,
     "mute_default_duration_s": 900,
     "clip_extract_margin_s": 2,

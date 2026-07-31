@@ -25,7 +25,6 @@ from aegis_contracts import (
     DetectedPerson,
     DetectedVehicle,
     FrameMsg,
-    NearbyVehicle,
     OverlayMsg,
     OverlayNearby,
     OverlayObject,
@@ -72,8 +71,9 @@ class TrackState:
 
     statuses: dict[ViolationType, EventStatus] = field(default_factory=dict)
 
-    nearby: tuple[NearbyVehicle, ...] = ()
-    """마지막 후보가 실어 보낸 주변 지게차(§2.2). 거리선의 원천이다."""
+    # 주변 지게차는 여기 들고 있지 않다. 거리선의 원천은 **매 프레임 오는**
+    # `frame.objects[].nearby`(§2.1)이며, 후보(§2.2)는 규칙에 걸릴 때만 올라오므로
+    # 그것을 들고 있으면 화면의 거리 라벨이 마지막 후보 시점에 얼어붙는다.
 
     @property
     def violations(self) -> list[ViolationType]:
@@ -116,7 +116,6 @@ class LiveTracks:
         state = self._tracks.setdefault((candidate.cam_id, candidate.track_id), TrackState())
         state.events = {violation: event_id for violation, (event_id, _) in events.items()}
         state.statuses = {violation: status for violation, (_, status) in events.items()}
-        state.nearby = tuple(candidate.nearby)
 
     def set_events(
         self,
@@ -160,7 +159,7 @@ def compose_overlay(frame: FrameMsg, tracks: LiveTracks) -> OverlayMsg:
     for obj in frame.objects:
         state = tracks.state(frame.cam_id, obj.track_id)
         if isinstance(obj, DetectedPerson):
-            objects.append(_person(obj, state, anchors))
+            objects.append(_person(obj, state, anchors))  # 거리선은 `frame.nearby` 가 원천이다
         else:
             objects.append(_vehicle(obj, state))
     return OverlayMsg(cam_id=frame.cam_id, ts=frame.ts, objects=objects)
@@ -185,7 +184,7 @@ def _person(
         "violations": state.violations if state else [],
         "event_ids": state.event_ids if state else [],
         "alert_state": state.alert_state if state else None,
-        "nearby": _nearby(state, anchors),
+        "nearby": _nearby(obj, anchors),
     }
     # `helmet` 은 게이트 미통과 시 **필드 자체가 생략**된다(§2.1 · §6.3).
     # `null` 로 채우면 "분류했는데 값이 없다"가 되어 규약이 뒤집힌다.
@@ -212,14 +211,18 @@ def _vehicle(obj: DetectedVehicle, state: TrackState | None) -> OverlayVehicle:
     )
 
 
-def _nearby(state: TrackState | None, anchors: dict[int, PointPx]) -> list[OverlayNearby]:
+def _nearby(person: DetectedPerson, anchors: dict[int, PointPx]) -> list[OverlayNearby]:
     """거리선을 그릴 수 있는 것만 남긴다.
+
+    ★ **원천은 `frame.objects[].nearby`(§2.1)다.** 예전에는 마지막 후보가 실어 온
+    `candidate.nearby`(§2.2)를 들고 있었는데, 후보는 규칙에 걸릴 때만 올라오므로
+    화면의 거리 라벨이 마지막 후보 시점에 멈춰 있었다 — 사람이 물러나 해소되는 동안
+    라벨은 여전히 위반 당시 거리를 가리켰다. 이제 **해소 판정(FN-EVT-03)과 화면이
+    같은 값을 본다.**
 
     **이 프레임에 보이지 않는 지게차는 뺀다.** 선의 반대편 끝점을 찍을 수 없으므로
     화면에는 어차피 그릴 수 없고, 거리 라벨만 남기면 아무 데도 안 붙은 숫자가 뜬다.
     """
-    if state is None:
-        return []
     return [
         OverlayNearby.model_validate(
             {
@@ -227,9 +230,9 @@ def _nearby(state: TrackState | None, anchors: dict[int, PointPx]) -> list[Overl
                 "track_id": vehicle.track_id,
                 "dist_m": vehicle.dist_m,
                 "anchor": anchors[vehicle.track_id],
-                "in_danger_zone": vehicle.within_danger_radius,
+                "in_danger_zone": vehicle.in_danger_zone,
             }
         )
-        for vehicle in state.nearby
+        for vehicle in person.nearby
         if vehicle.track_id in anchors
     ]

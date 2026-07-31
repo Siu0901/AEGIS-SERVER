@@ -39,7 +39,6 @@ candidate ─→ active ─→ alerted ⇄ re_alerted
 
 from __future__ import annotations
 
-import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -48,7 +47,6 @@ from typing import Any, Literal
 from aegis_contracts import (
     CandidateMsg,
     DetectedPerson,
-    DetectedVehicle,
     EventCreatedMsg,
     EventDetail,
     EventStatus,
@@ -477,7 +475,6 @@ class EventMachine:
         """
         at = frame.ts
         effects: list[Effect] = []
-        vehicles = [obj for obj in frame.objects if isinstance(obj, DetectedVehicle)]
         for obj in frame.objects:
             if not isinstance(obj, DetectedPerson):
                 continue
@@ -489,7 +486,7 @@ class EventMachine:
                 event = self._events.get(event_id)
                 if event is None or event.status is EventStatus.LOST:
                     continue
-                self._observe(event, at, self._judge(event, obj, vehicles, gated=gated))
+                self._observe(event, at, self._judge(event, obj, gated=gated))
                 effects += self._evaluate(event, at)
         return effects
 
@@ -591,7 +588,6 @@ class EventMachine:
         self,
         event: OpenEvent,
         person: DetectedPerson,
-        vehicles: list[DetectedVehicle],
         *,
         gated: bool,
     ) -> Judgement:
@@ -618,16 +614,19 @@ class EventMachine:
             return "violating" if inside else "cleared"
 
         if event.violation_type is ViolationType.PROXIMITY:
-            if not vehicles:
-                # 잴 대상이 화면에 없다. 위험원이 사라진 것이므로 해소로 본다.
+            if not person.nearby:
+                # 스크리닝 반경 안에 지게차가 없다. 위험원이 사라진 것이므로 해소로 본다.
                 return "cleared"
-            # **거리는 호모그래피 지면 좌표로만 잰다**(CLAUDE.md 절대규칙 4).
+            # ★ **거리는 엣지가 실어 보낸 `frame.nearby[].dist_m` 을 그대로 쓴다**(§2.1).
             #
-            # 여기서 잰 값을 `min_distance_m` 에 쓰지 않는다. 그 컬럼의 원천은 후보가
-            # 실어 오는 `nearby[].dist_m`(마스크 최근접 · §6.5)이고, 접지점↔`anchor`
-            # 거리는 그보다 거칠다. 두 값을 같은 칸에 섞으면 어느 방식으로 잰 숫자인지
-            # 사후에 알 수 없다.
-            nearest = min(math.dist(person.foot_point_m, vehicle.anchor_m) for vehicle in vehicles)
+            # 서버가 접지점↔`anchor_m` 으로 다시 계산하지 않는다. 그 값은 마스크 최근접
+            # (§6.5)보다 거칠고, **FN-DET-09 가 존재하는 바로 그 상황**(포크가 뻗은
+            # 지게차)에서 크게 갈린다 — 실측 1.55m 대 3.50m. 엣지가 근접이라고 후보를
+            # 올린 순간 서버는 이미 해소로 판정해 이벤트가 확정에 도달하지 못했다.
+            #
+            # **확정과 해소는 반드시 같은 양을 본다.** 후보의 근거도, 화면 거리선도,
+            # 여기 해소 판정도 전부 이 한 값에서 나온다.
+            nearest = min(vehicle.dist_m for vehicle in person.nearby)
             return "violating" if nearest <= self._policies.proximity_threshold_m else "cleared"
 
         if person.posture == "unknown":

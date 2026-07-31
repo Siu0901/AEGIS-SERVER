@@ -47,6 +47,7 @@ FRAME: dict[str, Any] = {
             "axis_angle_deg": 8.2,
             "stillness_s": 0.4,
             "in_zone": "forklift_lane",
+            "nearby": [],
         }
     ],
 }

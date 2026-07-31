@@ -32,6 +32,15 @@ PERSON: dict[str, Any] = {
     "axis_angle_deg": 8.2,
     "stillness_s": 0.4,
     "in_zone": "forklift_lane",
+    "nearby": [],
+}
+
+#: 같은 사람인데 이번 프레임에서 지게차가 가깝다. §2.1 `nearby` 가 실려 있다.
+NEAR_PERSON: dict[str, Any] = PERSON | {
+    "nearby": [
+        {"track_id": 11, "class": "vehicle", "dist_m": 1.55, "basis": "mask_nearest",
+         "in_danger_zone": True}
+    ]
 }
 
 VEHICLE: dict[str, Any] = {
@@ -158,20 +167,30 @@ def test_vehicle_anchor_comes_from_the_edge_not_from_the_box() -> None:
 
 
 def test_nearby_carries_the_distance_and_the_other_end_of_the_line() -> None:
-    tracks = LiveTracks()
-    tracks.record_candidate(candidate(), {ViolationType.NO_HELMET: ("EV-1", EventStatus.CANDIDATE)})
-    person = compose_overlay(frame(PERSON, VEHICLE), tracks).objects[0]
+    person = compose_overlay(frame(NEAR_PERSON, VEHICLE), LiveTracks()).objects[0]
     assert len(person.nearby) == 1
-    assert person.nearby[0].dist_m == pytest.approx(3.2)
+    assert person.nearby[0].dist_m == pytest.approx(1.55)
     assert person.nearby[0].anchor == pytest.approx((0.702, 0.771))
-    assert person.nearby[0].in_danger_zone is False
+    assert person.nearby[0].in_danger_zone is True
+
+
+def test_nearby_comes_from_the_frame_not_from_the_last_candidate() -> None:
+    """★ §2.1 — 거리선의 원천은 **매 프레임 오는** `frame.nearby` 다.
+
+    후보(§2.2)는 규칙에 걸릴 때만 올라오므로, 그것을 들고 있으면 사람이 물러나
+    해소되는 동안에도 화면의 거리 라벨이 위반 당시 값에 얼어붙는다. 진행 중 이벤트가
+    있어도 이번 프레임이 「멀어졌다」고 하면 라벨도 함께 멀어져야 한다.
+    """
+    tracks = LiveTracks()
+    tracks.record_candidate(candidate(), {ViolationType.PROXIMITY: ("EV-1", EventStatus.ALERTED)})
+    person = compose_overlay(frame(PERSON, VEHICLE), tracks).objects[0]
+    assert person.alert_state == "alerted"
+    assert person.nearby == []
 
 
 def test_nearby_drops_vehicles_that_are_not_in_this_frame() -> None:
     """선의 반대편을 찍을 수 없으면 거리 라벨만 남아 아무 데도 안 붙은 숫자가 된다."""
-    tracks = LiveTracks()
-    tracks.record_candidate(candidate(), {ViolationType.NO_HELMET: ("EV-1", EventStatus.CANDIDATE)})
-    person = compose_overlay(frame(PERSON), tracks).objects[0]
+    person = compose_overlay(frame(NEAR_PERSON), LiveTracks()).objects[0]
     assert person.nearby == []
 
 

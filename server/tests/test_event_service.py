@@ -59,6 +59,7 @@ def person(at_s: float, helmet: str) -> FrameMsg:
                 "axis_angle_deg": 8.2,
                 "stillness_s": 0.4,
                 "in_zone": "forklift_lane",
+                "nearby": [],
             }
         ],
     }
@@ -300,3 +301,129 @@ def test_a_dispatched_alert_leaves_the_event_in_the_population() -> None:
 
     assert sink.calls == 1
     assert harness.store.items[0].alert_suppressed is False
+
+
+# --------------------------------------------------------------------------
+# ★ §2.1 — 근접 해소는 `frame.nearby[].dist_m` 을 본다
+# --------------------------------------------------------------------------
+
+
+def proximity_frame(at_s: float, dist_m: float | None) -> FrameMsg:
+    """지게차가 `dist_m` 만큼 떨어져 있는 프레임. `None` 이면 화면에 지게차가 없다.
+
+    `foot_point_m` 과 `anchor_m` 은 **일부러 멀게** 잡았다(약 3.6m). 서버가 §2.1 의
+    `nearby` 를 쓰지 않고 접지점↔앵커로 다시 계산하면 언제나 해소로 판정하게 되고,
+    그러면 이 테스트가 깨진다 — 그것이 여기서 잠그려는 회귀다.
+    """
+    nearby = (
+        []
+        if dist_m is None
+        else [
+            {
+                "track_id": 11,
+                "class": "vehicle",
+                "dist_m": dist_m,
+                "basis": "mask_nearest",
+                "in_danger_zone": dist_m <= 3.0,
+            }
+        ]
+    )
+    objects: list[dict[str, Any]] = [
+        {
+            "class": "person",
+            "track_id": 3,
+            "conf": 0.91,
+            "bbox": [0.197, 0.364, 0.273, 0.764],
+            "helmet": "on",
+            "helmet_conf": 0.88,
+            "foot_point": [0.235, 0.762],
+            "foot_point_m": [4.21, 7.85],
+            "foot_conf": 0.88,
+            "posture": "standing",
+            "height_ratio": 0.97,
+            "axis_angle_deg": 8.2,
+            "stillness_s": 0.4,
+            "in_zone": "forklift_lane",
+            "nearby": nearby,
+        }
+    ]
+    if dist_m is not None:
+        objects.append(
+            {
+                "class": "vehicle",
+                "track_id": 11,
+                "conf": 0.87,
+                "bbox": [0.591, 0.389, 0.838, 0.756],
+                "anchor": [0.702, 0.771],
+                # 접지점(4.21, 7.85)에서 3.63m — 경고 임계(2.0m) 밖이다.
+                "anchor_m": [7.02, 8.90],
+                "moving": True,
+                "danger_radius_m": 3.0,
+            }
+        )
+    return FrameMsg.model_validate(
+        {"type": "frame", "cam_id": 1, "ts": START + timedelta(seconds=at_s), "objects": objects}
+    )
+
+
+def proximity_candidate(at_s: float) -> CandidateMsg:
+    return CandidateMsg.model_validate(
+        {
+            "type": "candidate",
+            "cam_id": 1,
+            "ts": START + timedelta(seconds=at_s),
+            "track_id": 3,
+            "violation_type": "proximity",
+            "zone_id": "forklift_lane",
+            "bbox": [0.197, 0.364, 0.273, 0.764],
+            "conf": 0.91,
+            "foot_point_m": [4.21, 7.85],
+            "foot_conf": 0.88,
+            "posture": "standing",
+            "observed_ms": 500,
+            "nearby": [
+                {
+                    "class": "vehicle",
+                    "track_id": 11,
+                    "dist_m": 1.55,
+                    "method": "mask_nearest",
+                    "depth_verified": False,
+                    "moving": True,
+                    "within_danger_radius": True,
+                }
+            ],
+        }
+    )
+
+
+def _flow(harness: Harness, start_s: float, end_s: float, dist_m: float | None) -> None:
+    at_s = start_s
+    while at_s <= end_s + 1e-9:
+        frame = proximity_frame(at_s, dist_m)
+        harness.clock.set(frame.ts)
+        asyncio.run(harness.service.on_frame(frame))
+        at_s = round(at_s + STEP_S, 6)
+
+
+def test_proximity_confirms_on_the_distance_the_edge_measured() -> None:
+    """★ 확정과 해소는 같은 양을 본다 (§2.1).
+
+    마스크 최근접 1.55m 는 경고 임계(2.0m) **안**이고 접지점↔앵커 3.63m 는 **밖**이다.
+    서버가 뒤쪽으로 재던 시절에는 엣지가 후보를 올리는 매 프레임마다 「이미 해소」로
+    보아 이벤트가 3초 확정에 도달하지 못했다.
+    """
+    harness = Harness()
+    asyncio.run(harness.service.on_candidate(proximity_candidate(0.5)))
+    _flow(harness, 0.625, 4.0, 1.55)
+    assert status_of(harness) is EventStatus.ALERTED
+
+
+def test_proximity_resolves_when_the_measured_distance_grows() -> None:
+    """멀어지면 해소된다 — 같은 값이 반대 방향으로도 일해야 한다."""
+    harness = Harness()
+    asyncio.run(harness.service.on_candidate(proximity_candidate(0.5)))
+    _flow(harness, 0.625, 4.0, 1.55)
+    assert status_of(harness) is EventStatus.ALERTED
+
+    _flow(harness, 4.125, 15.0, 4.2)
+    assert status_of(harness) is EventStatus.RESOLVED

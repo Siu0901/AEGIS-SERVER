@@ -66,6 +66,9 @@ def _frame(cam_id: int, ts: datetime) -> FrameMsg:
                 "axis_angle_deg": 0.0,
                 "stillness_s": 0.0,
                 "in_zone": None,
+                # 이 모드에는 지게차가 없다. **빈 배열도 실어야 한다**(§2.1) —
+                # 필드를 빼면 계약 위반이고, 서버는 "주변에 없다"를 해소 근거로 쓴다.
+                "nearby": [],
             }
         ],
     }
