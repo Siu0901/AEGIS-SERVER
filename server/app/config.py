@@ -69,6 +69,25 @@ class ServerSettings(BaseSettings):
     mcu_stale_after_s: float = 30.0
     """장치 상태 보고가 이 시간 이상 끊기면 오프라인으로 본다(`sim/mcu_sim` 주기 10초 × 3)."""
 
+    # --- 클라우드 (Tier 2 · FN-AI · FN-SYS-03) ---
+    #
+    # ★ **`os.environ` 을 직접 읽지 않는다.** pydantic-settings 는 `.env` 를 이 클래스에만
+    #   싣고 프로세스 환경에는 넣지 않는다. 어댑터가 `os.environ` 을 보면 `.env` 에 키를
+    #   적어도 조용히 「키가 없다」로 떨어지고, 사람은 키가 잘못된 줄 안다.
+    #   설정의 원천은 하나여야 한다 — 여기서 읽어 `create_cloud()` 에 넘긴다.
+    gemini_api_key: str = ""
+    """Gemini API 키. **비어 있으면 지능 기능만 꺼진 채로 기동한다**(FN-SYS-03).
+
+    감지 → 확정 → 경고 → 시정 루프는 클라우드를 부르지 않으므로, 인터넷 없는 현장이
+    정상 운용 조건이다. 여기서 예외를 던지면 그 현장에서 서버가 아예 뜨지 않는다.
+    """
+
+    gemini_embed_model: str = "gemini-embedding-001"
+    """FN-AI-01 — 키프레임·질의 임베딩. 출력 차원이 `halfvec(3072)` 과 맞아야 한다."""
+
+    gemini_text_model: str = "gemini-flash-latest"
+    """FN-AI-05 · 08 · 09 · 10 — 심층 분석·챗봇·브리핑·보고서."""
+
     # `alert_duration_s`(경광등·부저 지속)와 `clip_extract_margin_s`(추출 여유)는 여기
     # 있었지만 §4.5 정책 키가 되면서 DB 로 옮겼다. 현장에서 조정하는 값은 배포가 아니라
     # 설정이어야 하고, 임계값의 원천은 하나여야 한다(CLAUDE.md 절대규칙 6).

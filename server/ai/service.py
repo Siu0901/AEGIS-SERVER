@@ -71,6 +71,17 @@ MIN_POOL = 12
 #: 정상 풀에서 비교할 최근 샘플 수. 시간대별로 나뉘므로 이 정도면 며칠치가 담긴다.
 POOL_LIMIT = 200
 
+#: ★ **임베딩 모델을 바꾸면 `normal_pool` 을 비워야 한다.**
+#:
+#: 벡터는 모델마다 다른 공간에 산다. 옛 벡터가 남아 있으면 새 모델의 첫 샘플들이
+#: 전부 「평소와 다르다」로 잡히고, 그 오탐은 풀이 새 벡터로 채워질 때까지(k=5 이므로
+#: 다섯 주기) 이어진다 — 실측으로 4회 연속 오탐이 났다.
+#:
+#: 지금은 수동이다(`DELETE FROM normal_pool`). `gemini_embed_model` 이 바뀐 것을
+#: 서버가 알아채 비우게 하려면 모델 이름을 행에 함께 저장해야 하고, 그건 §6
+#: `normal_pool` 에 칸을 늘리는 일이라 명세서 확인이 필요하다.
+POOL_MODEL_NOTE = "임베딩 모델 교체 시 normal_pool 을 비운다"
+
 #: 이상 판정에 쓰는 k(§6.8 「k-최근접 평균 코사인 거리」).
 ANOMALY_K = 5
 
@@ -495,9 +506,14 @@ class AiService:
             "너는 제조현장 안전관제 화면을 보는 관리자다. 아래 CCTV 프레임"
             f"({', '.join(f'{cam_id}번 카메라' for cam_id, _ in frames)})을 보고 "
             "지금 상황을 2~3문장의 한국어로 요약해라.\n"
-            "- 보이는 것만 쓴다. 안 보이는 것을 추측하지 않는다.\n"
-            "- 사람·지게차의 위치와 눈에 띄는 위험 요인을 우선 적는다.\n"
-            "- 작업자 개인을 특정하지 않는다.\n"
+            "\n"
+            "★ 규칙 (어기면 이 보고는 쓸모가 없다)\n"
+            "1. **화면에 실제로 보이는 것만** 쓴다. 제조현장이라는 맥락에서 있을 법한\n"
+            "   것을 채워 넣지 마라 — 사람이 안 보이면 사람을 쓰지 않는다.\n"
+            "2. 화면이 **컬러바·테스트 패턴·정지 화면·검은 화면**이면 그 사실을 그대로\n"
+            "   적고 끝낸다. 현장 장면인 척 묘사하지 마라.\n"
+            "3. 사람·지게차가 보이면 위치와 눈에 띄는 위험 요인을 우선 적는다.\n"
+            "4. 작업자 개인을 특정하지 않는다.\n"
         )
         written = await self._guard.call(
             "현장 브리핑", self._llm.generate(prompt, images=[image for _, image in frames])
@@ -555,7 +571,8 @@ class AiService:
             report["body"] = "집계를 읽지 못해 보고서를 만들지 못했다."
             return
         report["stats"] = summary.model_dump(mode="json")
-        sentence = _summary_sentence(summary)
+        # 보고서는 자기 기간을 알고 있다 — 내부 라벨(`custom`)이 아니라 날짜를 쓴다.
+        sentence = _summary_sentence(summary, f"{report['from']} ~ {report['to']}")
         body = sentence
         if self._llm is not None:
             written = await self._guard.call(
@@ -715,14 +732,18 @@ def today_since(clock: Clock, days: int) -> datetime:
     return now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days)
 
 
-def _summary_sentence(summary: MetricsSummary) -> str:
+def _summary_sentence(summary: MetricsSummary, period: str | None = None) -> str:
     """집계를 한 문장으로. ★ **시정률과 판정 불가율을 항상 병기한다**(§6.7 표기 규칙).
 
     분모가 0이면 `–` 다 — `0%` 는 "아무도 시정하지 않았다"는 주장이고 실제로는
     "판정 가능한 이벤트가 없다"이다.
+
+    `period` 를 주면 그것을 쓴다. `MetricsSummary.period` 는 구간을 지정했을 때
+    **`"custom"`** 이 되는 내부 값인데, 그대로 문장에 넣으면 LLM 이 그 단어를 그대로
+    옮겨 보고서에 「custom 기준 위반 82건」이 나온다(실측).
     """
     return (
-        f"{summary.period} 기준 위반 {summary.total_violations}건, "
+        f"{period or summary.period} 기준 위반 {summary.total_violations}건, "
         f"방송 후 시정률 {_percent(summary.correction_rate)} "
         f"(판정 불가 {_percent(summary.undetermined_rate)}). "
         f"시정 {summary.resolved} · 늦은 시정 {summary.resolved_late} · "

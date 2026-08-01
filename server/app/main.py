@@ -229,7 +229,13 @@ def create_app(
     # 어댑터가 없어도(키 미설정 · 인터넷 없음) 서비스는 만든다. 규정 매핑(FN-AI-06)과
     # SQL 통계는 클라우드와 무관하게 돌아야 하고, 화면이 「지능 기능 없음」과
     # 「서버가 그 경로를 아예 모른다」를 구분할 수 있어야 하기 때문이다.
-    cloud_adapter = create_cloud()
+    # ★ 키를 **설정에서** 넘긴다. 어댑터가 `os.environ` 을 직접 읽으면 `.env` 에 적은
+    #   값이 닿지 않아 조용히 「키가 없다」로 떨어진다(설정의 원천은 하나여야 한다).
+    cloud_adapter = create_cloud(
+        resolved.gemini_api_key,
+        embed_model=resolved.gemini_embed_model,
+        text_model=resolved.gemini_text_model,
+    )
     # 정상 풀·이상 플래그 저장소. **라우터도 같은 것을 본다** — `GET /anomalies` 가
     # 다른 경로로 읽으면 감지기가 쓴 것과 화면이 보는 것이 갈릴 수 있다.
     ai_store = DbAiRepository(engine) if engine else None
