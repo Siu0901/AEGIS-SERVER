@@ -12,13 +12,18 @@
  * 3. **`suppressed`(방송 없이 확정된 건수)를 드러낸다**(§4.8). 그 값이 분모가 왜 줄었는지를
  *    설명한다 — 숨기면 시정률이 좋아 보이는 이유를 아무도 설명할 수 없다
  *
- * 추세·분포는 `GET /metrics/timeseries` · `/distribution`(M8)이 데이터원이다. 지금은
- * **최근 이벤트에서 계산할 수 있는 것만** 그린다 — 없는 API 를 흉내 내 가짜 곡선을
- * 그리지 않는다(그 곡선은 시연에서 사실처럼 보인다).
+ * 추세·분포의 데이터원은 `GET /metrics/timeseries` · `/distribution` 이다(M8 에서 붙었다).
+ * **최근 이벤트 목록으로 세지 않는다** — 그 목록은 페이지 크기만큼만 담기므로 표본이
+ * 잘린 줄 모르고 "7일 추세"라고 부르게 된다. 실제로 M5~M7 동안 그렇게 그렸고, 화면에는
+ * 그 사실이 각주로만 있었다.
+ *
+ * **분석 화면(FN-UI-05)과 같은 API 를 본다.** 두 화면이 다른 숫자를 말하면 어느 쪽이
+ * 맞는지 가릴 방법이 없다.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { fetchDistribution, fetchTimeseries } from '../api/analysis'
 import { fetchEvents } from '../api/events'
 import { fetchMetricsSummary } from '../api/metrics'
 import { subscribeDashboard } from '../api/system'
@@ -33,6 +38,7 @@ import {
   statusLabel,
   violationLabel,
 } from '../types/labels'
+import type { DistributionBucket, TimeseriesPoint } from '../types/contracts'
 import {
   UNMEASURED,
   formatRate,
@@ -42,37 +48,58 @@ import {
   metricsAddUp,
   type EventSummary,
   type MetricsSummary,
-  type ViolationType,
 } from '../types/system'
-import { STATUS_TONE, VIOLATION_LABEL } from '../types/labels'
+import { STATUS_TONE } from '../types/labels'
 import './overview.css'
 
 /** 「최근 이벤트」에 띄우는 건수. 시안 1페이지가 세 건을 보여준다. */
 const RECENT_LIMIT = 8
 
-/** 유형 분포·추세를 계산할 표본. 하루치를 다 끌어오지 않고 최근 것만 본다. */
-const SAMPLE_LIMIT = 200
+/** 「최근 이벤트」 목록만 이만큼 받는다. **집계에는 쓰지 않는다** — 집계는 §4.2 다. */
+const RECENT_FETCH = 20
+
+/** 추세 창(일). 시안 1페이지의 스파크라인이 한 주치다. */
+const TREND_DAYS = 7
 
 export default function OverviewPage() {
   const { status, connected, error: statusError } = useSystemStatus()
   const [summary, setSummary] = useState<MetricsSummary | null>(null)
   const [recent, setRecent] = useState<EventSummary[]>([])
+  const [trend, setTrend] = useState<TimeseriesPoint[]>([])
+  const [distribution, setDistribution] = useState<DistributionBucket[]>([])
   const [error, setError] = useState<string | null>(null)
 
-  const load = useCallback((signal?: AbortSignal) => {
-    // 지표와 목록을 함께 다시 읽는다. 한쪽만 갱신하면 "시정률 87%" 옆에 그 87%를
-    // 만든 이벤트가 없는 화면이 된다.
-    void Promise.all([fetchMetricsSummary(signal), fetchEvents({ limit: SAMPLE_LIMIT }, signal)])
-      .then(([nextSummary, list]) => {
-        setSummary(nextSummary)
-        setRecent(list.items)
-        setError(null)
-      })
-      .catch((cause: unknown) => {
-        if (signal?.aborted) return
-        setError(cause instanceof Error ? cause.message : String(cause))
-      })
+  /** 추세·분포가 보는 구간. 지금부터 `TREND_DAYS` 일 전까지다. */
+  const period = useMemo(() => {
+    const to = new Date()
+    const from = new Date(to.getTime() - TREND_DAYS * 24 * 3600 * 1000)
+    return { from: from.toISOString(), to: to.toISOString() }
   }, [])
+
+  const load = useCallback(
+    (signal?: AbortSignal) => {
+      // 넷을 함께 읽는다. 한쪽만 갱신하면 "시정률 87%" 옆에 그 87%를 만든 이벤트가
+      // 없는 화면이 된다.
+      void Promise.all([
+        fetchMetricsSummary(signal),
+        fetchEvents({ limit: RECENT_FETCH }, signal),
+        fetchTimeseries({ metric: 'violations', bucket: 'day', ...period }, signal),
+        fetchDistribution({ by: 'violation_type', ...period }, signal),
+      ])
+        .then(([nextSummary, list, points, buckets]) => {
+          setSummary(nextSummary)
+          setRecent(list.items)
+          setTrend(points.points)
+          setDistribution(buckets.buckets)
+          setError(null)
+        })
+        .catch((cause: unknown) => {
+          if (signal?.aborted) return
+          setError(cause instanceof Error ? cause.message : String(cause))
+        })
+    },
+    [period],
+  )
 
   useEffect(() => {
     const controller = new AbortController()
@@ -88,8 +115,18 @@ export default function OverviewPage() {
   // 알려주고 최근 목록의 정렬까지는 담고 있지 않다. 한 전이가 여러 메시지를 만들므로
   // 그 요청은 병합한다.
   const merged = useMergedRefresh(() => {
-    void fetchEvents({ limit: SAMPLE_LIMIT })
-      .then((list) => setRecent(list.items))
+    // 목록과 함께 추세·분포도 다시 읽는다. 지표 타일만 §5.3 `metric` 으로 즉시
+    // 갱신되고 그래프가 옛 값에 머물면, 같은 화면 안에서 두 숫자가 어긋난다.
+    void Promise.all([
+      fetchEvents({ limit: RECENT_FETCH }),
+      fetchTimeseries({ metric: 'violations', bucket: 'day', ...period }),
+      fetchDistribution({ by: 'violation_type', ...period }),
+    ])
+      .then(([list, points, buckets]) => {
+        setRecent(list.items)
+        setTrend(points.points)
+        setDistribution(buckets.buckets)
+      })
       .catch((cause: unknown) => {
         setError(cause instanceof Error ? cause.message : String(cause))
       })
@@ -108,9 +145,6 @@ export default function OverviewPage() {
       },
     })
   }, [merged])
-
-  const distribution = useMemo(() => violationCounts(recent), [recent])
-  const trend = useMemo(() => dailyCounts(recent), [recent])
 
   if (error && !summary) {
     return (
@@ -180,41 +214,49 @@ export default function OverviewPage() {
       <div className="overview__row">
         <section className="card overview__panel">
           <header className="overview__head">
-            <h2 className="card__title">위반 추세 · 최근 표본</h2>
-            <span className="overview__hint">일별 발생</span>
+            <h2 className="card__title">위반 추세</h2>
+            <span className="overview__hint">최근 {TREND_DAYS}일 · 일별 발생</span>
           </header>
           {trend.length === 0 ? (
-            <p className="card__note">표본이 없다. 이벤트가 쌓이면 그려진다.</p>
+            <p className="card__note">이 기간에 이벤트가 없다.</p>
           ) : (
             <Sparkline points={trend} />
           )}
           <p className="card__note">
-            최근 이벤트 {recent.length}건으로 그린 것이다. 기간 지표(<code>
-              GET /metrics/timeseries
-            </code>)는 분석 화면(FN-UI-05 · M8)과 함께 붙는다 — 없는 API 로 곡선을 지어내지
-            않는다.
+            <code>GET /metrics/timeseries</code>(<code>metric=violations</code> ·{' '}
+            <code>bucket=day</code>)가 낸 최근 {TREND_DAYS}일이다.{' '}
+            <strong>이벤트 목록으로 세지 않는다</strong> — 목록은 페이지 크기만큼만 담기므로
+            표본이 잘린 줄 모르고 「추세」라고 부르게 된다. 자세한 추이는{' '}
+            <Link to="/analysis">분석 화면</Link>에 있다.
           </p>
         </section>
 
         <section className="card overview__panel overview__panel--narrow">
           <header className="overview__head">
             <h2 className="card__title">유형 분포</h2>
-            <span className="overview__hint">최근 표본</span>
+            <span className="overview__hint">최근 {TREND_DAYS}일</span>
           </header>
-          {distribution.total === 0 ? (
-            <p className="card__note">표본이 없다.</p>
+          {distribution.length === 0 ? (
+            <p className="card__note">이 기간에 이벤트가 없다.</p>
           ) : (
             <ul className="dist">
-              {distribution.rows.map((row) => (
-                <li key={row.type} className="dist__row">
-                  <span className="dist__label">{VIOLATION_LABEL[row.type]}</span>
+              {distribution.map((bucket) => (
+                <li key={bucket.key} className="dist__row">
+                  {/* 서버가 라벨을 함께 내려주지만(§4.2) 부록 B 용어를 쓰는 표는 화면
+                      쪽에 있다 — 시안의 「중장비 근접」이 아니라 「지게차 근접」이다. */}
+                  <span className="dist__label">{violationLabel(bucket.key)}</span>
                   <span className="dist__bar">
                     <span
-                      className={`dist__fill dist__fill--${row.type}`}
-                      style={{ width: `${Math.round((row.count / distribution.max) * 100)}%` }}
+                      className={`dist__fill dist__fill--${bucket.key}`}
+                      /* `ratio` 는 전체 대비다. 막대는 **최댓값 기준**으로 그려야 작은
+                         항목이 보이므로 여기서만 다시 정규화한다. 서버가 건수 내림차순으로
+                         주므로 첫 항목이 최댓값이다. */
+                      style={{
+                        width: `${Math.round((bucket.count / distribution[0].count) * 100)}%`,
+                      }}
                     />
                   </span>
-                  <span className="dist__count">{row.count}</span>
+                  <span className="dist__count">{bucket.count}</span>
                 </li>
               ))}
             </ul>
@@ -375,14 +417,14 @@ function HealthRow(props: { name: string; tone: Tone; value: string }) {
 }
 
 /** 시안 1페이지의 면적 그래프. 표본이 적어도 모양이 무너지지 않게 정규화한다. */
-function Sparkline({ points }: { points: { day: string; count: number }[] }) {
-  const max = Math.max(...points.map((point) => point.count), 1)
+function Sparkline({ points }: { points: TimeseriesPoint[] }) {
+  const max = Math.max(...points.map((point) => point.value), 1)
   const width = 100
   const height = 40
   const step = points.length > 1 ? width / (points.length - 1) : 0
   const coords = points.map((point, index) => {
     const x = points.length > 1 ? index * step : width / 2
-    const y = height - (point.count / max) * (height - 4) - 2
+    const y = height - (point.value / max) * (height - 4) - 2
     return `${x.toFixed(2)},${y.toFixed(2)}`
   })
   const line = coords.join(' ')
@@ -396,46 +438,15 @@ function Sparkline({ points }: { points: { day: string; count: number }[] }) {
       </svg>
       <div className="spark__axis">
         {points.map((point) => (
-          <span key={point.day}>{point.day.slice(5)}</span>
+          // `t` 는 버킷 시작이고 형식은 `bucket` 에 따라 다르다(§4.2). 여기는 `day` 라
+          // `YYYY-MM-DD` 이므로 월-일만 잘라 쓴다. 표본 크기는 툴팁에 남긴다.
+          <span key={point.t} title={`${point.t} · ${point.n}건`}>
+            {point.t.slice(5)}
+          </span>
         ))}
       </div>
     </div>
   )
-}
-
-// ---------------------------------------------------------------------------
-// 표본 계산 — 없는 API 를 대신하는 것이 아니라, 가진 목록으로 셀 수 있는 것만 센다
-// ---------------------------------------------------------------------------
-
-function violationCounts(events: EventSummary[]): {
-  rows: { type: ViolationType; count: number }[]
-  total: number
-  max: number
-} {
-  const counts = new Map<ViolationType, number>()
-  for (const event of events) {
-    counts.set(event.violation_type, (counts.get(event.violation_type) ?? 0) + 1)
-  }
-  const rows = [...counts.entries()]
-    .map(([type, count]) => ({ type, count }))
-    .sort((a, b) => b.count - a.count)
-  return {
-    rows,
-    total: events.length,
-    max: Math.max(...rows.map((row) => row.count), 1),
-  }
-}
-
-function dailyCounts(events: EventSummary[]): { day: string; count: number }[] {
-  const counts = new Map<string, number>()
-  for (const event of events) {
-    const day = event.detected_at.slice(0, 10)
-    counts.set(day, (counts.get(day) ?? 0) + 1)
-  }
-  return [...counts.entries()]
-    .map(([day, count]) => ({ day, count }))
-    .sort((a, b) => a.day.localeCompare(b.day))
-    .slice(-7)
 }
 
 function rateTone(rate: number | null): Tone {
