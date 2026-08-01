@@ -18,7 +18,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { askAssistant } from '../api/analysis'
+import { askAssistant, clearAssistant } from '../api/analysis'
 import type {
   ChatResponse,
   ChatRoute,
@@ -59,16 +59,54 @@ const EXAMPLES = [
 
 type Turn = { question: string; answer: ChatResponse | null; error: string | null }
 
+/** 탭 안에서 대화를 들고 있는 자리. **`localStorage` 가 아니다** — 다른 탭·다음 날의
+ * 대화까지 살아나면 서버 이력(상한 8턴)과 어긋나 화면만 옛 말을 기억하게 된다. */
+const STORE_KEY = 'aegis.assistant'
+
+function loadStored(): { sessionId: string; turns: Turn[] } {
+  try {
+    const raw = sessionStorage.getItem(STORE_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw) as { sessionId: string; turns: Turn[] }
+      if (parsed.sessionId && Array.isArray(parsed.turns)) return parsed
+    }
+  } catch {
+    // 저장 형식이 바뀌었거나 깨졌다. 새 세션으로 시작한다 — 대화 이력은 놓쳐도
+    // 안전에 영향이 없다.
+  }
+  return { sessionId: `s-${Date.now().toString(36)}`, turns: [] }
+}
+
 export default function AssistantPage() {
+  const stored = useRef(loadStored())
   const [message, setMessage] = useState('')
-  const [turns, setTurns] = useState<Turn[]>([])
+  const [turns, setTurns] = useState<Turn[]>(stored.current.turns)
   const [busy, setBusy] = useState(false)
-  const sessionId = useRef(`s-${Date.now().toString(36)}`)
+  const sessionId = useRef(stored.current.sessionId)
   const endRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [turns])
+
+  // 화면을 떠나도 남는다. 「생각하는 중」인 턴은 저장하지 않는다 — 돌아왔을 때
+  // 영영 답이 오지 않는 말풍선이 남는다.
+  useEffect(() => {
+    const settled = turns.filter((turn) => turn.answer !== null || turn.error !== null)
+    sessionStorage.setItem(
+      STORE_KEY,
+      JSON.stringify({ sessionId: sessionId.current, turns: settled }),
+    )
+  }, [turns])
+
+  const clear = () => {
+    void clearAssistant(sessionId.current)
+    // ★ **세션 ID 도 새로 만든다.** 같은 ID 를 쓰면 서버가 지우지 못한 이력이 남아
+    //   있을 때 새 대화가 옛 화제를 이어받는다.
+    sessionId.current = `s-${Date.now().toString(36)}`
+    setTurns([])
+    sessionStorage.removeItem(STORE_KEY)
+  }
 
   const ask = async (text: string) => {
     const trimmed = text.trim()
@@ -98,7 +136,17 @@ export default function AssistantPage() {
   return (
     <div className="analysis analysis--chat">
       <section className="card chat">
-        <h2 className="card__title">챗봇</h2>
+        <div className="analysis__head">
+          <h2 className="card__title">챗봇</h2>
+          <button
+            type="button"
+            className="btn btn--ghost"
+            onClick={clear}
+            disabled={busy || turns.length === 0}
+          >
+            대화 지우기
+          </button>
+        </div>
         <div className="chat__log">
           {turns.length === 0 && (
             <p className="card__note">
@@ -147,8 +195,9 @@ export default function AssistantPage() {
           </button>
         </form>
         <p className="card__note">
-          세션 {sessionId.current} · 서버는 대화 이력을 들고 있지 않다. 질의 하나가 곧
-          한 번의 조회다.
+          세션 {sessionId.current} · 서버가 이 세션의 최근 대화를 기억하므로 「각각은?」
+          처럼 앞 질문에 이어 물을 수 있다. 화면을 떠나도 대화는 남고,{' '}
+          <strong>「대화 지우기」로만 비운다.</strong>
         </p>
       </section>
     </div>

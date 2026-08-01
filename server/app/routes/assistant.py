@@ -46,21 +46,34 @@ REPORT_ESTIMATED_SEC = 20
     responses={503: {"model": ErrorResponse}},
 )
 async def chat(request: Request, body: ChatRequest) -> ChatResponse:
-    """§4.4 — 질의 하나. `route` 로 어느 경로가 실제로 돌았는지 알린다."""
+    """§4.4 — 질의 하나. `route` 로 어느 경로가 실제로 돌았는지 알린다.
+
+    ★ **집계를 여기서 미리 만들지 않는다.** 전에는 라우팅 전에 `summary()` 를 한 번
+    불러 넘겼는데, 그 값은 **항상 오늘치**였다 — 「이번 주 위반 몇 건」이라고 물어도
+    오늘 숫자가 나갔고 문장은 그럴듯해서 아무도 알아채지 못했다. 이제 서비스가
+    질문에서 기간을 뽑아 그 구간으로 집계한다.
+    """
     service = _ai(request)
-    events = _events(request)
     try:
-        # 통계 경로가 아니어도 집계는 미리 만든다 — 라우팅 결과에 따라 두 번 왕복하는
-        # 것보다 한 번 읽는 편이 낫고, 이 질의는 실시간 경로가 아니다.
-        summary = await events.summary()
-    except (OSError, RuntimeError) as exc:
-        log.warning("챗봇 통계를 계산하지 못했다: %s", exc)
-        raise _error("지표를 계산하지 못했습니다", str(exc)) from exc
-    try:
-        return await service.chat(body, summary)
+        return await service.chat(body)
     except (OSError, RuntimeError) as exc:
         log.warning("챗봇 응답이 실패했다: %s", exc)
         raise _error("답변을 만들지 못했습니다", str(exc)) from exc
+
+
+@router.delete(
+    "/assistant/chat/{session_id}",
+    status_code=204,
+    responses={503: {"model": ErrorResponse}},
+)
+async def clear_chat(request: Request, session_id: str) -> None:
+    """세션 하나의 대화를 지운다. 화면의 「대화 지우기」가 부른다.
+
+    §4.4 에 없는 경로다. `session_id` 를 받아 서버가 대화를 들고 있게 된 이상 그것을
+    비울 자리도 있어야 한다 — 없으면 사용자가 화제를 바꾸고 싶을 때 브라우저를 새로
+    열어야 한다. (`docs/INDEX.md` 「명세서 확인 필요」)
+    """
+    _ai(request).forget(session_id)
 
 
 @router.post(

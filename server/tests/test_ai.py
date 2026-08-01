@@ -39,7 +39,13 @@ from server.ai.incidents import IncidentMatcher, load_incidents
 from server.ai.ports import CloudError
 from server.ai.regulations import load_regulations, regulations_for
 from server.ai.search import parse_query
-from server.ai.service import ANOMALY_THRESHOLD, MIN_POOL, AiService, time_bucket
+from server.ai.service import (
+    ANOMALY_THRESHOLD,
+    HISTORY_TURNS,
+    MIN_POOL,
+    AiService,
+    time_bucket,
+)
 from server.ai.vectors import anomaly_score, cosine_similarity
 from server.domain.cloud_state import CloudRuntime
 
@@ -528,13 +534,31 @@ def _summary() -> MetricsSummary:
     )
 
 
+def _chat_service(
+    summary: MetricsSummary | None = None,
+) -> tuple[AiService, _Events, list[tuple[Any, Any]]]:
+    """통계 경로를 볼 수 있는 최소 조립. 어느 구간으로 집계했는지 기록한다."""
+    asked: list[tuple[Any, Any]] = []
+    fixed = summary or _summary()
+
+    async def stats(*, from_: datetime | None = None, to: datetime | None = None) -> MetricsSummary:
+        asked.append((from_, to))
+        return fixed
+
+    events = _Events([])
+    service = AiService(
+        clock=FakeClock(NOW),
+        guard=CloudGuard(CloudRuntime(), FakeClock(NOW)),
+        events=events,
+        report_stats=stats,
+    )
+    return service, events, asked
+
+
 def test_sql_answer_works_without_a_cloud() -> None:
     """★ §7 가용성 — 인터넷이 끊겨도 SQL 통계는 답이 나와야 한다."""
-    store = _AiStore([])
-    service, _ = _service(store, None)
-    response = asyncio.run(
-        service.chat(ChatRequest(session_id="s1", message="이번 주 위반 몇 건"), _summary())
-    )
+    service, _, _ = _chat_service()
+    response = asyncio.run(service.chat(ChatRequest(session_id="s1", message="이번 주 위반 몇 건")))
     assert response.route == "sql"
     assert "87%" in response.answer
     assert "판정 불가 5%" in response.answer, "시정률과 판정 불가율은 항상 병기한다"
@@ -546,14 +570,87 @@ def test_sql_answer_works_without_a_cloud() -> None:
 
 def test_sql_table_keeps_null_as_null() -> None:
     """★ 표의 `null` 을 `–` 로 바꾸지 않는다 — 그 판단은 화면이 한다(§4.4 셀 타입)."""
-    store = _AiStore([])
-    service, _ = _service(store, None)
     empty = _summary().model_copy(update={"correction_rate": None, "undetermined_rate": None})
-    response = asyncio.run(service.chat(ChatRequest(session_id="s1", message="시정률 통계"), empty))
+    service, _, _ = _chat_service(empty)
+    response = asyncio.run(service.chat(ChatRequest(session_id="s1", message="시정률 통계")))
     table = response.attachments[0]
     assert isinstance(table, TableAttachment)
     assert table.rows[0] == ["방송 후 시정률 (%)", None]
     assert "–" in response.answer
+
+
+# --------------------------------------------------------------------------
+# FN-AI-08 · 대화 흐름 — `session_id` 가 실제로 일한다
+# --------------------------------------------------------------------------
+
+
+def test_question_period_reaches_the_aggregation() -> None:
+    """★ 「이번 주」라고 물으면 이번 주로 집계한다.
+
+    전에는 라우터가 `summary()` 를 인자 없이 불러 **항상 오늘치**를 넘겼다. 문장은
+    그럴듯하고 숫자만 틀려서 아무도 알아채지 못한다 — 지표 시스템에서 가장 나쁜 종류의
+    결함이다.
+    """
+    service, _, asked = _chat_service()
+    asyncio.run(service.chat(ChatRequest(session_id="s1", message="이번 주 위반 몇 건")))
+    from_, _to = asked[-1]
+    assert from_ is not None, "기간이 집계까지 닿지 않았다"
+    assert (NOW - from_).days >= 6, f"이번 주가 아니라 {from_} 부터로 집계했다"
+
+
+def test_today_is_the_default_period() -> None:
+    service, _, asked = _chat_service()
+    asyncio.run(service.chat(ChatRequest(session_id="s1", message="위반 건수 알려줘")))
+    assert asked[-1] == (None, None), "기간 표현이 없으면 오늘이다"
+
+
+def test_follow_up_inherits_the_period() -> None:
+    """★ 「이번 주 …」 다음의 「각각 무슨 위반이야?」는 **같은 기간**이어야 한다.
+
+    물려받지 않으면 같은 대화 안에서 두 숫자가 조용히 어긋난다.
+    """
+    service, _, asked = _chat_service()
+    asyncio.run(service.chat(ChatRequest(session_id="s1", message="이번 주 위반 몇 건")))
+    asyncio.run(service.chat(ChatRequest(session_id="s1", message="각각 무슨 위반이야?")))
+    assert asked[0] == asked[1], f"기간이 바뀌었다: {asked}"
+
+
+def test_follow_up_stays_on_the_statistics_route() -> None:
+    """★ 통계를 이어 묻는데 갑자기 장면 검색으로 새면 안 된다 — 실제로 그랬다."""
+    service, _, _ = _chat_service()
+    first = asyncio.run(service.chat(ChatRequest(session_id="s1", message="이번 주 위반 몇 건")))
+    # 「더 알려줘」에는 세 경로 어느 쪽 신호도 없다 — 앞 대화가 없었다면 `vector` 다.
+    second = asyncio.run(service.chat(ChatRequest(session_id="s1", message="더 알려줘")))
+    assert first.route == "sql"
+    assert second.route == "sql"
+
+
+def test_sessions_do_not_leak_into_each_other() -> None:
+    """다른 사람의 대화가 내 후속 질의의 맥락이 되면 안 된다."""
+    service, _, _ = _chat_service()
+    asyncio.run(service.chat(ChatRequest(session_id="s1", message="이번 주 위반 몇 건")))
+    other = asyncio.run(service.chat(ChatRequest(session_id="s2", message="더 알려줘")))
+    # s2 에는 앞 대화가 없으므로 기본 경로로 간다.
+    assert other.route == "vector"
+
+
+def test_forget_clears_the_session() -> None:
+    """화면의 「대화 지우기」. 지운 뒤의 후속 질의는 맥락을 물려받지 않는다."""
+    service, _, _ = _chat_service()
+    asyncio.run(service.chat(ChatRequest(session_id="s1", message="이번 주 위반 몇 건")))
+    service.forget("s1")
+    after = asyncio.run(service.chat(ChatRequest(session_id="s1", message="더 알려줘")))
+    assert after.route == "vector"
+
+
+def test_history_is_bounded() -> None:
+    """경계 없는 dict 를 서버에 두지 않는다 — 며칠 돌면 계속 자란다."""
+    service, _, _ = _chat_service()
+    for index in range(HISTORY_TURNS + 5):
+        asyncio.run(service.chat(ChatRequest(session_id="s1", message=f"위반 건수 {index}")))
+    # 비공개 필드를 직접 본다 — 상한은 **바깥에서 관측할 수 없는 성질**이라
+    # 행동으로만 확인하려면 서버를 며칠 돌려야 한다.
+    assert len(service._history["s1"]) == HISTORY_TURNS
 
 
 def test_briefing_says_it_could_not_look_when_there_is_no_frame() -> None:
@@ -590,6 +687,7 @@ class _Events:
     def __init__(self, rows: list[tuple[Any, float | None, str | None]]) -> None:
         self._rows = rows
         self.last: dict[str, Any] = {}
+        self.window: tuple[Any, Any] | None = None
 
     async def get(self, event_id: str) -> EventDetail | None:
         del event_id
@@ -601,6 +699,10 @@ class _Events:
     async def search_events(self, **kwargs: Any) -> list[tuple[Any, float | None, str | None]]:
         self.last = kwargs
         return self._rows
+
+    async def aggregate_rows(self, from_: Any, to: Any) -> list[Any]:
+        self.window = (from_, to)
+        return []
 
 
 def test_structured_query_never_builds_a_vector() -> None:

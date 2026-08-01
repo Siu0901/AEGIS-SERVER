@@ -20,7 +20,7 @@ import type {
   SceneSearchRequest,
   SceneSearchResponse,
 } from '../types/contracts'
-import { getJson, queryString, sendJson } from './client'
+import { API_BASE, getJson, queryString, sendJson } from './client'
 
 /** §4.2 `GET /metrics/timeseries` — 시정률 추이(FN-UI-05). */
 export async function fetchTimeseries(
@@ -70,6 +70,15 @@ export async function askAssistant(
   const answer = await sendJson<ChatResponse>('POST', '/assistant/chat', body, signal)
   if (!answer) throw new Error('답변이 비어 있다')
   return answer
+}
+
+/** 세션 하나의 대화를 서버에서 지운다. 화면의 「대화 지우기」가 부른다. */
+export async function clearAssistant(sessionId: string): Promise<void> {
+  // 실패해도 화면은 비운다 — 사람이 누른 「지우기」가 서버 사정으로 안 먹으면
+  // 그게 더 이상하다. 서버 이력은 상한이 있어 곧 밀려난다.
+  await fetch(`${API_BASE}/assistant/chat/${encodeURIComponent(sessionId)}`, {
+    method: 'DELETE',
+  }).catch(() => undefined)
 }
 
 /** §4.4 `POST /assistant/briefing` — 현장 브리핑(FN-AI-09). */

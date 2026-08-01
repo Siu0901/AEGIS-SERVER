@@ -24,6 +24,7 @@ import asyncio
 import contextlib
 import logging
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
@@ -47,14 +48,16 @@ from aegis_contracts import (
     SceneSearchResponse,
     TableAttachment,
 )
+from aegis_contracts.enums import ChatRoute
 from aegis_vision.clock import Clock
 from server.ai.assistant import route_of
 from server.ai.graph import AnalysisInput, AnalysisResult, build_analysis_graph
 from server.ai.guard import CloudGuard
 from server.ai.incidents import IncidentMatcher
 from server.ai.ports import Embedder, Llm
-from server.ai.search import parse_query
+from server.ai.search import ParsedQuery, parse_query
 from server.ai.vectors import anomaly_score
+from server.domain.aggregates import distribution
 
 __all__ = ["ANOMALY_THRESHOLD", "AiService", "time_bucket"]
 
@@ -89,6 +92,24 @@ ANOMALY_K = 5
 DEFAULT_TOP_K = 12
 MAX_TOP_K = 50
 
+#: 세션 하나가 기억하는 최근 턴 수. 프롬프트에 실을 맥락이자 후속 질의 판단의 근거다.
+#: 넉넉히 두면 프롬프트가 길어지고 오래된 화제가 답변을 끌고 간다.
+HISTORY_TURNS = 8
+
+#: 동시에 기억하는 세션 수. 넘으면 오래된 것부터 버린다 — 챗봇 이력은 놓쳐도 안전에
+#: 영향이 없다(다시 물으면 된다). 경계 없는 dict 를 서버에 두지 않는다.
+HISTORY_SESSIONS = 50
+
+
+@dataclass(frozen=True, slots=True)
+class ChatTurn:
+    """대화 한 턴. **답변 전문이 아니라 요지만** 들고 있으면 될 것 같지만 그렇지 않다 —
+    「각각 무슨 위반이야?」가 무엇을 가리키는지는 직전 답변의 내용에 있다."""
+
+    question: str
+    route: ChatRoute
+    answer: str
+
 
 def time_bucket(at: datetime) -> str:
     """정상 풀을 나누는 시간대 키(기능명세서 §4.5 「시간대별로 정상 풀을 분리 축적」).
@@ -117,6 +138,10 @@ class EventReader(Protocol):
         violation_type: str | None,
         limit: int,
     ) -> list[tuple[EventSummary, float | None, str | None]]: ...
+
+    async def aggregate_rows(self, from_: Any, to: Any) -> list[Any]:
+        """유형별 내역의 원천(§4.2 `distribution` 과 같은 행). 분석 화면과 같은 코드를 쓴다."""
+        ...
 
 
 class AiStore(Protocol):
@@ -197,6 +222,9 @@ class AiService:
         # 다시 요청하면 되고, 클립 예약(FN-REC-03)처럼 놓치면 증거가 사라지는 것이
         # 아니다. DB 테이블을 늘리는 대신 그 사실을 여기 적어 둔다.
         self._reports: dict[str, dict[str, Any]] = {}
+        # §4.4 `session_id` 별 대화. **이것이 없으면 후속 질의가 성립하지 않는다** —
+        # 「각각 무슨 위반이야?」가 무엇을 가리키는지 알 방법이 사라진다.
+        self._history: dict[str, list[ChatTurn]] = {}
         self._graph = build_analysis_graph(
             embed=self._embed_keyframe,
             match=self._incidents.match,
@@ -361,30 +389,112 @@ class AiService:
 
     # -- FN-AI-08 · 09 · 챗봇과 브리핑 -----------------------------------
 
-    async def chat(self, request: ChatRequest, summary: MetricsSummary) -> ChatResponse:
+    async def chat(self, request: ChatRequest) -> ChatResponse:
         """§4.4 `POST /assistant/chat` — 라우팅 후 해당 경로만 실행한다.
 
-        `summary` 는 라우터가 `GET /metrics/summary` 와 **같은 코드로** 만든 집계다.
-        서비스가 지표 저장소를 또 들고 있으면 같은 숫자를 두 곳에서 만들게 되고,
-        그때 챗봇과 개요 화면이 서로 다른 시정률을 말한다.
-        """
-        routing = route_of(request.message)
-        if routing.route == "sql":
-            return await self._answer_sql(request, summary)
-        if routing.route == "vision":
-            return await self._answer_vision(routing.cam_id)
-        return await self._answer_vector(request)
+        ★ **`session_id` 를 실제로 쓴다.** 명세서가 그 필드를 준 이유가 이것이다 —
+        서버가 세션별 대화를 들고 있어야 「이번 주 위반 몇 건」 다음의 「각각 무슨
+        위반이야?」가 앞 질문에 이어진다. 들고 있지 않던 동안 그 후속 질문은 장면
+        검색으로 새고 답변은 매번 같은 오늘치 숫자였다.
 
-    async def _answer_sql(self, request: ChatRequest, summary: MetricsSummary) -> ChatResponse:
+        ★ **기간도 질문에서 뽑는다.** 「이번 주」라고 물었는데 오늘치로 답하면 숫자가
+        틀린 것이고, 문장은 그럴듯해서 아무도 알아채지 못한다.
+        """
+        history = self._history.get(request.session_id, [])
+        routing = route_of(request.message, history[-1].route if history else None)
+        if routing.route == "sql":
+            response = await self._answer_sql(request, history)
+        elif routing.route == "vision":
+            response = await self._answer_vision(routing.cam_id)
+        else:
+            response = await self._answer_vector(request)
+        self._remember(request.session_id, request.message, response)
+        return response
+
+    def _remember(self, session_id: str, question: str, response: ChatResponse) -> None:
+        """대화 한 턴을 기억한다. **경계가 있다** — 세션 수도 턴 수도 무한하지 않다.
+
+        오래된 세션을 지우지 않으면 서버가 며칠 돌 때 이 dict 가 계속 자란다. 챗봇
+        이력은 놓쳐도 안전에 영향이 없으므로(다시 물으면 된다) 상한을 두고 버린다.
+        """
+        turns = self._history.setdefault(session_id, [])
+        turns.append(ChatTurn(question=question, route=response.route, answer=response.answer))
+        del turns[:-HISTORY_TURNS]
+        while len(self._history) > HISTORY_SESSIONS:
+            self._history.pop(next(iter(self._history)))
+
+    def forget(self, session_id: str) -> None:
+        """세션 하나를 지운다. 화면의 「대화 지우기」가 부른다."""
+        self._history.pop(session_id, None)
+
+    def _window(
+        self,
+        parsed: ParsedQuery,
+        history: list[ChatTurn],
+    ) -> tuple[tuple[datetime | None, datetime | None], str]:
+        """질문에서 뽑은 기간과 그 이름. 없으면 **오늘**이다.
+
+        ★ 기간 표현이 없는 후속 질의(「각각 무슨 위반이야?」)는 **앞 질문의 기간을
+        물려받아야** 한다. 그러지 않으면 「이번 주 몇 건」 다음 질문이 조용히 오늘치로
+        바뀌어, 같은 대화 안에서 두 숫자가 어긋난다.
+        """
+        if parsed.from_ is not None or parsed.to is not None:
+            return (parsed.from_, parsed.to), _window_label(parsed.from_, parsed.to)
+        for turn in reversed(history):
+            previous = parse_query(turn.question, None, self._clock)
+            if previous.from_ is not None or previous.to is not None:
+                return (
+                    (previous.from_, previous.to),
+                    _window_label(previous.from_, previous.to),
+                )
+        return (None, None), "오늘"
+
+    async def _summary_for(self, window: tuple[datetime | None, datetime | None]) -> MetricsSummary:
+        """그 구간의 집계. **`GET /metrics/summary` 와 같은 함수**를 부른다."""
+        if self._report_stats is None:
+            msg = "지표 집계가 연결되지 않았다"
+            raise RuntimeError(msg)
+        return await self._report_stats(from_=window[0], to=window[1])
+
+    async def _breakdown_for(
+        self, window: tuple[datetime | None, datetime | None]
+    ) -> list[tuple[str, int]]:
+        """유형별 (이름, 건수). 요약에는 이 축이 없어서 따로 센다.
+
+        집계는 `server/domain/aggregates.distribution` 이 한다 — 분석 화면과 **같은
+        코드**다. 여기서 다시 세면 두 화면이 다른 분포를 말하게 된다.
+        """
+        rows = getattr(self._events, "aggregate_rows", None)
+        if rows is None:
+            return []
+        try:
+            buckets = distribution(await rows(window[0], window[1]), by="violation_type")
+        except Exception:
+            log.warning("유형별 내역을 세지 못했다 — 요약만으로 답한다")
+            return []
+        return [(bucket.label, bucket.count) for bucket in buckets]
+
+    async def _answer_sql(self, request: ChatRequest, history: list[ChatTurn]) -> ChatResponse:
         """통계 답변. **숫자는 SQL 이 만들고 LLM 은 문장만 만든다.**
 
         표(`kind = "table"`)를 함께 실어 사람이 문장과 원본을 대조할 수 있게 한다 —
         문장만 주면 그 숫자가 어디서 왔는지 확인할 방법이 없다.
 
+        ★ **질문의 기간과 유형별 내역을 함께 낸다.** 요약만으로는 「각각 무슨
+        위반이야?」에 답할 수 없다 — `total_violations` 에는 유형이 없다.
+
         클라우드가 없으면 서버가 조립한 문장을 그대로 쓴다 — §7 가용성이 「인터넷 단절
         시 SQL 통계 정상 동작」을 요구한다.
         """
-        sentence = _summary_sentence(summary)
+        # ① 기간을 질문에서 뽑는다. 검색과 **같은 파서**를 쓴다 — 「지난주」의 뜻이
+        #    두 화면에서 달라지면 안 된다.
+        parsed = parse_query(request.message, None, self._clock)
+        window, label = self._window(parsed, history)
+        summary = await self._summary_for(window)
+        breakdown = await self._breakdown_for(window)
+        sentence = _summary_sentence(summary, label)
+        if breakdown:
+            sentence += " 유형별 — " + " · ".join(f"{name} {count}건" for name, count in breakdown)
         table = TableAttachment(
             kind="table",
             columns=["항목", "값"],
@@ -407,17 +517,26 @@ class AiService:
                 ["쓰러짐", summary.fall_events],
                 ["평균 시정 시간(초)", summary.avg_resolution_sec],
             ],
-            label=f"{summary.period} 집계",
+            # 내부 라벨(`custom`)이 아니라 사람이 읽는 기간을 쓴다.
+            label=f"{label} 집계",
         )
         answer = sentence
         if self._llm is not None:
             written = await self._guard.call(
                 "통계 문장",
                 self._llm.generate(
-                    "아래는 안전 관제 시스템이 SQL 로 집계한 사실이다. "
-                    "숫자를 바꾸거나 새로 만들지 말고 2~3문장의 한국어로 다듬어라. "
-                    "시정률을 말할 때는 판정 불가율을 반드시 함께 적는다.\n\n"
-                    f"질문: {request.message}\n집계: {sentence}\n"
+                    "너는 안전 관제 시스템의 통계 응답을 다듬는다.\n"
+                    "아래 「집계」는 SQL 이 낸 사실이다.\n\n"
+                    f"{_history_block(history)}"
+                    f"이번 질문: {request.message}\n"
+                    f"집계({label}): {sentence}\n\n"
+                    "규칙\n"
+                    "1. 숫자를 바꾸거나 새로 만들지 마라. 집계에 없는 것은 답하지 마라.\n"
+                    "2. 시정률을 말할 때는 판정 불가율을 반드시 함께 적는다.\n"
+                    "3. **어느 기간의 숫자인지 밝힌다.**\n"
+                    "4. 앞 대화가 있으면 그것에 이어서 답한다 — 같은 말을 반복하지 말고\n"
+                    "   이번 질문이 묻는 것만 답해라.\n"
+                    "5. 2~4문장의 한국어로 쓴다.\n"
                 ),
             )
             if written:
@@ -751,6 +870,27 @@ def _summary_sentence(summary: MetricsSummary, period: str | None = None) -> str
         f"방송 없음 {summary.suppressed} · 쓰러짐 {summary.fall_events}건, "
         f"평균 시정 {summary.avg_resolution_sec}초."
     )
+
+
+def _history_block(history: list[ChatTurn]) -> str:
+    """프롬프트에 실을 앞 대화. 없으면 빈 문자열이다.
+
+    ★ **답변까지 함께 싣는다.** 질문만 실으면 「각각 무슨 위반이야?」가 무엇을
+    가리키는지 모델이 알 수 없다 — 가리키는 대상은 직전 **답변**에 있다.
+    """
+    if not history:
+        return ""
+    lines = [f"- 사람: {turn.question}\n  시스템: {turn.answer}" for turn in history]
+    return "앞 대화(오래된 것부터):\n" + "\n".join(lines) + "\n\n"
+
+
+def _window_label(from_: datetime | None, to: datetime | None) -> str:
+    """사람이 읽는 기간 이름. **내부 라벨(`custom`)을 쓰지 않는다.**"""
+    if from_ is None and to is None:
+        return "오늘"
+    start = from_.astimezone(UTC).date().isoformat() if from_ else "처음"
+    end = to.astimezone(UTC).date().isoformat() if to else "지금"
+    return f"{start} ~ {end}"
 
 
 def _percent(value: float | None) -> str:

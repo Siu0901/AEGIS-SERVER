@@ -38,12 +38,19 @@ ROUTE_WORDS: tuple[tuple[ChatRoute, tuple[str, ...]], ...] = (
         (
             "몇 건", "몇건", "건수", "통계", "비율", "시정률", "평균", "추이",
             "얼마나", "총", "집계", "순위", "가장 많",
+            # 「각각 무슨 위반이야?」 — 유형별 내역도 집계다. 이 말들이 없으면
+            # 그 질문이 장면 검색으로 새고, 사람은 통계를 물었는데 클립을 받는다.
+            "무슨 위반", "어떤 위반", "위반 종류", "유형", "내역", "각각", "종류",
         ),
     ),
     ("vector", ("장면", "찾아", "검색", "비슷", "영상", "클립", "보여")),
 )  # fmt: skip
 
 _CAM_RE = re.compile(r"(\d+)\s*번?\s*(?:카메라|캠|cam)", re.IGNORECASE)
+
+#: 이보다 짧으면서 아무 신호도 없는 질의는 **앞 질문에 이어지는 말**로 본다.
+#: 「각각은?」 · 「더 자세히」 · 「그럼 어제는」 같은 것들이다.
+_FOLLOW_UP_MAX_LEN = 20
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,16 +62,23 @@ class Routing:
     """`vision` 경로에서 어느 카메라를 볼지. 없으면 전체를 훑는다."""
 
 
-def route_of(message: str) -> Routing:
+def route_of(message: str, previous: ChatRoute | None = None) -> Routing:
     """질의 하나를 세 경로 중 하나로 보낸다. API명세서 §4.4 `route`
 
-    **기본은 `vector` 다.** 무엇을 묻는지 모르겠으면 장면을 찾아 보여주는 쪽이
-    통계를 지어내는 것보다 낫다 — 틀린 그림은 사람이 바로 알아보지만 틀린 숫자는
-    그대로 보고서에 들어간다.
+    ★ **앞 대화를 본다.** 신호가 없는 짧은 후속 질의(「각각은?」 · 「그럼 어제는」)는
+    앞 질문과 같은 경로로 보낸다. 그러지 않으면 「이번 주 위반 몇 건」 다음의
+    「각각 무슨 위반이야?」가 기본값인 장면 검색으로 새고, 사람은 통계를 이어 묻다가
+    갑자기 클립을 받는다 — 실제로 그랬다.
+
+    **기본은 `vector` 다.** 무엇을 묻는지 모르겠고 이어지는 말도 아니면 장면을 찾아
+    보여주는 쪽이 통계를 지어내는 것보다 낫다 — 틀린 그림은 사람이 바로 알아보지만
+    틀린 숫자는 그대로 보고서에 들어간다.
     """
     cam = _CAM_RE.search(message)
     cam_id = int(cam.group(1)) if cam else None
     for route, words in ROUTE_WORDS:
         if any(word in message for word in words):
             return Routing(route=route, cam_id=cam_id)
+    if previous is not None and len(message.strip()) <= _FOLLOW_UP_MAX_LEN:
+        return Routing(route=previous, cam_id=cam_id)
     return Routing(route="vector", cam_id=cam_id)
