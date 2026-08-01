@@ -26,6 +26,7 @@ import {
   requestWeeklyReport,
   type WeeklyReport,
 } from '../api/analysis'
+import { ANOMALY_KEEP, anomalyTone, fetchAnomalies, type AnomalyItem } from '../api/anomalies'
 import { fetchMetricsSummary } from '../api/metrics'
 import type {
   DistributionBucket,
@@ -33,7 +34,7 @@ import type {
   RepeatItem,
   TimeseriesPoint,
 } from '../types/contracts'
-import { stamp, violationLabel } from '../types/labels'
+import { cameraName, stamp, violationLabel } from '../types/labels'
 import { formatRate, formatRatePair, type MetricsSummary } from '../types/system'
 import './analysis.css'
 
@@ -58,6 +59,7 @@ export default function AnalysisPage() {
   const [byHour, setByHour] = useState<DistributionBucket[]>([])
   const [byZone, setByZone] = useState<DistributionBucket[]>([])
   const [repeat, setRepeat] = useState<RepeatItem[]>([])
+  const [anomalies, setAnomalies] = useState<AnomalyItem[]>([])
   const [error, setError] = useState<string | null>(null)
   const [report, setReport] = useState<WeeklyReport | null>(null)
   const [reportBusy, setReportBusy] = useState(false)
@@ -75,7 +77,7 @@ export default function AnalysisPage() {
     setError(null)
     void (async () => {
       try {
-        const [rate, undet, types, hours, zones, repeats, totals] = await Promise.all([
+        const [rate, undet, types, hours, zones, repeats, totals, flags] = await Promise.all([
           fetchTimeseries({ metric: 'correction_rate', bucket: range.bucket, ...period }, signal),
           fetchTimeseries(
             { metric: 'undetermined_rate', bucket: range.bucket, ...period },
@@ -86,6 +88,7 @@ export default function AnalysisPage() {
           fetchDistribution({ by: 'zone', ...period }, signal),
           fetchRepeat({ days: range.days, limit: 10 }, signal),
           fetchMetricsSummary(signal),
+          fetchAnomalies({ days: range.days, limit: ANOMALY_KEEP }, signal),
         ])
         setCorrection(rate.points)
         setUndetermined(undet.points)
@@ -94,6 +97,7 @@ export default function AnalysisPage() {
         setByZone(zones.buckets)
         setRepeat(repeats.items)
         setSummary(totals)
+        setAnomalies(flags)
       } catch (cause) {
         if (signal.aborted) return
         setError(cause instanceof Error ? cause.message : String(cause))
@@ -248,6 +252,49 @@ export default function AnalysisPage() {
         <p className="card__note">
           ★ <strong>작업자 개인 단위 누적이 아니다</strong>(§4.2). 「추적」은 세션 안의
           추적 번호일 뿐 신원이 아니며 카메라를 벗어나면 유효하지 않다.
+        </p>
+      </section>
+
+      <section className="card">
+        <h2 className="card__title">이상 탐지 (최근 {range.days}일)</h2>
+        {anomalies.length === 0 ? (
+          <p className="card__note">
+            이 기간에 표시된 이상이 없다. 이상 탐지는 <strong>임베딩</strong>으로 돌기
+            때문에 클라우드가 꺼져 있으면 아예 판정하지 않는다 — 「이상 없음」과
+            「보지 않았다」는 다르다. 시스템 상태의 「클라우드」를 확인해라.
+          </p>
+        ) : (
+          <table className="analysis__table">
+            <thead>
+              <tr>
+                <th>시각</th>
+                <th>카메라</th>
+                <th>이상 점수</th>
+                <th>무엇이 달랐나</th>
+              </tr>
+            </thead>
+            <tbody>
+              {anomalies.map((item) => (
+                <tr key={item.anomaly_id}>
+                  <td>{stamp(item.detected_at)}</td>
+                  <td>{cameraName(item.cam_id)}</td>
+                  <td className="analysis__num">
+                    <span className={`badge badge--${anomalyTone(item.score)}`}>
+                      {item.score.toFixed(2)}
+                    </span>
+                  </td>
+                  {/* 설명은 클라우드가 살아 있을 때만 붙는다(§5.3 `note` 는 nullable).
+                      없다고 「이상 없음」이라고 쓰지 않는다 — 점수는 이미 넘었다. */}
+                  <td>{item.note ?? '설명 없음 (클라우드 미가용)'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <p className="card__note">
+          ★ <strong>경고 방송을 발동하지 않는다</strong>(FN-AI-04). 조명·날씨로도 점수가
+          오르므로 사람이 한 번 확인할 것으로만 표시한다. 점수는 §6.8 — 같은 시간대
+          정상 풀과의 k-최근접 평균 코사인 거리다.
         </p>
       </section>
 

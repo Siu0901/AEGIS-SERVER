@@ -230,11 +230,14 @@ def create_app(
     # SQL 통계는 클라우드와 무관하게 돌아야 하고, 화면이 「지능 기능 없음」과
     # 「서버가 그 경로를 아예 모른다」를 구분할 수 있어야 하기 때문이다.
     cloud_adapter = create_cloud()
+    # 정상 풀·이상 플래그 저장소. **라우터도 같은 것을 본다** — `GET /anomalies` 가
+    # 다른 경로로 읽으면 감지기가 쓴 것과 화면이 보는 것이 갈릴 수 있다.
+    ai_store = DbAiRepository(engine) if engine else None
     ai_service = AiService(
         clock=ticker,
         guard=CloudGuard(cloud, ticker, hub.broadcast),
         events=event_store,  # type: ignore[arg-type]
-        store=DbAiRepository(engine) if engine else None,
+        store=ai_store,
         frames=storage if isinstance(storage, RecClient) else None,
         embedder=cloud_adapter,
         llm=cloud_adapter,
@@ -364,6 +367,8 @@ def create_app(
     application.state.policies = policy_reader
     # FN-AI — 검색·챗봇·보고서 라우터가 읽는 자리.
     application.state.ai = ai_service
+    # FN-AI-04 — `GET /anomalies` 가 읽는 자리. 감지기와 **같은 저장소**다.
+    application.state.ai_store = ai_store
 
     application.include_router(system_routes.router, prefix=API_PREFIX)
     application.include_router(event_routes.router, prefix=API_PREFIX)

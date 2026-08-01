@@ -30,6 +30,8 @@ from .enums import (
 __all__ = [
     "AlertSound",
     "AlertSoundPatch",
+    "AnomalyItem",
+    "AnomalyListResponse",
     "BriefingRequest",
     "BriefingResponse",
     "CalibrationPoint",
@@ -419,6 +421,40 @@ class RepeatItem(SpecModel):
     count: int
     """기간 내 반복 횟수."""
     last_at: AwareDatetime
+
+
+class AnomalyItem(SpecModel):
+    """이상 탐지 플래그 하나. `GET /anomalies`
+
+    ★ **§5.3 `anomaly` 와 같은 사실이고 필드도 같다** — `type` 만 없다. 저쪽은 "방금
+    생겼다"는 통지이고 이쪽은 "그동안 무엇이 있었나"의 조회다. 두 경로가 다른 모양을
+    내면 화면이 같은 것을 두 번 그리게 된다.
+
+    ★ **경고 방송을 발동하지 않는 종류의 알림이다**(FN-AI-04). 조명·날씨로도 점수가
+    오르므로 위반과 같은 표시로 그리지 않는다 — 대시보드 '주의'다.
+    """
+
+    anomaly_id: int
+    cam_id: int
+    score: float
+    """§6.8 — 해당 시간대 정상 풀과의 k-최근접 평균 코사인 거리(0~1)."""
+    detected_at: AwareDatetime
+    note: str | None
+    """무엇이 평소와 다른지에 대한 LLM 설명. 클라우드 미가용 시 `null`(FN-SYS-03)."""
+    keyframe_url: str | None
+    """없는 URL 을 문자열로 내보내지 않는다(§5.2 규약)."""
+
+
+class AnomalyListResponse(SpecModel):
+    """`GET /anomalies` 응답.
+
+    §4 에 조회 경로가 정의되어 있지 않다. §5.3 은 `anomaly` **발행**만 정의하는데,
+    발행만으로는 새로고침한 화면과 서버가 죽어 있던 동안의 이상을 볼 수 없다 —
+    화면이 WebSocket 을 놓친 것과 이상이 없었던 것이 같아 보인다.
+    (`docs/INDEX.md` 「명세서 확인 필요」에 올려 두었다.)
+    """
+
+    items: list[AnomalyItem]
 
 
 class MetricsRepeatResponse(SpecModel):

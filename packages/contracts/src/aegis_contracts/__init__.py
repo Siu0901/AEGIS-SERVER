@@ -62,6 +62,8 @@ from .policies import Policies, PolicyPatch
 from .rest import (
     AlertSound,
     AlertSoundPatch,
+    AnomalyItem,
+    AnomalyListResponse,
     BriefingRequest,
     BriefingResponse,
     CalibrationPoint,
@@ -157,6 +159,8 @@ __all__ = [
     "AlertSound",
     "AlertSoundPatch",
     "AlertState",
+    "AnomalyItem",
+    "AnomalyListResponse",
     "AnomalyMsg",
     "AttachmentKind",
     "Bbox",

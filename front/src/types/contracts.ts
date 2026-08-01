@@ -94,6 +94,25 @@ export interface AlertSoundPatch {
 }
 
 /**
+ * 이상 탐지 플래그 하나. `GET /anomalies`
+ */
+export interface AnomalyItem {
+  anomaly_id: number
+  cam_id: number
+  score: number
+  detected_at: string
+  note: string | null
+  keyframe_url: string | null
+}
+
+/**
+ * `GET /anomalies` 응답.
+ */
+export interface AnomalyListResponse {
+  items: AnomalyItem[]
+}
+
+/**
  * `anomaly` — 이상 탐지 플래그. API명세서 §5.3
  */
 export interface AnomalyMsg {

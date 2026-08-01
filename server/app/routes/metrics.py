@@ -6,6 +6,7 @@
 | `GET /metrics/timeseries` | 분석 화면의 시정률 추이(FN-UI-05) |
 | `GET /metrics/distribution` | 유형 분포 · 시간대 히트맵(FN-UI-05) |
 | `GET /metrics/repeat` | 반복 위반 순위(FN-UI-05 · FN-EVT-06) |
+| `GET /anomalies` | 이상 탐지 플래그 목록(FN-AI-04) — **경고가 아니라 '주의'다** |
 
 **두 숫자는 항상 함께 나간다.** 시정률만 떼어 보여주면 추적이 끊긴 이벤트가 몇 건인지
 알 수 없어 그 숫자를 검증할 수 없다 — `방송 후 시정률 87% (판정 불가 5%)` 형태가
@@ -26,6 +27,8 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import AwareDatetime
 
 from aegis_contracts import (
+    AnomalyItem,
+    AnomalyListResponse,
     DistributionBucket,
     ErrorBody,
     ErrorResponse,
@@ -51,6 +54,9 @@ router = APIRouter(tags=["metrics"])
 MAX_REPEAT_DAYS = 90
 MAX_REPEAT_LIMIT = 50
 
+#: 이상 목록의 최대 개수. 화면은 최근 것만 보여주면 되고, 전량이 필요하면 DB 를 본다.
+MAX_ANOMALY_LIMIT = 200
+
 
 class AggregateStore(Protocol):
     """`DbEventRepository` 중 이 라우터가 쓰는 부분."""
@@ -58,6 +64,12 @@ class AggregateStore(Protocol):
     async def aggregate_rows(self, from_: Any, to: Any) -> list[AggregateRow]: ...
 
     async def repeat_ranking(self, since: Any, limit: int) -> list[Any]: ...
+
+
+class AnomalyStore(Protocol):
+    """`DbAiRepository` 중 이 라우터가 쓰는 부분. FN-AI-04"""
+
+    async def list_anomalies(self, from_: Any, limit: int) -> list[Any]: ...
 
 
 @router.get(
@@ -178,6 +190,54 @@ async def metrics_repeat(
         for subject, key, violation_type, count, last_at in ranked
     ]
     return MetricsRepeatResponse(days=window, items=items)
+
+
+@router.get(
+    "/anomalies",
+    response_model=AnomalyListResponse,
+    responses={503: {"model": ErrorResponse}},
+)
+async def list_anomalies(
+    request: Request,
+    days: int = 7,
+    limit: int = 50,
+) -> AnomalyListResponse:
+    """FN-AI-04 — 이상 탐지 플래그 목록.
+
+    ★ **경고 방송을 발동하지 않는 종류의 알림이다.** 조명·날씨로도 점수가 오르므로
+    위반과 같은 표시로 그리지 않는다 — 대시보드 '주의'다(기능명세서 §4.5).
+
+    §5.3 은 `anomaly` **발행**만 정의하고 조회 경로를 적지 않았다. 발행만으로는
+    새로고침한 화면과 서버가 죽어 있던 동안의 이상을 볼 수 없어 — 화면이 메시지를
+    놓친 것과 이상이 없었던 것이 같아 보인다 — 여기에 둔다.
+    (`docs/INDEX.md` 「명세서 확인 필요」)
+    """
+    store: AnomalyStore | None = getattr(request.app.state, "ai_store", None)
+    if store is None:
+        raise _error(503, "이상 탐지 저장소가 연결되지 않았습니다")
+    clock: Clock = request.app.state.clock
+    since = clock.now() - timedelta(days=max(1, min(days, MAX_REPEAT_DAYS)))
+    try:
+        rows = await store.list_anomalies(since, max(1, min(limit, MAX_ANOMALY_LIMIT)))
+    except (OSError, RuntimeError) as exc:
+        log.warning("이상 목록을 읽지 못했다: %s", exc)
+        raise _error(503, "이상 탐지 목록을 읽지 못했습니다", str(exc)) from exc
+    return AnomalyListResponse(
+        items=[
+            AnomalyItem(
+                anomaly_id=anomaly_id,
+                cam_id=cam_id,
+                score=score,
+                detected_at=detected_at,
+                note=note,
+                # 저장 경로를 URL 로 바꾸지 않는다 — 이상 프레임을 `media/` 에 두는
+                # 규칙이 §4.4 에 없다(그쪽은 이벤트 클립·키프레임 전용이다).
+                # 없는 URL 을 문자열로 내보내지 않는 §5.2 규약대로 `null` 이다.
+                keyframe_url=None,
+            )
+            for anomaly_id, cam_id, score, detected_at, _path, note in rows
+        ]
+    )
 
 
 def _repeat_label(

@@ -18,6 +18,14 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { subscribePolicies } from '../api/policies'
+import {
+  ANOMALY_KEEP,
+  anomalyTone,
+  fetchAnomalies,
+  mergeAnomalies,
+  toItem,
+  type AnomalyItem,
+} from '../api/anomalies'
 import { subscribeDashboard } from '../api/system'
 import { useSystemStatus } from '../api/useSystemStatus'
 import { applyZoneUpdate, fetchZones } from '../api/zones'
@@ -27,6 +35,7 @@ import QuickControls from '../live/QuickControls'
 import { cameraName, retentionLabel, violationLabel } from '../types/labels'
 import {
   UNMEASURED,
+  isAnomalyMsg,
   isEventCreatedMsg,
   type EventCreatedMsg,
   type OverlayPolicies,
@@ -47,6 +56,10 @@ export default function LivePage() {
   const { status, connected, error } = useSystemStatus()
   const [searchParams, setSearchParams] = useSearchParams()
   const [alerts, setAlerts] = useState<EdgeAlert[]>([])
+  // FN-AI-04 — **위반 알림과 다른 목록이다.** 같은 배열에 담으면 화면이 둘을 같은
+  // 모양으로 그리게 되고, 그 순간 '주의'가 경고처럼 읽힌다.
+  const [anomalies, setAnomalies] = useState<AnomalyItem[]>([])
+  const [dismissed, setDismissed] = useState<number[]>([])
   const [policies, setPolicies] = useState<OverlayPolicies | null>(null)
   const [zones, setZones] = useState<Zone[]>([])
 
@@ -89,6 +102,20 @@ export default function LivePage() {
   // 오버레이 지연 버퍼(§4.5). 값을 프론트에 적지 않는다(절대규칙 6).
   useEffect(() => subscribePolicies(setPolicies), [])
 
+  // FN-AI-04 — 화면을 열 때 **한 번 조회한다.** WebSocket 만 보면 새로고침한 화면이
+  // 텅 비고, 서버가 죽어 있던 동안의 이상은 영영 보이지 않는다.
+  useEffect(() => {
+    const controller = new AbortController()
+    fetchAnomalies({ days: 1, limit: ANOMALY_KEEP }, controller.signal)
+      .then((items) => setAnomalies((current) => mergeAnomalies(current, items)))
+      .catch((reason: unknown) => {
+        if (controller.signal.aborted) return
+        // 조용히 넘기지 않는다 — '주의'가 안 뜨는 이유가 여기일 수 있다(절대규칙 9).
+        console.warn('[anomaly] 이상 목록을 읽지 못했다:', reason)
+      })
+    return () => controller.abort()
+  }, [])
+
   // 금지구역은 한 번 조회해 캐시하고 `zone_updated` 로 갱신한다(§5.1 · §5.4).
   useEffect(() => {
     const controller = new AbortController()
@@ -109,6 +136,11 @@ export default function LivePage() {
     return subscribeDashboard({
       onMessage: (message) => {
         setZones((current) => applyZoneUpdate(current, message))
+        if (isAnomalyMsg(message)) {
+          // ★ 경고가 아니다(FN-AI-04). 소리도 내지 않고 배너만 띄운다.
+          setAnomalies((current) => mergeAnomalies(current, [toItem(message)]))
+          return
+        }
         if (!isEventCreatedMsg(message)) return
         const event = message as EventCreatedMsg
         setAlerts((current) => {
@@ -146,6 +178,11 @@ export default function LivePage() {
   const shown = solo === null ? cameras : cameras.filter((camera) => camera.cam_id === solo)
   // 확대 중이 아닌 채널의 알림만 띄운다. 보고 있는 채널은 영상에 그대로 나온다.
   const pending = solo === null ? [] : alerts.filter((alert) => alert.cam_id !== solo)
+  // FN-AI-04 — 최근 '주의' 두 건. 확대 여부와 무관하게 띄운다(어느 채널이든 봐야 할
+  // 것이 있다는 뜻이다). 사람이 닫으면 그 건은 다시 뜨지 않는다.
+  const notices = anomalies
+    .filter((item) => !dismissed.includes(item.anomaly_id))
+    .slice(0, 2)
 
   return (
     <div className={solo === null ? 'live' : 'live live--solo'}>
@@ -184,6 +221,46 @@ export default function LivePage() {
           </button>
           {solo !== null && <span className="live__hint">Esc 로 분할 보기</span>}
         </div>
+
+        {/* ★ 이상 탐지 '주의'(FN-AI-04) — **위반 경고가 아니다.**
+            경고 방송·경광등을 발동하지 않으며 조명·날씨로도 점수가 오른다. 그래서
+            적색이 아니라 앰버이고, 문구도 단정하지 않는다(「평소와 다르다」). 아래
+            `live__edge`(위반)와 **다른 색·다른 자리**여야 사람이 둘을 구분한다. */}
+        {notices.length > 0 && (
+          <div className="live__notices" aria-live="polite">
+            {notices.map((notice) => (
+              <div key={notice.anomaly_id} className={`notice notice--${anomalyTone(notice.score)}`}>
+                <button
+                  type="button"
+                  className="notice__body"
+                  onClick={() => show(notice.cam_id)}
+                  title="이 카메라로 전환"
+                >
+                  <span className="notice__tag">주의</span>
+                  <span className="notice__what">
+                    {cameraName(notice.cam_id)} — 평소와 다른 상황
+                    <em> (이상 점수 {notice.score.toFixed(2)})</em>
+                  </span>
+                  {/* 설명은 클라우드가 살아 있을 때만 붙는다(§5.3 `note` 는 nullable).
+                      없다고 「이상 없음」이라고 쓰지 않는다 — 점수는 이미 넘었다. */}
+                  {notice.note && <span className="notice__note">{notice.note}</span>}
+                </button>
+                <button
+                  type="button"
+                  className="notice__close"
+                  aria-label="닫기"
+                  onClick={() => setDismissed((current) => [...current, notice.anomaly_id])}
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+            <p className="notice__foot">
+              이상 탐지는 <strong>경고 방송을 발동하지 않는다</strong> — 조명·날씨로도
+              점수가 오르므로 사람이 한 번 확인할 것으로만 표시한다(FN-AI-04).
+            </p>
+          </div>
+        )}
 
         <div className={solo === null ? 'live__grid' : 'live__grid live__grid--solo'}>
           {shown.map((camera) => (

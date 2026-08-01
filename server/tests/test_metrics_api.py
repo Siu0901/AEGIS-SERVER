@@ -164,3 +164,58 @@ def test_patching_a_missing_event_is_404() -> None:
         response = client.patch("/api/v1/events/EV-없음", json={"force_resolve": True})
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "NOT_FOUND"
+
+
+# --------------------------------------------------------------------------
+# FN-AI-04 · GET /anomalies — **경고가 아니라 '주의'다**
+# --------------------------------------------------------------------------
+
+
+class FakeAnomalyStore:
+    """`DbAiRepository.list_anomalies` 만 흉내 낸다."""
+
+    def __init__(self, rows: list[tuple[int, int, float, datetime, str | None, str | None]]):
+        self.rows = rows
+        self.asked: tuple[datetime | None, int] | None = None
+
+    async def list_anomalies(
+        self, from_: datetime | None, limit: int
+    ) -> list[tuple[int, int, float, datetime, str | None, str | None]]:
+        self.asked = (from_, limit)
+        return self.rows
+
+
+def test_anomalies_are_listed_with_their_scores() -> None:
+    """§5.3 은 발행만 정의한다. 조회가 없으면 새로고침한 화면이 텅 빈다."""
+    store = FakeAnomalyStore([(91, 2, 0.71, NOW, "/tmp/anom.jpg", "평소와 다른 상황")])
+    with build(FakeEventStore([])) as client:
+        client.app.state.ai_store = store  # type: ignore[attr-defined]
+        body = client.get("/api/v1/anomalies").json()
+    item = body["items"][0]
+    assert item["anomaly_id"] == 91
+    assert item["cam_id"] == 2
+    assert item["score"] == 0.71
+    assert item["note"] == "평소와 다른 상황"
+
+
+def test_anomaly_keyframe_url_is_null_not_a_filesystem_path() -> None:
+    """★ 저장 경로를 그대로 내보내지 않는다(§5 경로 규약).
+
+    이상 프레임을 `media/` 에 두는 규칙이 §4.4 에 없으므로(그쪽은 이벤트 클립·키프레임
+    전용이다) URL 을 만들 수 없다. 없는 URL 을 문자열로 내보내는 대신 `null` 이다.
+    """
+    store = FakeAnomalyStore([(1, 1, 0.4, NOW, "C:/media/anom.jpg", None)])
+    with build(FakeEventStore([])) as client:
+        client.app.state.ai_store = store  # type: ignore[attr-defined]
+        body = client.get("/api/v1/anomalies").json()
+    assert body["items"][0]["keyframe_url"] is None
+    assert body["items"][0]["note"] is None
+
+
+def test_anomalies_report_503_when_the_store_is_missing() -> None:
+    """조용히 빈 목록을 내지 않는다 — 「이상이 없다」와 「저장소가 없다」는 다르다."""
+    with build(FakeEventStore([])) as client:
+        client.app.state.ai_store = None  # type: ignore[attr-defined]
+        response = client.get("/api/v1/anomalies")
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "NOT_FOUND"

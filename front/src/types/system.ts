@@ -141,6 +141,17 @@ export function isZoneUpdatedMsg(message: DashboardMessage): message is ZoneUpda
   return message.type === 'zone_updated'
 }
 
+/**
+ * §5.3 `anomaly` — 이상 탐지 플래그(FN-AI-04).
+ *
+ * ★ **위반 알림이 아니다.** 경고 방송·경광등을 발동하지 않으며, 조명·날씨로도 점수가
+ * 오른다. 화면은 이것을 위반과 **다른 색·다른 문구**로 그린다 — 같은 모양으로 그리면
+ * 사람이 둘을 같은 신뢰도로 읽고, 곧 둘 다 무시하게 된다.
+ */
+export function isAnomalyMsg(message: DashboardMessage): message is AnomalyMsg {
+  return message.type === 'anomaly'
+}
+
 // ---------------------------------------------------------------------------
 // 표시 규약
 // ---------------------------------------------------------------------------
