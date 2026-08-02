@@ -419,6 +419,11 @@ def task_migrate() -> int:
     # 무음 wav 를 깔아 경로를 맞춘다(실제 녹음은 사람이 나중에 덮어쓴다).
     say("[migrate] alert_sounds 시드 + 무음 wav 확인")
     run(uv("python", "-m", "scripts.seed_sounds"))
+    # FN-CFG-05 — API 에 생성 경로가 없다(`GET`·`PATCH` 뿐). 이 행이 없으면 설정
+    # 화면의 위험 반경 표가 비어 있고 `PATCH` 가 404 를 내, 현장에서 값을 조정할
+    # 수단이 사라진다(기능명세서 §6 `vehicle_classes`).
+    say("[migrate] vehicle_classes 위험 반경 시드")
+    run(uv("python", "-m", "scripts.seed_vehicles"))
     return 0
 
 
