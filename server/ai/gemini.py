@@ -32,24 +32,15 @@ __all__ = ["GeminiCloud", "create_cloud"]
 log = logging.getLogger("server.ai.gemini")
 
 #: 기능명세서 §4.5 — 키프레임 임베딩은 3,072차원이며 `halfvec(3072)` 과 짝이다.
+#: `gemini-embedding-2` 는 이미지와 텍스트 어느 쪽을 넣어도 이 차원으로 나온다(실측).
 EMBEDDING_DIM = 3072
 
 #: 기본 모델. 배포마다 바꿀 수 있게 설정으로 뺀다(절대규칙 6 — 코드에 박지 않는다).
-_DEFAULT_EMBED_MODEL = "gemini-embedding-001"
-_DEFAULT_TEXT_MODEL = "gemini-flash-latest"
-
-#: `embed_image` 의 앞 단계 — 장면을 **검색용 문장**으로 옮긴다.
 #:
-#: ★ **판정을 요구하지 않는다.** 「위험해 보인다」 같은 문장이 나오면 그 판단이 벡터에
-#: 실려 검색 결과의 근거가 된다 — 규정 조항을 LLM 이 만들지 못하게 한 것(FN-AI-06)과
-#: 같은 이유다. 여기서 묻는 것은 「무엇이 어디에 있는가」뿐이다.
-_CAPTION_PROMPT = (
-    "이 제조현장 CCTV 프레임에 보이는 것을 한국어 2~3문장으로 묘사해라.\n"
-    "- 사람과 지게차의 수·위치·자세, 주변 설비와 자재, 조명 상태를 적는다.\n"
-    "- 위험한지 안전한지 **판단하지 마라**. 보이는 것만 적는다.\n"
-    "- 안 보이는 것을 추측하지 마라.\n"
-    "- 작업자 개인을 특정하지 마라."
-)
+#: ★ **멀티모달 임베딩 모델이어야 한다.** `gemini-embedding-001` 은 텍스트 전용이라
+#: 키프레임을 넣으면 `400 The text content is empty` 로 거절한다.
+_DEFAULT_EMBED_MODEL = "gemini-embedding-2"
+_DEFAULT_TEXT_MODEL = "gemini-flash-latest"
 
 
 @dataclass(slots=True)
@@ -67,57 +58,28 @@ class GeminiCloud:
     async def embed_image(self, image: bytes, *, mime_type: str = "image/jpeg") -> list[float]:
         """키프레임 한 장 → 벡터. FN-AI-01
 
-        ★ **장면을 먼저 문장으로 옮긴 뒤 임베딩한다.** `gemini-embedding-001` 은 텍스트
-        전용이라 이미지를 넣으면 `400 The text content is empty` 로 거절한다(실측).
-        멀티모달 임베딩(`multimodalembedding@001`)은 Vertex AI 쪽이라 AI Studio 키로는
-        닿지 않는다.
+        ★ **픽셀을 그대로 임베딩한다.** `gemini-embedding-2` 는 멀티모달이라 이미지와
+        문장이 같은 공간에 놓인다 — 그래서 저장된 키프레임 벡터를 텍스트 질의로 바로
+        검색할 수 있고(FN-AI-02), 이상 탐지(FN-AI-04)는 화면 자체의 변화를 본다.
 
-        그래서 두 단계로 나눈다 — Flash 가 장면을 묘사하고(읽기), 그 문장을 임베딩한다
-        (찾고 비교하기). 「임베딩은 찾고 비교, LLM 은 읽고 쓰기」라는 역할 분리
-        (기능명세서 §4.5)는 그대로다.
+        한때 Flash 로 장면을 묘사한 뒤 그 문장을 임베딩했다. `gemini-embedding-001` 이
+        텍스트 전용이라 우회한 것이었는데, 대가가 두 가지였다 — 키프레임 한 장에 호출이
+        두 번이고, **묘사가 같으면 서로 다른 장면이 같은 벡터가 됐다**. 문장은 픽셀보다
+        훨씬 거친 요약이라 이상 탐지가 볼 수 있는 차이가 그만큼 사라진다.
 
-        **부수 효과로 검색이 더 정확해진다.** 질의도 문장이므로 양쪽이 같은 공간에
-        놓인다 — 이미지 벡터와 텍스트 질의를 억지로 비교하던 것보다 낫다.
-
-        **대가**: 키프레임 한 장에 호출이 두 번(묘사 + 임베딩)이고, 묘사가 같으면
-        서로 다른 장면이 같은 벡터가 된다. 이상 탐지(FN-AI-04)의 민감도가 그만큼
-        낮아진다 — 조명 변화 오탐이 줄어드는 방향이기도 하다.
-        """
-        caption = await self.describe(image, mime_type=mime_type)
-        return await self._embed([caption])
-
-    async def describe(self, image: bytes, *, mime_type: str = "image/jpeg") -> str:
-        """장면을 검색용 한 문단으로 옮긴다. `embed_image` 의 앞 단계다.
-
-        프롬프트가 **검색을 위한 묘사**를 요구한다 — 판단이나 위반 여부가 아니라
-        「무엇이 어디에 있는가」다. 모델이 "안전해 보인다" 같은 판정을 쓰기 시작하면
-        그 판정이 벡터에 실려 검색 결과의 근거가 되고, 그건 FN-AI-06 이 규정 조항에
-        대해 막은 것과 같은 종류의 오염이다.
+        묘사 단계가 사라지면서 「임베딩은 찾고 비교, LLM 은 읽고 쓰기」(기능명세서 §4.5)가
+        원래 모양으로 돌아온다 — 벡터를 만드는 데 생성 모델이 끼지 않는다.
         """
         from google.genai import types  # 어댑터 안에서만 import 한다
 
-        parts = [
-            types.Part.from_text(text=_CAPTION_PROMPT),
-            types.Part.from_bytes(data=image, mime_type=mime_type),
-        ]
-
-        def call() -> str:
-            response = self.client.models.generate_content(
-                model=self.text_model,
-                contents=[types.Content(role="user", parts=parts)],
-            )
-            text = getattr(response, "text", None)
-            if not text or not str(text).strip():
-                # 빈 문자열을 임베딩에 넘기면 같은 400 이 난다. 여기서 먼저 막아야
-                # 원인이 「묘사가 비었다」로 남는다.
-                msg = "장면 묘사가 비어 있다"
-                raise CloudError(msg)
-            return str(text).strip()
-
-        return await self._guarded(call)
+        return await self._embed([types.Part.from_bytes(data=image, mime_type=mime_type)])
 
     async def embed_text(self, text: str) -> list[float]:
-        """질의 문장 → 벡터. FN-AI-02"""
+        """질의 문장 → 벡터. FN-AI-02
+
+        **키프레임 벡터와 같은 공간이다** — 같은 모델이 양쪽을 만든다. 그래서 문장으로
+        그림을 찾을 수 있다.
+        """
         if not text.strip():
             # 빈 문자열은 API 가 400 으로 거절한다. 호출을 낭비하지 않고 여기서 막는다.
             msg = "빈 문자열은 임베딩할 수 없다"
@@ -126,10 +88,22 @@ class GeminiCloud:
 
     async def _embed(self, contents: list[Any]) -> list[float]:
         def call() -> list[float]:
-            response = self.client.models.embed_content(
-                model=self.embed_model,
-                contents=contents,
-            )
+            try:
+                response = self.client.models.embed_content(
+                    model=self.embed_model,
+                    contents=contents,
+                )
+            except Exception as exc:
+                # 텍스트 전용 모델에 이미지를 넣으면 「본문이 비었다」로 돌아온다. 그대로
+                # 올리면 원인이 프레임 쪽에 있는 것처럼 읽히므로 여기서 바꿔 적는다.
+                if "text content is empty" in str(exc):
+                    msg = (
+                        f"임베딩 모델 {self.embed_model!r} 이 이미지를 받지 못했다 — "
+                        "텍스트 전용 모델이다. GEMINI_EMBED_MODEL 을 멀티모달 모델"
+                        f"({_DEFAULT_EMBED_MODEL})로 바꿔라"
+                    )
+                    raise CloudError(msg) from exc
+                raise
             embeddings = getattr(response, "embeddings", None)
             if not embeddings:
                 msg = "임베딩 응답이 비어 있다"

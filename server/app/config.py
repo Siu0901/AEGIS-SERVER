@@ -82,8 +82,15 @@ class ServerSettings(BaseSettings):
     정상 운용 조건이다. 여기서 예외를 던지면 그 현장에서 서버가 아예 뜨지 않는다.
     """
 
-    gemini_embed_model: str = "gemini-embedding-001"
-    """FN-AI-01 — 키프레임·질의 임베딩. 출력 차원이 `halfvec(3072)` 과 맞아야 한다."""
+    gemini_embed_model: str = "gemini-embedding-2"
+    """FN-AI-01 — 키프레임·질의 임베딩. 출력 차원이 `halfvec(3072)` 과 맞아야 한다.
+
+    ★ **멀티모달 모델이어야 한다.** 키프레임을 픽셀 그대로 임베딩하므로 텍스트 전용
+    모델(`gemini-embedding-001`)을 넣으면 `400 The text content is empty` 로 떨어진다.
+
+    ★ **바꾸면 `normal_pool` 을 비운다.** 벡터는 모델마다 다른 공간에 살아서, 옛 벡터가
+    남아 있으면 새 모델의 첫 샘플들이 전부 「평소와 다르다」로 잡힌다(FN-AI-04).
+    """
 
     gemini_text_model: str = "gemini-flash-latest"
     """FN-AI-05 · 08 · 09 · 10 — 심층 분석·챗봇·브리핑·보고서."""
