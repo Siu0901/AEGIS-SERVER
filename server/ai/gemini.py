@@ -43,6 +43,42 @@ EMBEDDING_DIM = 3072
 _DEFAULT_EMBED_MODEL = "gemini-embedding-2"
 _DEFAULT_TEXT_MODEL = "gemini-flash-latest"
 
+#: 한 번의 호출을 기다리는 상한(초). **API 하한이 10초라 그 값이다.**
+#:
+#: 실측 — 같은 요청의 응답 시간이 크게 갈린다. 원인이 우리 쪽이 아님을 세 가지로 확인했다:
+#: 페이로드 크기와 무관하고, thinking 토큰 수가 일정한데도(126~152) 갈리며,
+#: asyncio·스레드풀을 안 거친 **동기 직접 호출**에서도 재현된다. API 쪽 변동이며
+#: 시점에 따라 멈추는 비율이 25~33% 로 움직인다.
+#:
+#: | 호출 | 정상 | 멈췄을 때 |
+#: |---|---|---|
+#: | 도구 선택 | 1.4~8.8초 (중앙값 1.8) | 40초 넘게 무응답 |
+#: | 짧은 답변(130~150자) | 4.4~8.3초 (중앙값 5.6 · 10회 중 멈춤 0) | — |
+#: | 긴 답변(1,200자대) | 14~23초 | 56~225초 |
+#:
+#: ★ **답변을 짧게 쓰게 한 것이 이 값을 정했다**(`agent.SYSTEM_PROMPT` 규칙 10).
+#: 긴 답변을 허용하면 정상 생성이 23초까지 가서 마감을 30초로 올려야 하고, 그러면
+#: 재시도 한 번이 60초가 된다. 짧게 쓰면 정상이 전부 10초 안에 들어와 **멈춘 것만**
+#: 잘린다 — 실측으로 중앙값 31.7초·최대 136.8초가 나오던 구간이 이 조정으로 닫혔다.
+_DEFAULT_TIMEOUT_S = 10.0
+
+#: 시도 횟수(첫 시도 포함).
+#:
+#: 멈출 확률이 3분의 1쯤이고 왕복이 질문당 2~3회라, 재시도가 없으면 절반 넘는 질문이
+#: 한 번은 멈춘 것을 만난다. 마감이 10초라 세 번을 다 써도 30초에서 끝난다.
+#: 세 번 다 멈추면 `CloudError` 로 올라가 키워드 경로가 답한다 — 빈손보다 낫다.
+_DEFAULT_ATTEMPTS = 3
+
+
+def _is_deterministic(exc: Exception) -> bool:
+    """다시 불러도 같은 결과인 실패인가.
+
+    400(스키마·인자 오류)과 인증 실패는 재시도가 지연만 늘린다. 반대로 마감 초과와
+    5xx 는 다음 호출에서 대개 바로 돌아온다(실측 중앙값 1.74초).
+    """
+    text = str(exc)
+    return any(code in text for code in ("400", "401", "403", "INVALID_ARGUMENT"))
+
 
 @dataclass(slots=True)
 class GeminiCloud:
@@ -51,6 +87,10 @@ class GeminiCloud:
     client: Any
     embed_model: str = _DEFAULT_EMBED_MODEL
     text_model: str = _DEFAULT_TEXT_MODEL
+    timeout_s: float = _DEFAULT_TIMEOUT_S
+    """이 시간 안에 응답이 없으면 끊는다. 클라이언트에 걸어 둔 값과 같아야 한다."""
+    attempts: int = _DEFAULT_ATTEMPTS
+    """멈춘 요청을 다시 부르는 횟수(첫 시도 포함)."""
 
     @property
     def dimensions(self) -> int:
@@ -234,19 +274,38 @@ class GeminiCloud:
 
         return await self._guarded(call)
 
-    @staticmethod
-    async def _guarded[T](call: Any) -> T:
+    async def _guarded[T](self, call: Any) -> T:
         """블로킹 SDK 를 스레드로 넘기고, 어떤 실패든 `CloudError` 로 좁힌다.
 
         SDK 예외 종류를 그대로 올리면 호출자가 공급자별 예외를 알아야 하고, 그러면
         어댑터 계층이 이름만 남는다.
+
+        ★ **멈춘 요청은 끊고 다시 부른다.** 같은 요청의 응답 시간이 1.4초에서 225초까지
+        갈린다(실측 12회 중 3회가 마감에 걸렸고, 중앙값은 1.74초였다). 지연이 페이로드
+        크기나 thinking 토큰 수와 무관하고 동기 직접 호출에서도 재현되므로 **API 쪽
+        변동**이다. 기다리면 챗봇이 1분 넘게 응답하지 않는데, 끊고 다시 부르면 보통
+        2초에 돌아온다.
+
+        **400 은 재시도하지 않는다.** 스키마·인자 오류는 결정적이라 다시 불러도 같다.
         """
-        try:
-            return await asyncio.to_thread(call)
-        except CloudError:
-            raise
-        except Exception as exc:  # SDK 예외 계층을 바깥으로 새게 두지 않는다
-            raise CloudError(str(exc)) from exc
+        last: Exception | None = None
+        for attempt in range(1, self.attempts + 1):
+            try:
+                return await asyncio.to_thread(call)
+            except CloudError:
+                raise
+            except Exception as exc:  # SDK 예외 계층을 바깥으로 새게 두지 않는다
+                if _is_deterministic(exc):
+                    raise CloudError(str(exc)) from exc
+                last = exc
+                if attempt < self.attempts:
+                    log.info(
+                        "클라우드 응답이 %.0f초 안에 오지 않았다 — 다시 부른다 (%d/%d)",
+                        self.timeout_s,
+                        attempt,
+                        self.attempts,
+                    )
+        raise CloudError(str(last)) from last
 
 
 def create_cloud(
@@ -254,6 +313,7 @@ def create_cloud(
     *,
     embed_model: str | None = None,
     text_model: str | None = None,
+    timeout_s: float = _DEFAULT_TIMEOUT_S,
 ) -> GeminiCloud | None:
     """설정이 갖춰졌을 때만 어댑터를 만든다. 아니면 `None`.
 
@@ -267,11 +327,18 @@ def create_cloud(
         return None
     try:
         from google import genai
+        from google.genai import types
     except ImportError:  # pragma: no cover - 설치되어 있다
         log.warning("google-genai 를 불러오지 못했다 — 지능 기능을 끈다")
         return None
+    # ★ **마감을 걸어 둔다.** 걸지 않으면 멈춘 요청이 무한정 기다린다 — 실측으로 한 번은
+    #   225초였고, 그동안 챗봇은 아무 말도 하지 않는다. API 하한이 10초다.
+    deadline = max(10.0, timeout_s)
     return GeminiCloud(
-        client=genai.Client(api_key=key),
+        client=genai.Client(
+            api_key=key, http_options=types.HttpOptions(timeout=int(deadline * 1000))
+        ),
         embed_model=embed_model or os.environ.get("GEMINI_EMBED_MODEL") or _DEFAULT_EMBED_MODEL,
         text_model=text_model or os.environ.get("GEMINI_TEXT_MODEL") or _DEFAULT_TEXT_MODEL,
+        timeout_s=deadline,
     )

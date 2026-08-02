@@ -974,3 +974,53 @@ def test_regulations_tool_reads_the_table_not_the_model() -> None:
     tool = next(item for item in box.tools if item.name == "regulations")
     body = asyncio.run(tool.ainvoke({"violation_type": "no_helmet"}))
     assert "제32조" in body
+
+
+# --------------------------------------------------------------------------
+# 어댑터 — 멈춘 호출을 끊고 다시 부른다
+# --------------------------------------------------------------------------
+
+
+def test_a_stalled_call_is_retried() -> None:
+    """★ 같은 요청의 응답 시간이 1.4초~225초로 갈린다(API 쪽 변동, 실측).
+
+    기다리면 챗봇이 몇 분간 아무 말도 하지 않는다. 끊고 다시 부르면 보통 2초에 온다.
+    """
+    from server.ai.gemini import GeminiCloud
+
+    calls: list[int] = []
+
+    class _Flaky:
+        class models:  # noqa: N801 - SDK 모양을 흉내 낸다
+            @staticmethod
+            def embed_content(model: str, contents: Any) -> Any:
+                del model, contents
+                calls.append(1)
+                if len(calls) < 2:
+                    raise TimeoutError("504 마감 초과")
+                return type("R", (), {"embeddings": [type("E", (), {"values": [0.1] * 3072})()]})()
+
+    cloud = GeminiCloud(client=_Flaky(), attempts=3)
+    vector = asyncio.run(cloud.embed_text("사다리"))
+    assert len(vector) == 3072
+    assert len(calls) == 2, "멈춘 호출을 다시 부르지 않았다"
+
+
+def test_a_deterministic_failure_is_not_retried() -> None:
+    """★ 400 은 다시 불러도 같다 — 재시도는 지연만 늘린다."""
+    from server.ai.gemini import GeminiCloud
+
+    calls: list[int] = []
+
+    class _Broken:
+        class models:  # noqa: N801
+            @staticmethod
+            def embed_content(model: str, contents: Any) -> Any:
+                del model, contents
+                calls.append(1)
+                raise ValueError("400 INVALID_ARGUMENT")
+
+    cloud = GeminiCloud(client=_Broken(), attempts=3)
+    with pytest.raises(CloudError):
+        asyncio.run(cloud.embed_text("사다리"))
+    assert len(calls) == 1, f"결정적 실패를 {len(calls)}번 불렀다"

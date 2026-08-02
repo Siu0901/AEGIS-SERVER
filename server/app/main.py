@@ -235,6 +235,7 @@ def create_app(
         resolved.gemini_api_key,
         embed_model=resolved.gemini_embed_model,
         text_model=resolved.gemini_text_model,
+        timeout_s=resolved.gemini_timeout_s,
     )
     # 정상 풀·이상 플래그 저장소. **라우터도 같은 것을 본다** — `GET /anomalies` 가
     # 다른 경로로 읽으면 감지기가 쓴 것과 화면이 보는 것이 갈릴 수 있다.
