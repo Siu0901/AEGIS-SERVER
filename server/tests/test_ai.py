@@ -38,10 +38,11 @@ from server.ai.assistant import route_of
 from server.ai.graph import AnalysisInput, AnalysisResult, build_analysis_graph, compose_prompt
 from server.ai.guard import CloudGuard
 from server.ai.incidents import IncidentMatcher, load_incidents
-from server.ai.ports import CloudError
+from server.ai.ports import CloudError, LlmTurn, ToolCall
 from server.ai.regulations import load_regulations, regulations_for
 from server.ai.search import parse_query
 from server.ai.service import AiService, time_bucket
+from server.ai.tools import ToolBox, specs_of
 from server.ai.vectors import anomaly_score, cosine_similarity
 from server.domain.cloud_state import CloudRuntime
 
@@ -818,3 +819,158 @@ def test_report_is_generated_from_sql_numbers() -> None:
     assert "87%" in str(report.body)
     assert report.stats is not None
     assert report.stats.total_violations == 24
+
+
+# --------------------------------------------------------------------------
+# FN-AI-08 · 도구 호출 에이전트 — 경로를 키워드로 가르지 않는다
+# --------------------------------------------------------------------------
+
+
+class _ScriptedLlm:
+    """`converse` 대역. 미리 적어 둔 턴을 순서대로 돌려준다.
+
+    실제 모델을 부르지 않고 **루프의 계약**만 본다 — 도구를 여럿 부르는가, 결과를
+    되돌려 받는가, 상한에 걸리면 드러나는가.
+    """
+
+    def __init__(self, turns: list[LlmTurn]) -> None:
+        self._turns = list(turns)
+        self.seen: list[int] = []
+
+    async def generate(self, prompt: str, *, images: list[bytes] | None = None) -> str:
+        del prompt, images
+        return "쓰이지 않는다"
+
+    async def converse(
+        self, prompt: str, *, tools: Any, history: Any = (), images: Any = ()
+    ) -> LlmTurn:
+        del prompt, tools, images
+        self.seen.append(len(list(history)))
+        return self._turns[min(len(self.seen) - 1, len(self._turns) - 1)]
+
+
+def _agent_service(llm: Any) -> tuple[AiService, list[tuple[Any, Any]]]:
+    asked: list[tuple[Any, Any]] = []
+
+    async def stats(*, from_: datetime | None = None, to: datetime | None = None) -> MetricsSummary:
+        asked.append((from_, to))
+        return _summary()
+
+    service = AiService(
+        clock=FakeClock(NOW),
+        guard=CloudGuard(CloudRuntime(), FakeClock(NOW)),
+        events=_Events([]),
+        report_stats=stats,
+        llm=llm,
+    )
+    return service, asked
+
+
+def test_agent_may_call_several_tools_for_one_question() -> None:
+    """★ 이것이 키워드 라우팅으로는 불가능했던 것이다.
+
+    「이번 주 위반 분석해주고 어떻게 해결할지」는 집계와 반복 순위를 **함께** 봐야
+    하는데, 경로를 하나만 고르는 구조로는 반쪽만 답한다 — 실제로 그 질문이 장면
+    검색으로 새서 「관련 장면 5건을 찾았다」만 돌아왔다.
+    """
+    llm = _ScriptedLlm(
+        [
+            LlmTurn(
+                calls=(
+                    ToolCall(name="metrics_summary", args={"days": 7}),
+                    ToolCall(name="violation_breakdown", args={"days": 7}),
+                )
+            ),
+            LlmTurn(text="이번 주 위반은 …이고 개선안은 …이다."),
+        ]
+    )
+    service, asked = _agent_service(llm)
+    response = asyncio.run(
+        service.chat(ChatRequest(session_id="s1", message="이번 주 위반 분석하고 해결책 알려줘"))
+    )
+
+    used = [source.detail for source in response.sources]
+    assert any("metrics_summary" in item for item in used), used
+    assert any("violation_breakdown" in item for item in used), used
+    # 두 번째 왕복에는 첫 왕복의 결과가 실려야 한다 — 안 실으면 모델이 같은 도구를 또 부른다.
+    assert llm.seen == [0, 1], llm.seen
+    assert response.answer.startswith("이번 주 위반")
+    # 숫자는 도구가 만든다 — 집계가 실제로 불렸다.
+    assert asked, "집계 도구가 돌지 않았다"
+
+
+def test_agent_reports_the_tools_it_used_as_sources() -> None:
+    """근거가 곧 「무엇을 보고 답했는가」다. 비어 있으면 문장만 남는다."""
+    llm = _ScriptedLlm(
+        [
+            LlmTurn(calls=(ToolCall(name="metrics_summary", args={"days": 7}),)),
+            LlmTurn(text="…"),
+        ]
+    )
+    service, _ = _agent_service(llm)
+    response = asyncio.run(service.chat(ChatRequest(session_id="s1", message="이번 주 어때")))
+    assert [source.type for source in response.sources] == ["tool"]
+
+
+def test_a_failing_tool_does_not_kill_the_answer() -> None:
+    """★ 도구 하나가 죽어도 나머지로 답한다.
+
+    예외로 끊으면 답변 전체가 사라지고, 화면에는 「대답하지 않았다」로만 보인다.
+    """
+    llm = _ScriptedLlm(
+        [
+            LlmTurn(calls=(ToolCall(name="없는도구", args={}),)),
+            LlmTurn(text="그 도구는 실패했지만 나머지로 답한다."),
+        ]
+    )
+    service, _ = _agent_service(llm)
+    response = asyncio.run(service.chat(ChatRequest(session_id="s1", message="아무거나")))
+    assert "실패했지만" in response.answer
+
+
+def test_hitting_the_step_limit_is_visible() -> None:
+    """★ 상한에 걸린 사실을 숨기지 않는다(절대규칙 9). 답이 짧은 이유가 드러나야 한다."""
+    llm = _ScriptedLlm([LlmTurn(text="중간 보고", calls=(ToolCall(name="metrics_summary"),))])
+    service, _ = _agent_service(llm)
+    response = asyncio.run(service.chat(ChatRequest(session_id="s1", message="계속 돌아라")))
+    assert any(source.type == "note" for source in response.sources), response.sources
+
+
+def test_agent_falls_back_to_keywords_when_the_cloud_dies() -> None:
+    """★ §7 가용성 — 클라우드가 죽어도 SQL 통계는 답이 나와야 한다.
+
+    도구를 고르는 주체가 모델이라 에이전트는 그때 성립하지 않는다. 순수 함수인
+    키워드 경로가 그 자리를 지킨다.
+    """
+
+    class _Dead:
+        async def generate(self, prompt: str, *, images: list[bytes] | None = None) -> str:
+            raise CloudError("쿼터 초과")
+
+        async def converse(self, prompt: str, **kwargs: Any) -> LlmTurn:
+            raise CloudError("쿼터 초과")
+
+    service, asked = _agent_service(_Dead())
+    response = asyncio.run(service.chat(ChatRequest(session_id="s1", message="이번 주 위반 몇 건")))
+    assert response.route == "sql", "폴백이 통계 경로를 지키지 못했다"
+    assert asked, "집계가 돌지 않았다"
+
+
+def test_tool_specs_carry_the_json_schema() -> None:
+    """`@tool` 이 만든 스키마가 포트까지 그대로 간다 — 어댑터가 공급자 형식으로 바꾼다."""
+    box = ToolBox(clock=FakeClock(NOW))
+    specs = specs_of(box.tools)
+    names = {spec.name for spec in specs}
+    assert {"metrics_summary", "search_scenes", "current_scene", "regulations"} <= names
+    summary = next(spec for spec in specs if spec.name == "metrics_summary")
+    assert summary.parameters["type"] == "object"
+    assert "days" in summary.parameters["properties"]
+    assert summary.description, "설명이 없으면 모델이 언제 부를지 알 수 없다"
+
+
+def test_regulations_tool_reads_the_table_not_the_model() -> None:
+    """★ FN-AI-06 — 조항은 사전 매핑에서 온다. 모델이 지어내지 못하게 도구로 준다."""
+    box = ToolBox(clock=FakeClock(NOW))
+    tool = next(item for item in box.tools if item.name == "regulations")
+    body = asyncio.run(tool.ainvoke({"violation_type": "no_helmet"}))
+    assert "제32조" in body

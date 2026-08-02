@@ -52,12 +52,14 @@ from aegis_contracts import (
 )
 from aegis_contracts.enums import ChatRoute
 from aegis_vision.clock import Clock
+from server.ai.agent import run_agent
 from server.ai.assistant import route_of
 from server.ai.graph import AnalysisInput, AnalysisResult, build_analysis_graph
 from server.ai.guard import CloudGuard
 from server.ai.incidents import IncidentMatcher
 from server.ai.ports import Embedder, Llm
 from server.ai.search import ParsedQuery, parse_query
+from server.ai.tools import ToolBox, specs_of
 from server.ai.vectors import anomaly_score
 from server.domain.aggregates import distribution
 
@@ -389,26 +391,125 @@ class AiService:
     # -- FN-AI-08 · 09 · 챗봇과 브리핑 -----------------------------------
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
-        """§4.4 `POST /assistant/chat` — 라우팅 후 해당 경로만 실행한다.
+        """§4.4 `POST /assistant/chat` — **도구를 등록하고 모델이 고르게 한다**. FN-AI-08
 
-        ★ **`session_id` 를 실제로 쓴다.** 명세서가 그 필드를 준 이유가 이것이다 —
-        서버가 세션별 대화를 들고 있어야 「이번 주 위반 몇 건」 다음의 「각각 무슨
-        위반이야?」가 앞 질문에 이어진다. 들고 있지 않던 동안 그 후속 질문은 장면
-        검색으로 새고 답변은 매번 같은 오늘치 숫자였다.
+        ★ **경로를 키워드로 가르지 않는다.** 예전에는 질문에서 낱말을 찾아
+        `sql`/`vector`/`vision` 셋 중 하나를 골랐는데, 그 구조로는 「이번 주 위반
+        분석해주고 어떻게 해결할지」처럼 집계와 반복 순위를 **함께** 봐야 하는 질문에
+        원리적으로 답할 수 없다 — 실제로 그 질문이 장면 검색으로 새서 「관련 장면
+        5건을 찾았다」만 돌아왔다.
 
-        ★ **기간도 질문에서 뽑는다.** 「이번 주」라고 물었는데 오늘치로 답하면 숫자가
-        틀린 것이고, 문장은 그럴듯해서 아무도 알아채지 못한다.
+        ★ **`session_id` 를 실제로 쓴다.** 서버가 세션별 대화를 들고 있어야 「각각
+        무슨 위반이야?」가 앞 질문에 이어진다(§4.4 대화 이력 규약).
+
+        ★ **클라우드가 없으면 키워드 라우팅으로 떨어진다.** 도구를 고르는 주체가
+        모델이므로 어댑터가 없으면 에이전트 자체가 성립하지 않는다. 그때는 예전
+        경로가 그대로 돌아 SQL 통계는 계속 답한다.
         """
         history = self._history.get(request.session_id, [])
-        routing = route_of(request.message, history[-1].route if history else None)
-        if routing.route == "sql":
-            response = await self._answer_sql(request, history)
-        elif routing.route == "vision":
-            response = await self._answer_vision(routing.cam_id)
+        if self._llm is not None:
+            response = await self._answer_agent(request, history)
         else:
-            response = await self._answer_vector(request)
+            response = await self._answer_keyword(request, history)
         self._remember(request.session_id, request.message, response)
         return response
+
+    async def _answer_agent(self, request: ChatRequest, history: list[ChatTurn]) -> ChatResponse:
+        """도구 호출 에이전트. 모델이 필요한 도구를 필요한 만큼 부른다.
+
+        `route` 는 **실제로 무엇을 했는지**로 정한다(§4.4 `route`) — 화면이 그 값으로
+        답변의 성격을 표시하므로, 도구를 하나도 안 불렀는데 「SQL 집계」라고 적으면
+        근거가 없는 문장에 근거 딱지가 붙는다.
+        """
+        if self._llm is None:  # pragma: no cover - 호출자가 이미 가른다
+            return await self._answer_keyword(request, history)
+        box = ToolBox(
+            clock=self._clock,
+            summary=self._report_stats,
+            breakdown=self._breakdown_for_window,
+            repeat=self._repeat_rows,
+            search=self.search,
+            briefing=self.briefing,
+            anomalies=self._anomaly_rows,
+            events=self._events,
+            cam_ids=self._cam_ids,
+        )
+        result = await self._guard.call(
+            "어시스턴트",
+            run_agent(
+                self._llm,
+                request.message,
+                box.tools,
+                specs_of(box.tools),
+                history=_history_block(history),
+            ),
+        )
+        if result is None:
+            # 클라우드가 죽었다. 키워드 경로가 SQL 통계는 계속 답한다(§7 가용성).
+            log.info("에이전트가 클라우드 실패로 끝났다 — 키워드 경로로 답한다")
+            return await self._answer_keyword(request, history)
+
+        sources = [ChatSource(type="tool", detail=name) for name in box.used]
+        if result.truncated:
+            # 상한에 걸린 사실을 숨기지 않는다 — 답이 짧은 이유가 화면에 드러나야 한다.
+            sources.append(ChatSource(type="note", detail=f"도구 왕복 상한 {result.steps}회 도달"))
+        return ChatResponse(
+            route=_route_of_tools(box.used),
+            answer=result.answer,
+            attachments=box.attachments,
+            sources=sources or [ChatSource(type="model", detail="도구 없이 답함")],
+        )
+
+    async def _answer_keyword(self, request: ChatRequest, history: list[ChatTurn]) -> ChatResponse:
+        """키워드 라우팅 — **클라우드가 없을 때의 폴백**이다(§7 가용성).
+
+        인터넷이 끊겨도 SQL 통계는 답해야 하는데, 도구를 고르는 주체가 모델이라
+        에이전트는 그때 성립하지 않는다. 순수 함수인 이 경로가 그 자리를 지킨다.
+        """
+        routing = route_of(request.message, history[-1].route if history else None)
+        if routing.route == "sql":
+            return await self._answer_sql(request, history)
+        if routing.route == "vision":
+            return await self._answer_vision(routing.cam_id)
+        return await self._answer_vector(request)
+
+    async def _breakdown_for_window(self, start: datetime, end: datetime) -> list[tuple[str, int]]:
+        """`violation_breakdown` 도구가 쓰는 유형별 집계. 분석 화면과 같은 코드다."""
+        return await self._breakdown_for((start, end))
+
+    async def _repeat_rows(self, days: int, limit: int) -> list[dict[str, Any]]:
+        """`repeat_ranking` 도구가 쓰는 반복 순위. 저장소가 없으면 빈 목록.
+
+        저장소는 `(subject, key, violation_type, count, last_at)` **튜플**을 돌려준다
+        (§4.2). 구역 이름 붙이기는 라우터가 하므로 여기서는 키를 그대로 싣는다 —
+        지어낸 이름을 모델에게 주면 그 이름이 답변에 그대로 인용된다.
+        """
+        rows = getattr(self._events, "repeat_ranking", None)
+        if rows is None:
+            return []
+        since = today_since(self._clock, max(1, days))
+        found = await rows(since, limit)
+        return [
+            {
+                "대상": subject,
+                "키": key,
+                "위반": _TYPE_LABEL.get(violation_type, violation_type),
+                "횟수": count,
+                "마지막": last_at,
+            }
+            for subject, key, violation_type, count, last_at in found
+        ]
+
+    async def _anomaly_rows(self, days: int) -> list[dict[str, Any]]:
+        """`recent_anomalies` 도구가 쓰는 이상 목록."""
+        if self._store is None:
+            return []
+        since = today_since(self._clock, max(1, days))
+        rows = await self._store.list_anomalies(since, 50)
+        return [
+            {"이상번호": aid, "카메라": cam, "점수": score, "시각": at, "무엇이 달랐나": note}
+            for aid, cam, score, at, _path, note in rows
+        ]
 
     def _remember(self, session_id: str, question: str, response: ChatResponse) -> None:
         """대화 한 턴을 기억한다. **경계가 있다** — 세션 수도 턴 수도 무한하지 않다.
@@ -960,6 +1061,25 @@ def _window_label(from_: datetime | None, to: datetime | None) -> str:
     start = from_.astimezone(UTC).date().isoformat() if from_ else "처음"
     end = to.astimezone(UTC).date().isoformat() if to else "지금"
     return f"{start} ~ {end}"
+
+
+def _route_of_tools(used: Sequence[str]) -> ChatRoute:
+    """부른 도구들 → §4.4 `route`. **실제로 무엇을 했는지**로 정한다.
+
+    계약이 `sql`/`vector`/`vision` 셋이라 에이전트가 여럿을 불러도 하나로 접어야 한다.
+    현재 프레임을 봤으면 그것이 답의 성격을 결정하고(가장 강한 근거), 다음이 집계,
+    나머지가 장면 검색이다. 무엇을 불렀는지 전량은 `sources[]` 에 그대로 남는다.
+
+    ⚠ §4.4 는 경로 셋을 전제로 쓰였다. 도구 호출로 바뀌면서 `route` 하나로는 답의
+    근거를 다 담지 못한다 — `route: "agent"` 와 `tools_used[]` 를 둘지
+    `docs/INDEX.md` 「명세서 확인 필요」에 올려 두었다.
+    """
+    joined = " ".join(used)
+    if "current_scene" in joined:
+        return "vision"
+    if any(name in joined for name in ("metrics_summary", "violation_breakdown", "repeat_ranking")):
+        return "sql"
+    return "vector"
 
 
 def _percent(value: float | None) -> str:

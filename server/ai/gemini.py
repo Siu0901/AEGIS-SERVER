@@ -22,10 +22,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from server.ai.ports import CloudError
+from server.ai.ports import CloudError, LlmTurn, ToolCall, ToolExchange, ToolSpec
 
 __all__ = ["GeminiCloud", "create_cloud"]
 
@@ -136,6 +137,100 @@ class GeminiCloud:
                 msg = "생성 응답이 비어 있다"
                 raise CloudError(msg)
             return str(text).strip()
+
+        return await self._guarded(call)
+
+    async def converse(
+        self,
+        prompt: str,
+        *,
+        tools: Sequence[ToolSpec],
+        history: Sequence[ToolExchange] = (),
+        images: Sequence[bytes] = (),
+    ) -> LlmTurn:
+        """도구 목록을 주고 모델이 무엇을 부를지 고르게 한다. FN-AI-08
+
+        ★ **여기가 유일하게 `FunctionDeclaration` 을 아는 곳이다.** 도구는 포트의
+        `ToolSpec`(JSON Schema)으로 들어오고, 공급자 형식으로 바꾸는 일은 이 파일이
+        한다 — 그래야 도구 정의가 Gemini 를 모르는 채로 남는다(§7 어댑터 계층).
+
+        `history` 는 **이번 질문 안에서의 도구 왕복**이다. 매 요청에 통째로 다시
+        싣는다 — 모델이 이미 부른 도구를 또 부르지 않으려면 무엇을 받았는지 보여야 한다.
+        """
+        from google.genai import types
+
+        declarations = [
+            types.FunctionDeclaration(
+                name=spec.name,
+                description=spec.description,
+                parameters_json_schema=dict(spec.parameters),
+            )
+            for spec in tools
+        ]
+
+        parts: list[Any] = [types.Part.from_text(text=prompt)]
+        for image in images:
+            parts.append(types.Part.from_bytes(data=image, mime_type="image/jpeg"))
+        contents: list[Any] = [types.Content(role="user", parts=parts)]
+
+        for exchange in history:
+            # ★ **모델 턴은 원본을 그대로 되싣는다.** 우리가 `ToolCall` 로 다시
+            #   조립하면 Gemini 가 붙인 `thought_signature` 가 사라지고
+            #   `400 ... missing a thought_signature` 로 거절당한다(실측).
+            contents.append(
+                exchange.raw
+                if exchange.raw is not None
+                else types.Content(
+                    role="model",
+                    parts=[
+                        types.Part.from_function_call(name=call.name, args=dict(call.args))
+                        for call in exchange.calls
+                    ],
+                )
+            )
+            contents.append(
+                types.Content(
+                    role="user",
+                    parts=[
+                        types.Part.from_function_response(
+                            name=result.name, response={"result": result.content}
+                        )
+                        for result in exchange.results
+                    ],
+                )
+            )
+
+        config = types.GenerateContentConfig(
+            tools=[types.Tool(function_declarations=declarations)] if declarations else None
+        )
+
+        def call() -> LlmTurn:
+            response = self.client.models.generate_content(
+                model=self.text_model, contents=contents, config=config
+            )
+            candidates = getattr(response, "candidates", None)
+            if not candidates:
+                msg = "응답에 후보가 없다"
+                raise CloudError(msg)
+            turn = candidates[0].content
+            said: list[str] = []
+            wanted: list[ToolCall] = []
+            for part in turn.parts or []:
+                if getattr(part, "function_call", None) is not None:
+                    wanted.append(
+                        ToolCall(
+                            name=part.function_call.name,
+                            args=dict(part.function_call.args or {}),
+                        )
+                    )
+                elif getattr(part, "text", None):
+                    said.append(str(part.text))
+            # 문장도 도구 호출도 없으면 루프가 조용히 빈손으로 끝난다. 여기서 막아야
+            # 원인이 「모델이 아무것도 돌려주지 않았다」로 남는다(절대규칙 9).
+            if not said and not wanted:
+                msg = "모델이 문장도 도구 호출도 돌려주지 않았다"
+                raise CloudError(msg)
+            return LlmTurn(text="\n".join(said).strip(), calls=tuple(wanted), raw=turn)
 
         return await self._guarded(call)
 

@@ -530,7 +530,11 @@ class SceneSearchResponse(SpecModel):
 
 
 class ChatSource(SpecModel):
-    """챗봇 응답 근거. API명세서 §4.4"""
+    """챗봇 응답 근거. API명세서 §4.4
+
+    `type` 이 자유 문자열이라 **도구 호출 내역을 그대로 실을 수 있다** — 에이전트가
+    어떤 도구를 어떤 인자로 불렀는지가 곧 답변의 근거다(`type: "tool"`).
+    """
 
     type: str
     detail: str
