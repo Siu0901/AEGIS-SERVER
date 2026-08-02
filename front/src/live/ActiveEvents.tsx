@@ -20,7 +20,6 @@ import { subscribeDashboard } from '../api/system'
 import { useMergedRefresh } from '../api/useRefresh'
 import {
   STATUS_TONE,
-  cameraName,
   relativeTime,
   statusLabel,
   violationLabel,
@@ -31,6 +30,7 @@ import {
   type EventStatus,
   type EventSummary,
 } from '../types/system'
+import { useCameraName } from '../api/cameraNames'
 
 /** 종결되지 않은 상태(기능명세서 §4.2). 저장소의 `OPEN_STATUSES` 와 같은 집합이다. */
 const OPEN: EventStatus[] = ['candidate', 'active', 'alerted', 're_alerted', 'lost']
@@ -39,6 +39,7 @@ const OPEN: EventStatus[] = ['candidate', 'active', 'alerted', 're_alerted', 'lo
 const SAMPLE = 60
 
 export default function ActiveEvents({ camIds }: { camIds: number[] }) {
+  const cameraName = useCameraName()
   const [open, setOpen] = useState<EventSummary[]>([])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)

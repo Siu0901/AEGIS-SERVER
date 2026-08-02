@@ -32,7 +32,8 @@ import { applyZoneUpdate, fetchZones } from '../api/zones'
 import ActiveEvents from '../live/ActiveEvents'
 import CameraTile from '../live/CameraTile'
 import QuickControls from '../live/QuickControls'
-import { cameraName, retentionLabel, violationLabel } from '../types/labels'
+import { useCameraName } from '../api/cameraNames'
+import { retentionLabel, violationLabel } from '../types/labels'
 import {
   UNMEASURED,
   isAnomalyMsg,
@@ -53,6 +54,7 @@ type EdgeAlert = {
 }
 
 export default function LivePage() {
+  const cameraName = useCameraName()
   const { status, connected, error } = useSystemStatus()
   const [searchParams, setSearchParams] = useSearchParams()
   const [alerts, setAlerts] = useState<EdgeAlert[]>([])

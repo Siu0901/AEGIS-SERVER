@@ -30,7 +30,6 @@ import { subscribeDashboard } from '../api/system'
 import { useMergedRefresh } from '../api/useRefresh'
 import { useSystemStatus } from '../api/useSystemStatus'
 import {
-  cameraName,
   clockTime,
   durationLabel,
   relativeTime,
@@ -38,7 +37,7 @@ import {
   statusLabel,
   violationLabel,
 } from '../types/labels'
-import type { DistributionBucket, TimeseriesPoint } from '../types/contracts'
+import type { DistributionBucket, TimeSyncStatus, TimeseriesPoint } from '../types/contracts'
 import {
   UNMEASURED,
   formatRate,
@@ -51,6 +50,7 @@ import {
 } from '../types/system'
 import { STATUS_TONE } from '../types/labels'
 import './overview.css'
+import { useCameraName } from '../api/cameraNames'
 
 /** 「최근 이벤트」에 띄우는 건수. 시안 1페이지가 세 건을 보여준다. */
 const RECENT_LIMIT = 8
@@ -61,7 +61,12 @@ const RECENT_FETCH = 20
 /** 추세 창(일). 시안 1페이지의 스파크라인이 한 주치다. */
 const TREND_DAYS = 7
 
+/** 이 값을 넘으면 시각 경고(§4.5 `clock_offset_warn_ms` 기본). 서버가 판정하고
+ *  화면은 같은 기준으로 색만 맞춘다 — 두 값이 갈리면 배너와 등급이 어긋난다. */
+const CLOCK_WARN_MS = 100
+
 export default function OverviewPage() {
+  const cameraName = useCameraName()
   const { status, connected, error: statusError } = useSystemStatus()
   const [summary, setSummary] = useState<MetricsSummary | null>(null)
   const [recent, setRecent] = useState<EventSummary[]>([])
@@ -369,6 +374,14 @@ export default function OverviewPage() {
                 tone={status.edge.msg_rejected_total > 0 ? 'danger' : 'ok'}
                 value={`${status.edge.msg_rejected_total}건`}
               />
+              <HealthRow
+                name="시각 동기화"
+                /* ★ FN-SYS-02 — 이 실패는 조용하다. 시각이 어긋난 상태에서 잘라낸
+                   클립은 정상적으로 생성되고 재생되지만 **다른 구간을 담는다.**
+                   사람이 열어보기 전까지 드러나지 않으므로 상시 노출한다(§4.6). */
+                tone={clockTone(status.time_sync)}
+                value={clockValue(status.time_sync)}
+              />
             </ul>
           )}
           <p className="card__note">
@@ -458,6 +471,27 @@ function rateTone(rate: number | null): Tone {
 
 function percent(value: number | null): string {
   return value === null ? UNMEASURED : `${Math.round(value * 100)}%`
+}
+
+/**
+ * 시각 동기화 등급 (FN-SYS-02 · §4.6).
+ *
+ * 세 가지를 구분한다 — 「엣지가 없다」(`null`) · 「엣지는 있는데 시계를 못 맞췄다」
+ * (`edge_synced === false`) · 「맞췄고 오차가 이만큼이다」. 셋을 하나로 합치면 클립
+ * 구간을 믿어도 되는지 알 수 없다.
+ */
+function clockTone(sync: TimeSyncStatus): Tone {
+  if (sync.edge_synced === false) return 'danger'
+  if (sync.edge_offset_ms === null) return 'muted'
+  return Math.abs(sync.edge_offset_ms) > CLOCK_WARN_MS ? 'warn' : 'ok'
+}
+
+function clockValue(sync: TimeSyncStatus): string {
+  const server =
+    sync.server_offset_ms === null ? '' : ` · 서버 ${sync.server_offset_ms.toFixed(1)}ms`
+  if (sync.edge_synced === false) return `엣지 동기화 실패 — 클립 구간 신뢰 불가${server}`
+  if (sync.edge_offset_ms === null) return `엣지 ${UNMEASURED}${server}`
+  return `엣지 ${sync.edge_offset_ms > 0 ? '+' : ''}${sync.edge_offset_ms}ms${server}`
 }
 
 function cameraTone(states: string[]): Tone {

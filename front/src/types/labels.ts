@@ -64,17 +64,18 @@ export const CLIP_STATUS_LABEL: Record<ClipStatus, string> = {
 }
 
 /**
- * 카메라 표시 이름. 실제 설치 위치명은 M6 설정 화면(FN-CFG)에서 관리한다.
+ * 카메라 표시 이름의 **대체값**. 진짜 이름은 `GET /cameras` 의 `name` 이다(§4.5).
  *
- * 시안의 「자재 야적장」·「굴착 구역」이 아니라 제조현장 이름을 쓴다(부록 B).
+ * ★ **코드에 이름 표를 두지 않는다**(절대규칙 6). 전에는 여기 `CAMERA_NAMES` 가 박혀
+ * 있어서, 설정 화면은 DB 이름(「조립 라인」)을 쓰고 목록·개요·라이브는 코드의 이름
+ * (「작업장 A」)을 써 **같은 카메라가 화면마다 다른 이름으로 보였다.** 설정에서 이름을
+ * 바꿔도 반영되지 않았다.
+ *
+ * 이 함수는 목록을 아직 받지 못했을 때만 쓴다 — 자리를 비워 두면 화면이 흔들리고,
+ * 없는 이름을 지어내면 그것이 진짜 이름처럼 읽힌다. `카메라 3` 은 둘 다 아니다.
  */
-export const CAMERA_NAMES: Record<number, string> = {
-  1: '카메라 1 · 작업장 A',
-  2: '카메라 2 · 지게차 통행로',
-}
-
-export function cameraName(camId: number): string {
-  return CAMERA_NAMES[camId] ?? `카메라 ${camId}`
+export function cameraFallbackName(camId: number): string {
+  return `카메라 ${camId}`
 }
 
 export function violationLabel(value: string): string {

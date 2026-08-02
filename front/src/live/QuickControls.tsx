@@ -17,7 +17,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { fetchMuteState, postManualAlert, postMute } from '../api/alerts'
 import { subscribeDashboard } from '../api/system'
 import { useMergedRefresh } from '../api/useRefresh'
-import { cameraName, VIOLATION_LABEL } from '../types/labels'
+import { useCameraName } from '../api/cameraNames'
+import { VIOLATION_LABEL } from '../types/labels'
 import { isCameraSystemMsg, isSystemMsg } from '../types/system'
 import type { AlertLevel, MuteAlertResponse, ViolationType } from '../types/system'
 
@@ -61,6 +62,7 @@ const SOUND_CHOICES: { label: string; sound: string | null }[] = [
 ]
 
 export default function QuickControls({ camIds }: { camIds: number[] }) {
+  const cameraName = useCameraName()
   const [target, setTarget] = useState<number | null>(camIds[0] ?? null)
   const [sound, setSound] = useState<string | null>(null)
   const [level, setLevel] = useState<AlertLevel>(2)
@@ -165,8 +167,8 @@ export default function QuickControls({ camIds }: { camIds: number[] }) {
         refresh()
         setMessage(
           releaseNow
-            ? `${scopeName(target)} 경고를 다시 켰다`
-            : `${scopeName(target)} 경고를 멈췄다 — 그동안 확정된 이벤트는 시정률에서 제외된다`,
+            ? `${scopeName(target, cameraName)} 경고를 다시 켰다`
+            : `${scopeName(target, cameraName)} 경고를 멈췄다 — 그동안 확정된 이벤트는 시정률에서 제외된다`,
         )
       })
       .catch((cause: unknown) => {
@@ -186,7 +188,7 @@ export default function QuickControls({ camIds }: { camIds: number[] }) {
           {active.map(([scope, state]) => (
             <li key={scope} className="quick__muted-row">
               <span className="badge badge--warn">경고 중지</span>
-              <span className="quick__muted-name">{scopeName(state.cam_id)}</span>
+              <span className="quick__muted-name">{scopeName(state.cam_id, cameraName)}</span>
               <span className="quick__muted-left">
                 {remaining(state.muted_until, now)} 남음 · {state.reason}
               </span>
@@ -309,7 +311,8 @@ function key(camId: number | null): string {
   return camId === null ? 'all' : String(camId)
 }
 
-function scopeName(camId: number | null): string {
+/** 대상 이름. **훅을 부를 수 없는 자리**라 이름 함수를 받아 쓴다(§4.5 단일 원천). */
+function scopeName(camId: number | null, cameraName: (camId: number) => string): string {
   return camId === null ? '전체 카메라' : cameraName(camId)
 }
 

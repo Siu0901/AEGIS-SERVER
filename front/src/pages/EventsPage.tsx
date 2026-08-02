@@ -27,7 +27,6 @@ import {
   CLIP_STATUS_LABEL,
   STATUS_TONE,
   VIOLATION_LABEL,
-  cameraName,
   clockTime,
   durationLabel,
   relativeTime,
@@ -44,6 +43,7 @@ import {
   type ViolationType,
 } from '../types/system'
 import './events.css'
+import { useCameraName } from '../api/cameraNames'
 
 /** 한 번에 불러오는 건수. 커서 페이징이므로 「더 보기」로 이어 받는다(§4.1). */
 const PAGE_SIZE = 40
@@ -70,6 +70,7 @@ const CHIPS: Chip[] = [
 ]
 
 export default function EventsPage() {
+  const cameraName = useCameraName()
   const [searchParams, setSearchParams] = useSearchParams()
   const [items, setItems] = useState<EventSummary[]>([])
   const [cursor, setCursor] = useState<string | null>(null)
@@ -218,6 +219,7 @@ function EventDetailPanel({
   eventId: string | null
   onRefreshList: () => void
 }) {
+  const cameraName = useCameraName()
   const [detail, setDetail] = useState<EventDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [note, setNote] = useState('')
