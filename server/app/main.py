@@ -251,6 +251,9 @@ def create_app(
         media_root=resolved.media_root,
         cam_ids=resolved.cam_ids,
         report_stats=event_service.summary,
+        # §6 `normal_pool.embedding_model` — 벡터가 **어느 공간에 사는지**를 행에 함께
+        # 적는다. 없으면 모델을 바꾼 순간 옛 벡터와 새 벡터가 한 풀에서 비교된다.
+        embedding_model=resolved.gemini_embed_model,
     )
     # ★ 확정 시 분석을 건다. **`EventService` 는 기다리지 않는다** — `on_confirmed` 가
     #   하는 일은 배경 태스크 하나를 띄우는 것뿐이고, 그 시그니처는 클립 예약과 같다.
@@ -267,7 +270,9 @@ def create_app(
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         # FN-SYS-02 — 클립 구간 정합의 전제. 실패해도 기동을 막지 않되 반드시 남긴다.
-        await check_time_sync(
+        # 결과를 **보관한다** — `GET /system/status` 의 `time_sync.server_offset_ms`(§4.6)가
+        # 이 값이다. 엣지 오차와 나란히 봐야 어느 쪽 시계가 틀렸는지 가릴 수 있다.
+        application.state.time_sync = await check_time_sync(
             resolved.ntp_server,
             ticker,
             warn_offset_ms=resolved.ntp_warn_offset_ms,
@@ -289,12 +294,19 @@ def create_app(
         alert_service.set_policies(event_service.machine.policies)
         if clip_service is not None:
             clip_service.set_policies(event_service.machine.policies)
+        # `anomaly_sample_interval_min`(§4.5)도 DB 값이다(절대규칙 6). 이 줄이 없으면
+        # 설정 화면에서 주기를 바꿔도 서버는 코드 기본값(5분)으로 계속 돈다 — 화면에는
+        # 바뀐 값이 그대로 남아 있어서 어긋난 사실이 아무 데도 드러나지 않는다.
+        ai_service.set_policies(event_service.machine.policies)
+        # `clock_offset_warn_ms`(§4.5) — 엣지 시계 경고 임계도 DB 값이다.
+        edge.clock_offset_warn_ms = event_service.machine.policies.clock_offset_warn_ms
         tasks = [
             asyncio.create_task(
                 _watch_storage(storage, hub, ticker, clip_service), name="storage-watch"
             ),
             asyncio.create_task(
-                _tick_events(event_service, alert_service, clip_service), name="event-tick"
+                _tick_events(event_service, alert_service, clip_service, ai_service, edge),
+                name="event-tick",
             ),
         ]
         if clip_service is not None:
@@ -365,6 +377,9 @@ def create_app(
     # FN-CFG-03 — 설정 화면이 음원 매핑을 읽고 고치는 통로(§4.5). 경고 경로가 쓰는
     # `SoundLibrary` 와 같은 테이블을 본다.
     application.state.sounds = sounds or (DbSoundRepository(engine) if engine else None)
+    # `PUT /alert-sounds` 가 저장 전에 파일 존재를 검사하는 기준 폴더(§4.5). 경고
+    # 집행자가 **실제로 읽는 곳**과 같아야 검사가 의미를 갖는다.
+    application.state.audio_dir = resolved.audio_dir
     # FN-CFG-01 · 05 — 캘리브레이션과 위험 반경. 설정 화면이 쓰는 저장소들이다.
     application.state.cameras = cameras or (DbCameraRepository(engine) if engine else None)
     application.state.vehicle_classes = vehicle_classes or (
@@ -490,6 +505,8 @@ async def _tick_events(
     service: EventService,
     alerts: AlertService,
     clips: ClipService | None = None,
+    ai: AiService | None = None,
+    edge: EdgeRuntime | None = None,
 ) -> None:
     """상태머신에 시간을 흘려보낸다 — 소실 감지 · 유예 만료 · 쿨다운.
 
@@ -521,6 +538,12 @@ async def _tick_events(
                 # 상태머신이 방금 읽은 것을 그대로 나눠 쓴다 — 두 번 읽으면 같은 순간에
                 # 서로 다른 사전/사후 구간으로 클립을 뽑는 창이 생긴다.
                 clips.set_policies(service.machine.policies)
+            if ai is not None:
+                # `anomaly_sample_interval_min` 도 마찬가지다. 다음 샘플부터 반영된다 —
+                # 지금 자고 있는 주기는 그대로 흐른다.
+                ai.set_policies(service.machine.policies)
+            if edge is not None:
+                edge.clock_offset_warn_ms = service.machine.policies.clock_offset_warn_ms
         if since_sound >= SOUND_REFRESH_SECONDS:
             # 설정 화면(FN-CFG-03 · M6)에서 음원을 바꾸면 이만큼 안에 반영된다.
             # 경고 경로에서 DB 를 읽지 않기 위한 주기 갱신이다 — 1초 예산 안에

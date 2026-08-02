@@ -25,6 +25,8 @@ from aegis_contracts import (
     EventStatus,
     EventSummary,
     MetricsSummary,
+    Policies,
+    ReportDetail,
     SceneSearchFilters,
     SceneSearchRequest,
     SimilarIncident,
@@ -39,13 +41,7 @@ from server.ai.incidents import IncidentMatcher, load_incidents
 from server.ai.ports import CloudError
 from server.ai.regulations import load_regulations, regulations_for
 from server.ai.search import parse_query
-from server.ai.service import (
-    ANOMALY_THRESHOLD,
-    HISTORY_TURNS,
-    MIN_POOL,
-    AiService,
-    time_bucket,
-)
+from server.ai.service import AiService, time_bucket
 from server.ai.vectors import anomaly_score, cosine_similarity
 from server.domain.cloud_state import CloudRuntime
 
@@ -413,21 +409,40 @@ class _Embedder:
         return list(self._vector)
 
 
+#: 상수였던 값들이 §4.5 정책 키가 됐다. 테스트도 같은 출처를 본다 — 코드에 다시
+#: 적으면 정책 기본값이 바뀔 때 테스트만 옛 값을 붙들고 통과한다.
+_P = Policies()
+MIN_POOL = _P.anomaly_min_pool
+ANOMALY_THRESHOLD = _P.anomaly_threshold
+HISTORY_TURNS = _P.assistant_history_turns
+
+
 class _AiStore:
     def __init__(self, pool: list[list[float]]) -> None:
         self._pool = pool
         self.samples: list[list[float]] = []
+        self.models: list[str] = []
+        self.pruned = 0
         self.anomalies: list[tuple[int, float]] = []
+        self.keyframes: dict[int, str] = {}
 
     async def add_sample(
-        self, cam_id: int, time_bucket: str, vector: list[float], at: datetime
+        self, cam_id: int, time_bucket: str, vector: list[float], at: datetime, model: str
     ) -> None:
         del cam_id, time_bucket, at
+        self.models.append(model)
         self.samples.append(vector)
 
-    async def pool(self, cam_id: int, time_bucket: str, limit: int) -> list[list[float]]:
-        del cam_id, time_bucket, limit
+    async def pool(
+        self, cam_id: int, time_bucket: str, limit: int, model: str
+    ) -> list[list[float]]:
+        del cam_id, time_bucket, limit, model
         return list(self._pool)
+
+    async def drop_other_models(self, model: str) -> int:
+        del model
+        self.pruned += 1
+        return 0
 
     async def create_anomaly(
         self,
@@ -441,6 +456,9 @@ class _AiStore:
         del at, keyframe_path, llm_note
         self.anomalies.append((cam_id, score))
         return len(self.anomalies)
+
+    async def set_anomaly_keyframe(self, anomaly_id: int, path: str) -> None:
+        self.keyframes[anomaly_id] = path
 
     async def list_anomalies(
         self, from_: datetime | None, limit: int
@@ -786,7 +804,7 @@ def test_report_is_generated_from_sql_numbers() -> None:
         report_stats=stats,
     )
 
-    async def run() -> dict[str, Any]:
+    async def run() -> ReportDetail:
         report_id = await service.start_weekly_report(NOW - timedelta(days=7), NOW)
         await asyncio.gather(
             *[task for task in asyncio.all_tasks() if task.get_name().startswith("ai-report")]
@@ -796,6 +814,7 @@ def test_report_is_generated_from_sql_numbers() -> None:
         return found
 
     report = asyncio.run(run())
-    assert report["status"] == "ready"
-    assert "87%" in str(report["body"])
-    assert report["stats"]["total_violations"] == 24
+    assert report.status == "ready"
+    assert "87%" in str(report.body)
+    assert report.stats is not None
+    assert report.stats.total_violations == 24

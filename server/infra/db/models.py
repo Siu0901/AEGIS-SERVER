@@ -287,6 +287,18 @@ class NormalPoolSample(SQLModel, table=True):
         default=None,
         sa_column=Column(HALFVEC(EMBEDDING_DIM), nullable=True),
     )
+    embedding_model: str = Field(
+        index=True,
+        description="이 벡터를 만든 모델. 다른 모델의 행은 판정에서 제외한다",
+    )
+    """★ **필수다**(기능명세서 §6 갱신분).
+
+    벡터는 모델마다 다른 공간에 산다. 모델을 교체하면 이전 벡터가 남아 새 모델의 초기
+    샘플이 전부 「평소와 다름」으로 잡힌다 — **실측 4회 연속 오탐**이 났다(k=5 라 풀이
+    새 벡터로 채워질 때까지 이어진다). 서버는 현재 모델과 다른 행을 판정에서 제외하고,
+    새 모델의 풀이 `anomaly_min_pool` 에 도달하면 이전 모델 행을 정리한다.
+    사람이 `DELETE FROM` 으로 비우게 하지 않는다.
+    """
     sampled_at: datetime | None = Field(default=None, sa_column=_timestamptz())
 
 

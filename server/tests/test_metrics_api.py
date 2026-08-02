@@ -198,18 +198,28 @@ def test_anomalies_are_listed_with_their_scores() -> None:
     assert item["note"] == "평소와 다른 상황"
 
 
-def test_anomaly_keyframe_url_is_null_not_a_filesystem_path() -> None:
+def test_anomaly_keyframe_url_is_a_media_url_not_a_filesystem_path() -> None:
     """★ 저장 경로를 그대로 내보내지 않는다(§5 경로 규약).
 
-    이상 프레임을 `media/` 에 두는 규칙이 §4.4 에 없으므로(그쪽은 이벤트 클립·키프레임
-    전용이다) URL 을 만들 수 없다. 없는 URL 을 문자열로 내보내는 대신 `null` 이다.
+    이상 프레임은 `media/anomalies/{id}.jpg` 에 있고(§4 `GET /anomalies`), 응답에는
+    **URL** 이 나간다. 파일시스템 경로를 실어 보내면 브라우저가 열 수 없을 뿐 아니라
+    서버의 디렉토리 구조가 그대로 새어 나간다.
     """
-    store = FakeAnomalyStore([(1, 1, 0.4, NOW, "C:/media/anom.jpg", None)])
+    store = FakeAnomalyStore([(1, 1, 0.4, NOW, "C:/media/anomalies/7.jpg", None)])
+    with build(FakeEventStore([])) as client:
+        client.app.state.ai_store = store  # type: ignore[attr-defined]
+        body = client.get("/api/v1/anomalies").json()
+    assert body["items"][0]["keyframe_url"] == "/media/anomalies/7.jpg"
+    assert body["items"][0]["note"] is None
+
+
+def test_anomaly_keyframe_url_is_null_when_the_frame_was_not_saved() -> None:
+    """저장에 실패했으면 `null` 이다(§5.2) — 없는 URL 을 문자열로 내보내지 않는다."""
+    store = FakeAnomalyStore([(1, 1, 0.4, NOW, None, None)])
     with build(FakeEventStore([])) as client:
         client.app.state.ai_store = store  # type: ignore[attr-defined]
         body = client.get("/api/v1/anomalies").json()
     assert body["items"][0]["keyframe_url"] is None
-    assert body["items"][0]["note"] is None
 
 
 def test_anomalies_report_503_when_the_store_is_missing() -> None:

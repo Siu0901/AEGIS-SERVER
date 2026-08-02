@@ -42,6 +42,8 @@ from aegis_contracts import (
     EventSummary,
     MetricsSummary,
     Policies,
+    ReportDetail,
+    ReportPeriod,
     SceneSearchFilters,
     SceneSearchItem,
     SceneSearchRequest,
@@ -59,46 +61,24 @@ from server.ai.search import ParsedQuery, parse_query
 from server.ai.vectors import anomaly_score
 from server.domain.aggregates import distribution
 
-__all__ = ["ANOMALY_THRESHOLD", "AiService", "time_bucket"]
+__all__ = ["AiService", "time_bucket"]
 
 log = logging.getLogger("server.ai")
 
-#: 이 점수를 넘으면 이상 플래그를 만든다(§6.8). 정상 풀이 얇은 초기에는 거리가
-#: 크게 나오므로 풀이 `MIN_POOL` 을 넘기 전에는 판정하지 않는다.
-ANOMALY_THRESHOLD = 0.35
-
-#: 판정을 시작하기 위한 최소 정상 샘플 수. k-NN 의 k 보다 넉넉해야 한 장의 이상치가
-#: 평균을 끌고 다니지 않는다.
-MIN_POOL = 12
-
 #: 정상 풀에서 비교할 최근 샘플 수. 시간대별로 나뉘므로 이 정도면 며칠치가 담긴다.
 POOL_LIMIT = 200
-
-#: ★ **임베딩 모델을 바꾸면 `normal_pool` 을 비워야 한다.**
-#:
-#: 벡터는 모델마다 다른 공간에 산다. 옛 벡터가 남아 있으면 새 모델의 첫 샘플들이
-#: 전부 「평소와 다르다」로 잡히고, 그 오탐은 풀이 새 벡터로 채워질 때까지(k=5 이므로
-#: 다섯 주기) 이어진다 — 실측으로 4회 연속 오탐이 났다.
-#:
-#: 지금은 수동이다(`DELETE FROM normal_pool`). `gemini_embed_model` 이 바뀐 것을
-#: 서버가 알아채 비우게 하려면 모델 이름을 행에 함께 저장해야 하고, 그건 §6
-#: `normal_pool` 에 칸을 늘리는 일이라 명세서 확인이 필요하다.
-POOL_MODEL_NOTE = "임베딩 모델 교체 시 normal_pool 을 비운다"
-
-#: 이상 판정에 쓰는 k(§6.8 「k-최근접 평균 코사인 거리」).
-ANOMALY_K = 5
 
 #: 검색 결과 기본 개수. §4.3 요청이 `top_k` 를 주면 그것을 쓴다.
 DEFAULT_TOP_K = 12
 MAX_TOP_K = 50
 
-#: 세션 하나가 기억하는 최근 턴 수. 프롬프트에 실을 맥락이자 후속 질의 판단의 근거다.
-#: 넉넉히 두면 프롬프트가 길어지고 오래된 화제가 답변을 끌고 간다.
-HISTORY_TURNS = 8
-
 #: 동시에 기억하는 세션 수. 넘으면 오래된 것부터 버린다 — 챗봇 이력은 놓쳐도 안전에
-#: 영향이 없다(다시 물으면 된다). 경계 없는 dict 를 서버에 두지 않는다.
+#: 영향이 없다(다시 물으면 된다). 경계 없는 dict 를 서버에 두지 않는다(§4.4).
 HISTORY_SESSIONS = 50
+
+#: 이상 키프레임 보존 기간(일). **이벤트 클립과 정책이 다르다**(§4.5) — 이쪽은
+#: 진단용이라 30일이면 충분하고, 증거로 남기는 클립은 REC 의 7일 순환과 별개로 영구다.
+ANOMALY_KEYFRAME_RETENTION_DAYS = 30
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,14 +91,16 @@ class ChatTurn:
     answer: str
 
 
-def time_bucket(at: datetime) -> str:
+def time_bucket(at: datetime, hours: int = 3) -> str:
     """정상 풀을 나누는 시간대 키(기능명세서 §4.5 「시간대별로 정상 풀을 분리 축적」).
 
     조명과 그림자가 시간대마다 달라서, 아침 풀과 야간 풀을 섞으면 정상 조명 변화가
-    곧 이상으로 잡힌다. 3시간 단위로 나눈다 — 더 잘게 나누면 풀이 채워지지 않는다.
+    곧 이상으로 잡힌다. 잘게 나눌수록 조명이 균질해지지만 풀이 `anomaly_min_pool` 에
+    도달하지 못하므로, 크기는 `anomaly_time_bucket_h`(기본 3) 정책값이다.
     """
+    size = max(1, hours)
     hour = at.astimezone(UTC).hour
-    return f"{hour // 3 * 3:02d}"
+    return f"{hour // size * size:02d}"
 
 
 class EventReader(Protocol):
@@ -148,10 +130,14 @@ class AiStore(Protocol):
     """`DbAiRepository` 중 이 서비스가 쓰는 부분."""
 
     async def add_sample(
-        self, cam_id: int, time_bucket: str, vector: list[float], at: datetime
+        self, cam_id: int, time_bucket: str, vector: list[float], at: datetime, model: str
     ) -> None: ...
 
-    async def pool(self, cam_id: int, time_bucket: str, limit: int) -> list[list[float]]: ...
+    async def pool(
+        self, cam_id: int, time_bucket: str, limit: int, model: str
+    ) -> list[list[float]]: ...
+
+    async def drop_other_models(self, model: str) -> int: ...
 
     async def create_anomaly(
         self,
@@ -162,6 +148,8 @@ class AiStore(Protocol):
         keyframe_path: str | None = None,
         llm_note: str | None = None,
     ) -> int: ...
+
+    async def set_anomaly_keyframe(self, anomaly_id: int, path: str) -> None: ...
 
     async def list_anomalies(
         self, from_: datetime | None, limit: int
@@ -203,6 +191,7 @@ class AiService:
         media_root: Path | None = None,
         cam_ids: Sequence[int] = (),
         report_stats: ReportStats | None = None,
+        embedding_model: str = "",
     ) -> None:
         self._clock = clock
         self._guard = guard
@@ -215,13 +204,17 @@ class AiService:
         self._media_root = media_root
         self._cam_ids = tuple(cam_ids)
         self._report_stats = report_stats
+        # 이 벡터가 **어느 공간에 사는지**를 행에 함께 적기 위한 이름(§6). 어댑터가
+        # 없으면 빈 문자열이고, 그때는 임베딩 자체가 없으므로 풀에 쓸 일도 없다.
+        self._embedding_model = embedding_model or getattr(embedder, "embed_model", "") or "unknown"
+        self._pruned = False
         self._incidents = IncidentMatcher(embedder)
         self._policies = Policies()
         self._tasks: set[asyncio.Task[None]] = set()
         # 보고서는 메모리에 둔다. **예약 큐가 아니라 결과 캐시다** — 서버가 죽으면
         # 다시 요청하면 되고, 클립 예약(FN-REC-03)처럼 놓치면 증거가 사라지는 것이
         # 아니다. DB 테이블을 늘리는 대신 그 사실을 여기 적어 둔다.
-        self._reports: dict[str, dict[str, Any]] = {}
+        self._reports: dict[str, ReportDetail] = {}
         # §4.4 `session_id` 별 대화. **이것이 없으면 후속 질의가 성립하지 않는다** —
         # 「각각 무슨 위반이야?」가 무엇을 가리키는지 알 방법이 사라진다.
         self._history: dict[str, list[ChatTurn]] = {}
@@ -232,7 +225,13 @@ class AiService:
         )
 
     def set_policies(self, policies: Policies) -> None:
-        """`anomaly_sample_interval_min` 을 DB 값으로 받는다(절대규칙 6)."""
+        """이상 탐지 임계·주기와 대화 이력 길이를 DB 값으로 받는다(절대규칙 6).
+
+        `anomaly_threshold` · `anomaly_knn_k` · `anomaly_min_pool` ·
+        `anomaly_time_bucket_h` · `anomaly_sample_interval_min` · `assistant_history_turns`.
+        전부 §4.5 정책 키이며 코드 상수로 두지 않는다 — 이상 탐지 임계는 조명·현장
+        특성에 좌우되는 현장 조정 대상이다.
+        """
         self._policies = policies
 
     @property
@@ -419,7 +418,7 @@ class AiService:
         """
         turns = self._history.setdefault(session_id, [])
         turns.append(ChatTurn(question=question, route=response.route, answer=response.answer))
-        del turns[:-HISTORY_TURNS]
+        del turns[: -max(1, self._policies.assistant_history_turns)]
         while len(self._history) > HISTORY_SESSIONS:
             self._history.pop(next(iter(self._history)))
 
@@ -652,13 +651,14 @@ class AiService:
         있는지 알 수 없다. 진행 상태는 `GET /reports/{id}` 로 본다.
         """
         report_id = f"RP-{from_.strftime('%Y%m%d')}-{len(self._reports) + 1:02d}"
-        self._reports[report_id] = {
-            "report_id": report_id,
-            "status": "generating",
-            "from": from_.date().isoformat(),
-            "to": to.date().isoformat(),
-            "body": None,
-        }
+        self._reports[report_id] = ReportDetail(
+            report_id=report_id,
+            # §4.4 — `pending` 이다. 「생성 중」을 뜻하는 이름이 계약에 하나뿐이어야
+            # 화면이 상태를 문자열로 짐작하지 않는다.
+            status="pending",
+            period=ReportPeriod.model_validate({"from": from_.date(), "to": to.date()}),
+            created_at=self._clock.now(),
+        )
         task = asyncio.create_task(
             self._write_report(report_id, from_, to), name=f"ai-report:{report_id}"
         )
@@ -666,8 +666,8 @@ class AiService:
         task.add_done_callback(self._tasks.discard)
         return report_id
 
-    def report(self, report_id: str) -> dict[str, Any] | None:
-        """예약된 보고서의 현재 상태. 없으면 `None`."""
+    def report(self, report_id: str) -> ReportDetail | None:
+        """예약된 보고서의 현재 상태(§4.4). 없으면 `None`."""
         return self._reports.get(report_id)
 
     async def _write_report(self, report_id: str, from_: datetime, to: datetime) -> None:
@@ -678,6 +678,7 @@ class AiService:
         보고서가 나간다 — 비어 있는 것보다 낫다.
         """
         report = self._reports[report_id]
+        period = f"{report.period.from_.isoformat()} ~ {report.period.to.isoformat()}"
         stats = self._report_stats
         summary: MetricsSummary | None = None
         if stats is not None:
@@ -686,19 +687,19 @@ class AiService:
             except Exception:
                 log.exception("보고서 집계를 읽지 못했다 — %s", report_id)
         if summary is None:
-            report["status"] = "failed"
-            report["body"] = "집계를 읽지 못해 보고서를 만들지 못했다."
+            report.status = "failed"
+            report.error = "집계를 읽지 못해 보고서를 만들지 못했다."
             return
-        report["stats"] = summary.model_dump(mode="json")
+        report.stats = summary
         # 보고서는 자기 기간을 알고 있다 — 내부 라벨(`custom`)이 아니라 날짜를 쓴다.
-        sentence = _summary_sentence(summary, f"{report['from']} ~ {report['to']}")
+        sentence = _summary_sentence(summary, period)
         body = sentence
         if self._llm is not None:
             written = await self._guard.call(
                 "주간 보고서",
                 self._llm.generate(
                     "너는 제조현장 안전관리자를 위한 주간 보고서를 쓴다.\n"
-                    f"기간: {report['from']} ~ {report['to']}\n"
+                    f"기간: {period}\n"
                     f"집계(SQL): {sentence}\n\n"
                     "아래 규칙으로 한국어 보고서를 써라.\n"
                     "1. 위 숫자만 쓴다. 새 수치를 만들지 않는다.\n"
@@ -709,8 +710,8 @@ class AiService:
             )
             if written:
                 body = written
-        report["body"] = body
-        report["status"] = "ready"
+        report.body = body
+        report.status = "ready"
         log.info("주간 보고서 완료 — %s", report_id)
 
     async def _capture(self, cam_id: int, at: datetime) -> bytes | None:
@@ -738,8 +739,10 @@ class AiService:
         """
         if self._store is None or self._embedder is None:
             return []
+        policies = self._policies
         at = self._clock.now()
-        bucket = time_bucket(at)
+        bucket = time_bucket(at, policies.anomaly_time_bucket_h)
+        model = self._embedding_model
         made: list[int] = []
         for cam_id in self._cam_ids:
             image = await self._capture(cam_id, at)
@@ -749,18 +752,27 @@ class AiService:
             if vector is None:
                 # 클라우드가 죽었다. 다음 주기에 다시 시도한다 — 안전 기능과 무관하다.
                 return made
-            pool = await self._store.pool(cam_id, bucket, POOL_LIMIT)
-            score = anomaly_score(vector, pool, k=ANOMALY_K)
+            # ★ **같은 모델의 벡터끼리만 비교한다**(§6 `normal_pool.embedding_model`).
+            #   다른 공간의 벡터와 거리를 재면 그 값은 「평소와 다르다」가 아니라
+            #   「비교할 수 없다」인데, 숫자는 그 둘을 구분하지 않는다.
+            pool = await self._store.pool(cam_id, bucket, POOL_LIMIT, model)
+            score = anomaly_score(vector, pool, k=policies.anomaly_knn_k)
             # 샘플은 **판정 여부와 무관하게** 쌓는다. 이상이었던 프레임을 빼면 풀이
             # 점점 좁아져 정상의 정의가 스스로 조여든다.
-            await self._store.add_sample(cam_id, bucket, vector, at)
-            if score is None or len(pool) < MIN_POOL:
+            await self._store.add_sample(cam_id, bucket, vector, at, model)
+            if len(pool) + 1 >= policies.anomaly_min_pool:
+                # 새 모델 풀이 찼다. 이제 옛 모델 행은 자리만 차지한다 —
+                # **찬 뒤에** 지운다(먼저 지우면 교체 직후가 통째로 판정 불가가 된다).
+                await self._prune_old_vectors(model)
+            if score is None or len(pool) < policies.anomaly_min_pool:
                 # 풀이 아직 얇다. 이때의 큰 거리는 "이상"이 아니라 "모른다"이다.
                 continue
-            if score < ANOMALY_THRESHOLD:
+            if score < policies.anomaly_threshold:
                 continue
             note = await self._explain(image)
             anomaly_id = await self._store.create_anomaly(cam_id, score, at, llm_note=note)
+            # 키프레임은 **id 가 정해진 뒤에** 저장한다 — 파일명이 `{anomaly_id}.jpg` 다.
+            keyframe_url = await self._save_anomaly_keyframe(anomaly_id, image)
             made.append(anomaly_id)
             log.info("이상 플래그 — cam%d score=%.3f (경고 방송 없음)", cam_id, score)
             if self._publish is not None:
@@ -771,10 +783,67 @@ class AiService:
                         score=score,
                         detected_at=at,
                         note=note,
-                        keyframe_url=None,
+                        keyframe_url=keyframe_url,
                     )
                 )
         return made
+
+    async def _prune_old_vectors(self, model: str) -> None:
+        """옛 모델의 정상 풀 행을 정리한다(§6 `normal_pool.embedding_model`).
+
+        **사람이 `DELETE FROM` 으로 비우게 하지 않는다.** 그건 아무 데도 적혀 있지 않은
+        운영 절차라, 모델을 바꾼 사람이 그 사실을 모르면 이상 탐지가 조용히 망가진다.
+        """
+        if self._pruned or self._store is None:
+            return
+        self._pruned = True  # 주기마다 부르지 않는다 — 한 번이면 끝나는 일이다
+        try:
+            removed = await self._store.drop_other_models(model)
+        except Exception:
+            log.warning("옛 모델의 정상 풀을 정리하지 못했다 — 판정에는 쓰이지 않는다")
+            return
+        if removed:
+            log.info("옛 임베딩 모델의 정상 풀 %d건 정리 — 현재 모델 %s", removed, model)
+
+    async def _save_anomaly_keyframe(self, anomaly_id: int, image: bytes) -> str | None:
+        """이상 프레임을 `media/anomalies/{id}.jpg` 로 남긴다(§4 `GET /anomalies`).
+
+        ★ **이벤트 클립과 저장 위치를 나눈다.** 보존 정책이 다르기 때문이다 — 이상
+        프레임은 진단용이라 30일 순환으로 충분하고, 증거로 남기는 클립과 섞이면 한쪽
+        정책이 다른 쪽을 지운다.
+
+        실패하면 `null` 이다(§5.2 규약). 없는 URL 을 문자열로 내보내지 않는다.
+        """
+        if self._media_root is None or self._store is None:
+            return None
+        folder = self._media_root / "anomalies"
+        path = folder / f"{anomaly_id}.jpg"
+        try:
+            await asyncio.to_thread(folder.mkdir, parents=True, exist_ok=True)
+            await asyncio.to_thread(path.write_bytes, image)
+            await asyncio.to_thread(self._sweep_anomaly_keyframes, folder)
+        except OSError:
+            log.warning("이상 키프레임을 저장하지 못했다 — %s", anomaly_id)
+            return None
+        # ★ **경로를 행에 남긴다.** 이 갱신이 없으면 파일은 디스크에 있는데
+        #   `GET /anomalies` 의 `keyframe_url` 은 영원히 `null` 이다 — 화면에는 저장이
+        #   실패한 것과 똑같이 보인다(실측으로 그랬다).
+        try:
+            await self._store.set_anomaly_keyframe(anomaly_id, str(path))
+        except Exception:
+            log.warning("이상 키프레임 경로를 저장하지 못했다 — %s", anomaly_id)
+            return None
+        return f"/media/anomalies/{anomaly_id}.jpg"
+
+    def _sweep_anomaly_keyframes(self, folder: Path) -> None:
+        """30일 순환. 이 폴더만 훑는다 — 이벤트 클립·키프레임은 건드리지 않는다."""
+        cutoff = (self._clock.now() - timedelta(days=ANOMALY_KEYFRAME_RETENTION_DAYS)).timestamp()
+        for path in folder.glob("*.jpg"):
+            try:
+                if path.stat().st_mtime < cutoff:
+                    path.unlink(missing_ok=True)
+            except OSError:  # 지우지 못해도 다음 주기에 다시 만난다
+                continue
 
     async def _explain(self, image: bytes) -> str | None:
         """이상 프레임에 「무엇이 평소와 다른지」 설명을 붙인다(기능명세서 §4.5).

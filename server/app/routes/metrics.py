@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
+from pathlib import Path
 from typing import Annotated, Any, Protocol
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -207,10 +208,9 @@ async def list_anomalies(
     ★ **경고 방송을 발동하지 않는 종류의 알림이다.** 조명·날씨로도 점수가 오르므로
     위반과 같은 표시로 그리지 않는다 — 대시보드 '주의'다(기능명세서 §4.5).
 
-    §5.3 은 `anomaly` **발행**만 정의하고 조회 경로를 적지 않았다. 발행만으로는
-    새로고침한 화면과 서버가 죽어 있던 동안의 이상을 볼 수 없어 — 화면이 메시지를
-    놓친 것과 이상이 없었던 것이 같아 보인다 — 여기에 둔다.
-    (`docs/INDEX.md` 「명세서 확인 필요」)
+    §5.3 은 `anomaly` **발행**만 정의한다. 발행만으로는 새로고침한 화면과 서버가 죽어
+    있던 동안의 이상을 볼 수 없어 — 화면이 메시지를 놓친 것과 이상이 없었던 것이 같아
+    보인다 — §4 가 이 조회 경로를 함께 정의했다.
     """
     store: AnomalyStore | None = getattr(request.app.state, "ai_store", None)
     if store is None:
@@ -230,14 +230,20 @@ async def list_anomalies(
                 score=score,
                 detected_at=detected_at,
                 note=note,
-                # 저장 경로를 URL 로 바꾸지 않는다 — 이상 프레임을 `media/` 에 두는
-                # 규칙이 §4.4 에 없다(그쪽은 이벤트 클립·키프레임 전용이다).
-                # 없는 URL 을 문자열로 내보내지 않는 §5.2 규약대로 `null` 이다.
-                keyframe_url=None,
+                # `media/anomalies/{id}.jpg`(§4 `GET /anomalies`). 저장에 실패했으면
+                # 경로가 비어 있고, 그때는 없는 URL 을 문자열로 내보내지 않는다(§5.2).
+                keyframe_url=_anomaly_url(path),
             )
-            for anomaly_id, cam_id, score, detected_at, _path, note in rows
+            for anomaly_id, cam_id, score, detected_at, path, note in rows
         ]
     )
+
+
+def _anomaly_url(path: str | None) -> str | None:
+    """저장 경로 → `/media/anomalies/...` URL. 비어 있으면 `null` 이다(§5.2)."""
+    if not path:
+        return None
+    return f"/media/anomalies/{Path(path).name}"
 
 
 def _repeat_label(

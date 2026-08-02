@@ -25,7 +25,7 @@ from datetime import datetime, timedelta
 from pathlib import PurePosixPath
 from typing import Any, cast
 
-from sqlalchemy import Engine
+from sqlalchemy import Engine, delete
 from sqlalchemy import select as sa_select
 from sqlmodel import Session, col, func, select
 
@@ -663,29 +663,46 @@ class DbAiRepository:
         self._engine = engine
 
     async def add_sample(
-        self, cam_id: int, time_bucket: str, vector: list[float], at: datetime
+        self, cam_id: int, time_bucket: str, vector: list[float], at: datetime, model: str
     ) -> None:
-        """정상 풀에 한 건 쌓는다. **시간대별로 분리 축적한다**(기능명세서 §4.5)."""
-        await asyncio.to_thread(self._add_sample, cam_id, time_bucket, vector, at)
+        """정상 풀에 한 건 쌓는다. **시간대별로 분리 축적한다**(기능명세서 §4.5).
 
-    def _add_sample(self, cam_id: int, time_bucket: str, vector: list[float], at: datetime) -> None:
+        `model` 은 이 벡터를 만든 임베딩 모델이다 — 없으면 모델 교체 후 옛 벡터와
+        새 벡터가 한 풀에서 비교된다(§6 `normal_pool.embedding_model`).
+        """
+        await asyncio.to_thread(self._add_sample, cam_id, time_bucket, vector, at, model)
+
+    def _add_sample(
+        self, cam_id: int, time_bucket: str, vector: list[float], at: datetime, model: str
+    ) -> None:
         with Session(self._engine) as session:
             session.add(
                 NormalPoolRow(
-                    cam_id=cam_id, time_bucket=time_bucket, embedding=vector, sampled_at=at
+                    cam_id=cam_id,
+                    time_bucket=time_bucket,
+                    embedding=vector,
+                    embedding_model=model,
+                    sampled_at=at,
                 )
             )
             session.commit()
 
-    async def pool(self, cam_id: int, time_bucket: str, limit: int) -> list[list[float]]:
-        """그 카메라·그 시간대의 최근 정상 샘플들. 이상 점수의 비교 대상이다(§6.8)."""
-        return await asyncio.to_thread(self._pool, cam_id, time_bucket, limit)
+    async def pool(
+        self, cam_id: int, time_bucket: str, limit: int, model: str
+    ) -> list[list[float]]:
+        """그 카메라·그 시간대·**그 모델**의 최근 정상 샘플들(§6.8).
 
-    def _pool(self, cam_id: int, time_bucket: str, limit: int) -> list[list[float]]:
+        모델이 다른 행은 아예 읽지 않는다. 다른 공간의 벡터와 거리를 재면 그 값은
+        「평소와 다르다」가 아니라 「비교할 수 없다」인데, 숫자는 그 둘을 구분하지 않는다.
+        """
+        return await asyncio.to_thread(self._pool, cam_id, time_bucket, limit, model)
+
+    def _pool(self, cam_id: int, time_bucket: str, limit: int, model: str) -> list[list[float]]:
         statement = (
             select(NormalPoolRow)
             .where(col(NormalPoolRow.cam_id) == cam_id)
             .where(col(NormalPoolRow.time_bucket) == time_bucket)
+            .where(col(NormalPoolRow.embedding_model) == model)
             .where(col(NormalPoolRow.embedding).is_not(None))
             .order_by(col(NormalPoolRow.sampled_at).desc())
             .limit(limit)
@@ -696,6 +713,22 @@ class DbAiRepository:
                 for row in session.exec(statement).all()
                 if row.embedding is not None
             ]
+
+    async def drop_other_models(self, model: str) -> int:
+        """현재 모델이 아닌 정상 풀 행을 지운다. 지운 건수를 돌려준다.
+
+        ★ **새 모델 풀이 충분히 찬 뒤에 부른다**(`anomaly_min_pool`). 먼저 지우면
+        교체 직후 비교 대상이 0이 되어 그 구간이 통째로 판정 불가가 된다 — 옛 행은
+        어차피 `pool()` 이 읽지 않으므로 남아 있어도 판정을 오염시키지 않는다.
+        """
+        return await asyncio.to_thread(self._drop_other_models, model)
+
+    def _drop_other_models(self, model: str) -> int:
+        statement = delete(NormalPoolRow).where(col(NormalPoolRow.embedding_model) != model)
+        with Session(self._engine) as session:
+            result = session.exec(statement)
+            session.commit()
+            return int(result.rowcount or 0)
 
     async def create_anomaly(
         self,
@@ -731,6 +764,26 @@ class DbAiRepository:
             session.commit()
             session.refresh(row)
             return int(row.id or 0)
+
+    async def set_anomaly_keyframe(self, anomaly_id: int, path: str) -> None:
+        """이상 프레임 저장 경로를 뒤늦게 채운다(§4 `GET /anomalies`).
+
+        파일명이 `{anomaly_id}.jpg` 라 **행이 먼저 생겨야** 이름이 정해진다. 그래서
+        경로는 두 번째 쓰기로 들어간다 — 이 갱신을 빼먹으면 파일은 디스크에 있는데
+        목록의 `keyframe_url` 은 영원히 `null` 이고, 그 사실은 화면에 「그림 없음」으로만
+        보여 저장이 실패한 것과 구분되지 않는다.
+        """
+        await asyncio.to_thread(self._set_anomaly_keyframe, anomaly_id, path)
+
+    def _set_anomaly_keyframe(self, anomaly_id: int, path: str) -> None:
+        with Session(self._engine) as session:
+            row = session.get(AnomalyRow, anomaly_id)
+            if row is None:
+                log.warning("이상 플래그가 없어 키프레임 경로를 남기지 못했다 — %s", anomaly_id)
+                return
+            row.keyframe_path = path
+            session.add(row)
+            session.commit()
 
     async def list_anomalies(
         self, from_: datetime | None, limit: int
