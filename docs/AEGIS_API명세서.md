@@ -306,7 +306,10 @@ v2.0 · 2026-07-18
   "gpu_util": 0.41, "mem_used_mb": 3820,
   "cls_calls_per_min": 96,
   "cls_cache_hit_rate": 0.87,
-  "depth_calls_per_min": 14
+  "depth_calls_per_min": 14,
+  "clock": { "offset_ms": 12, "synced": true,
+             "source": "pool.ntp.org",
+             "last_sync_at": "2026-08-14T05:30:00Z" }
 }
 ```
 
@@ -319,6 +322,15 @@ v2.0 · 2026-07-18
 | `cls_calls_per_min` | 2단계 분류 호출 횟수 |
 | `cls_cache_hit_rate` | 분류 캐시 적중률. 낮으면 캐시 유효기간 조정 필요 |
 | `depth_calls_per_min` | 뎁스 호출 빈도. 과다하면 회색지대 밴드 재조정 필요 |
+| `clock.offset_ms` | 엣지가 **자체 NTP 로 측정한** 자신의 시계 오차(ms). 서버는 이 값을 `time_sync.edge_offset_ms` 로 전달한다 |
+| `clock.synced` | 엣지 NTP 동기화 성공 여부. **`false` 면 `offset_ms` 를 신뢰하지 않는다** |
+| `clock.source` / `last_sync_at` | 동기 서버와 마지막 동기 시각 |
+
+**엣지가 스스로 보고하는 이유**
+
+이 값의 용도는 **「클립 추출 구간을 믿어도 되는가」** 단 하나다. 서버가 `ts` 와 도착 시각의 차이로 추정하면 네트워크 지연이 섞여, 시계 오차와 전송 지연을 구분할 수 없다. 클립이 밀리는 원인은 시계 오차뿐이므로 그 값만 따로 재야 한다.
+
+자기 신고의 약점(엣지 NTP 자체가 실패하면 틀린 값을 자신 있게 보고함)은 **`synced` 를 함께 싣는 것으로 막는다.** `synced: false` 이거나 `last_sync_at` 이 오래되면 서버는 `edge_offset_ms` 를 `null` 로 전달하고 대시보드는 **「시각 동기화 실패」를 경고로 표시**한다. 이 상태에서 추출한 클립은 구간을 신뢰할 수 없다.
 
 ---
 
@@ -557,7 +569,10 @@ v2.0 · 2026-07-18
 | 필드 | 설명 |
 |---|---|
 | `mode` | `sql` / `vector` / `hybrid`. 서버가 질의를 분석해 자동 선택 |
-| `similarity` | 질의 임베딩과 키프레임 임베딩의 코사인 유사도 |
+| `similarity` | float·null | 질의 임베딩과 장면 임베딩의 코사인 유사도. **`mode: "sql"` 경로에서는 질의 임베딩이 없으므로 `null`** 이다. 재지 않은 값을 채우지 않는다 |
+| `thumbnail_url` / `clip_url` | string·null | 확정 직후에는 키프레임·클립이 아직 없으므로 `null` 이 될 수 있다 |
+
+`mode: "sql"` 은 조건이 전부 구조화되어(기간·카메라·유형) 벡터를 만들 이유가 없는 경로다. 이때 정렬은 유사도가 아니라 시각 역순이며, 화면은 `similarity` 가 `null` 이면 유사도 숫자를 표시하지 않는다.
 
 ---
 
@@ -567,6 +582,21 @@ v2.0 · 2026-07-18
 
 ```json
 { "session_id":"s-2026-0814-01", "message":"이번 주 금지구역 위반 통계 보여줘" }
+```
+
+**대화 이력 (`session_id` 의 역할)**
+
+서버는 `session_id` 별로 **최근 8턴을 유지**하고 라우팅과 답변 생성 프롬프트에 함께 싣는다. 이력이 없으면 후속 질문이 독립 질의로 처리되어, `"이번 주 위반 몇 건?"` 다음의 `"각각 무슨 위반이야?"` 가 장면 검색으로 새거나 매번 같은 답을 반복한다.
+
+| 항목 | 값 |
+|---|---|
+| 유지 턴 수 | 8 (`assistant_history_turns`) |
+| 동시 세션 상한 | 50. 초과 시 가장 오래된 세션부터 제거 |
+| 저장 위치 | 서버 메모리. 재시작 시 소멸한다(대화는 영속 대상이 아니다) |
+
+`DELETE /assistant/chat/{session_id}` 로 이력을 비운다. 화면의 「새 대화」가 이 경로를 호출한다.
+
+```json
 ```
 
 ```json
@@ -611,6 +641,24 @@ v2.0 · 2026-07-18
   "captured_at":"2026-08-14T05:40:00Z" }
 ```
 
+#### `GET /reports/{report_id}` — 보고서 조회
+
+```json
+{ "report_id":"RP-2026-W33","status":"ready",
+  "period":{"from":"2026-08-08","to":"2026-08-14"},
+  "body":"...(마크다운)...",
+  "stats":{"total_violations":24,"correction_rate":0.87,"undetermined_rate":0.04},
+  "created_at":"2026-08-14T06:00:00Z" }
+```
+
+| `status` | 의미 |
+|---|---|
+| `pending` | 생성 중. LLM 호출이 진행 중이다 |
+| `ready` | 완료 |
+| `failed` | 생성 실패. `error` 에 사유 |
+
+`POST /reports/weekly` 가 반환한 `report_id` 로 조회한다. 생성은 비동기이므로 즉시 `ready` 가 아닐 수 있다.
+
 #### `POST /reports/weekly`
 ```json
 { "from":"2026-08-08", "to":"2026-08-14" }
@@ -633,7 +681,7 @@ v2.0 · 2026-07-18
     { "px": [0.75,0.55], "m": [5.0, 5.0] },
     { "px": [0.28,0.57], "m": [0.0, 5.0] }
   ],
-  "reference_person": { "px_height": 0.42, "at_m": [2.5, 3.0] }
+  "reference_person": { "height_px": 0.42, "at_m": [2.5, 3.0] }
 }
 ```
 
@@ -642,6 +690,8 @@ v2.0 · 2026-07-18
 | `points[].px` | 화면에서 클릭한 지점(정규화 좌표) |
 | `points[].m` | 그 지점의 실제 지면 좌표(m). 줄자 실측. 첫 점을 원점(0,0)으로 권장 |
 | `reference_person` | **높이 비율 기준 보정용(선택).** 특정 위치에 선 사람의 화면상 높이를 1회 입력하면 거리별 기대 높이 곡선을 보정할 수 있다. 미입력 시 카메라 기하로 추정 |
+| `reference_person.height_px` | 정규화 화면 높이. **§6 `cameras.ref_height.height_px` 와 같은 이름을 쓴다** — 요청과 저장에서 이름이 다르면 변환 코드가 필요하고 그 자체가 버그 지점이 된다 |
+| `reference_person.at_m` | 그 사람이 서 있던 지면 실좌표 |
 
 **응답**
 
@@ -718,10 +768,16 @@ v2.0 · 2026-07-18
   "fall_stillness_s": 5.0,
   "stillness_move_px": 0.008,
   "stillness_window_s": 1.0,
+  "stillness_shape_change_max": 0.15,
   "anomaly_sample_interval_min": 5,
+  "anomaly_threshold": 0.35,
+  "anomaly_knn_k": 5,
+  "anomaly_min_pool": 12,
+  "anomaly_time_bucket_h": 3,
   "mute_default_duration_s": 900,
   "clip_extract_margin_s": 2,
-  "alert_duration_s": 5
+  "alert_duration_s": 5,
+  "clock_offset_warn_ms": 100
 }
 ```
 
@@ -753,12 +809,22 @@ v2.0 · 2026-07-18
 | `fall_stillness_s` | 정지 지속이 이 값 이상이면 조건 ③ 충족 |
 | `stillness_move_px` | 정지 판정 기준. 이 값(정규화 픽셀) 이하 이동이면 정지로 본다 |
 | `stillness_window_s` | 정지 여부를 평가하는 이동 평균 창 |
+| `stillness_shape_change_max` | 마스크 형태 변화가 이 값 이하일 때 정지로 본다. 위치가 고정된 채 몸만 움직이는 경우를 걸러낸다 |
+
+세 값 모두 **오탐 억제의 핵심**이며 카메라 화각에 따라 조정이 필요하므로 정책 테이블에 둔다.
 
 ※ 정지 판정 임계는 **오탐 억제의 핵심 조건**이며 현장 튜닝이 잦으므로 `edge/config.yaml` 이 아니라 정책 테이블에 둔다.
 | `anomaly_sample_interval_min` | 정상 풀 샘플링 주기(분). 기본 5 |
+| `anomaly_threshold` | 이상 점수가 이 값을 넘으면 플래그. 기본 0.35 |
+| `anomaly_knn_k` | k-최근접 개수. 기본 5 |
+| `anomaly_min_pool` | 이 개수 미만이면 판정하지 않는다. 기본 12. 풀이 빈약할 때의 오탐 방지 |
+| `anomaly_time_bucket_h` | 시간대 버킷 크기(시간). 기본 3. 주야 조명 차이를 흡수한다 |
+
+이상 탐지 임계는 조명·현장 특성에 좌우되므로 **현장 조정 대상**이다. 코드 상수로 두지 않는다.
 | `mute_default_duration_s` | 경고 일시중지 기본 지속시간(초). 기본 900 |
 | `clip_extract_margin_s` | 세그먼트가 닫힌 뒤 클립 추출까지의 여유(초). 기본 2. **세그먼트 길이는 이 값에 포함되지 않으며 REC이 보고하는 값을 따로 더한다**(기능명세서 §4.4) |
 | `alert_duration_s` | 경광등·부저 지속 시간(초). 기본 5. `AlertCommand.duration_s` 로 나간다 |
+| `clock_offset_warn_ms` | 엣지 시계 오차가 이 값을 넘으면 경고. 기본 100 |
 
 #### `GET /cameras` / `PATCH /cameras/{cam_id}`
 
@@ -770,12 +836,13 @@ v2.0 · 2026-07-18
     "homography":[[...],[...],[...]],
     "calib_points":[ {"px":[0.12,0.88],"m":[0.0,0.0]}, ... ],
     "reproj_error_m":0.031,
-    "ref_height_px_at_m":0.42,
+    "ref_height": { "height_px": 0.42, "at_m": [2.5, 3.0] },
     "calibrated_at":"2026-08-14T04:10:00Z" } ]
 ```
 
 | 필드 | 설명 |
 |---|---|
+| `name` | 카메라 표시 이름. **모든 화면이 이 값을 쓴다.** 프론트 코드에 이름 표를 따로 두지 않는다(절대규칙 6) |
 | `calib_points` | 캘리브레이션에 쓴 대응점. **화면에 다시 표시하고 수정하려면 원본이 필요**하므로 `homography` 와 함께 보존한다 |
 | `reproj_error_m` | 재투영 오차(RMS). 4점이면 자유도가 일치해 0이며, 5점 이상부터 의미를 갖는다 |
 
@@ -789,6 +856,8 @@ v2.0 · 2026-07-18
 ```
 
 `PUT` 은 `file_path` / `level` / `label` / `active` 를 갱신한다.
+
+**저장 시점에 파일 존재를 검사하고, 없으면 `422` 로 거부한다.** 존재하지 않는 경로가 저장되면 그 사실이 **다음 위반이 발생할 때까지 드러나지 않으며**, 하필 경고가 필요한 순간에 소리가 나지 않는다. 파일을 먼저 배치해야 하는 순서 제약이 생기지만, 안전 기능이 조용히 비활성화되는 것보다 낫다.
 **`violation_type` 이 `fall` 이면 `level` 을 `3` 미만으로 낮출 수 없다**(§3). 위반 시 `422` 를 반환한다.
 
 #### `POST /alerts/manual` — 수동 방송
@@ -824,6 +893,20 @@ v2.0 · 2026-07-18
 
 ---
 
+#### `GET /anomalies?days=7&limit=20`
+
+```json
+{ "items":[ { "anomaly_id":91,"cam_id":1,"score":0.71,
+              "detected_at":"2026-08-14T02:14:00Z",
+              "note":"평소와 다른 상황","keyframe_url":null } ] }
+```
+
+§5.3 `anomaly` 메시지에서 `type` 만 뺀 형태다.
+
+**키프레임 저장**: 이상 감지 시 REC `GET /keyframe` 으로 해당 시각 프레임을 받아 `media/anomalies/{anomaly_id}.jpg` 에 저장하고 `keyframe_url` 로 노출한다. 이벤트 클립·키프레임과 저장 위치를 분리하는 것은 **보존 정책이 다르기 때문**이다 — 이상 프레임은 진단용이므로 30일 순환으로 충분하다. 저장에 실패하면 `null` 을 보낸다(§5.2 규약). **발행만으로는 부족하다** — 화면을 새로고침했거나 서버가 내려가 있던 동안의 이상은 메시지를 놓친 것과 이상이 없었던 것이 구분되지 않는다. 이상 탐지 결과는 조회 가능해야 한다.
+
+---
+
 ### 4.6 시스템
 
 #### `GET /system/status`
@@ -840,7 +923,7 @@ v2.0 · 2026-07-18
   "storage": { "total_gb":500, "used_gb":378, "free_gb":122,
                "retention_days":7,
                "oldest_segment_at":"2026-08-07T05:37:00Z" },
-  "time_sync": { "edge_offset_ms": 12 }
+  "time_sync": { "edge_offset_ms": 12, "edge_synced": true, "server_offset_ms": -10.8 }
 }
 ```
 
@@ -880,7 +963,11 @@ v2.0 · 2026-07-18
 스트림에는 `degraded` 가, API에는 `reconnecting` 이 의미가 없으므로 두 열거형을 통합하지 않는다.
 | `edge.msg_rejected_total` | 스키마 검증에 실패해 거부된 엣지 메시지 누적 건수 (FN-SYS-06). 0이 아니면 대시보드에 경고를 띄운다 |
 | `cloud.quota_used` | 무료 한도 사용률. 초과 시 분석 기능만 중단되고 안전 기능은 무관 |
-| `time_sync.edge_offset_ms` | 엣지-서버 시각 차이. 크면 클립 추출 구간이 어긋남 |
+| `time_sync.edge_offset_ms` | 엣지-서버 시각 차이(ms). **`heartbeat.clock.offset_ms` 를 그대로 전달**한다. 엣지 미연결이거나 `clock.synced == false` 이면 `null` |
+| `time_sync.edge_synced` | 엣지 NTP 동기화 상태. `false` 면 클립 구간을 신뢰할 수 없다 |
+| `time_sync.server_offset_ms` | 서버 자체의 NTP 오차. 기동 시 측정한다 |
+
+**임계**: `|edge_offset_ms|` 가 `clock_offset_warn_ms`(기본 100)를 넘으면 대시보드에 경고를 띄우고 `system` 메시지(`component: "edge"`, `state: "degraded"`)를 발행한다. 시각이 어긋난 상태에서 잘라낸 클립은 **정상적으로 생성되고 재생되지만 다른 구간을 담고 있으며, 사람이 열어보기 전까지 그 사실이 드러나지 않는다.**
 | `storage.*` | **REC의 `GET /status`(§4.7) 응답을 그대로 전달**한다. 5개 필드 전부. 서버가 자체 디스크를 조회하지 않는다 |
 | `storage.oldest_segment_at` | 보존된 가장 오래된 세그먼트 시각. 영상 검색 가능 범위의 하한이다 |
 
