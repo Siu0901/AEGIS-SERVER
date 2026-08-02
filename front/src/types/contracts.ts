@@ -378,6 +378,16 @@ export interface DistributionBucket {
 }
 
 /**
+ * `heartbeat.clock` — 엣지가 **자체 NTP 로 잰** 자기 시계 오차. API명세서 §2.4
+ */
+export interface EdgeClock {
+  offset_ms: number
+  synced: boolean
+  source: string | null
+  last_sync_at: string | null
+}
+
+/**
  * 엣지 상태. API명세서 §4.6
  */
 export interface EdgeStatus {
@@ -584,6 +594,7 @@ export interface HeartbeatMsg {
   cls_calls_per_min: number
   cls_cache_hit_rate: number
   depth_calls_per_min: number
+  clock: EdgeClock | null
 }
 
 /**
@@ -842,7 +853,14 @@ export interface Policies {
   fall_stillness_s: number
   stillness_move_px: number
   stillness_window_s: number
+  stillness_shape_change_max: number
   anomaly_sample_interval_min: number
+  anomaly_threshold: number
+  anomaly_knn_k: number
+  anomaly_min_pool: number
+  anomaly_time_bucket_h: number
+  clock_offset_warn_ms: number
+  assistant_history_turns: number
 }
 
 /**
@@ -880,7 +898,14 @@ export interface PolicyPatch {
   fall_stillness_s: number | null
   stillness_move_px: number | null
   stillness_window_s: number | null
+  stillness_shape_change_max: number | null
   anomaly_sample_interval_min: number | null
+  anomaly_threshold: number | null
+  anomaly_knn_k: number | null
+  anomaly_min_pool: number | null
+  anomaly_time_bucket_h: number | null
+  clock_offset_warn_ms: number | null
+  assistant_history_turns: number | null
 }
 
 /**
@@ -933,7 +958,7 @@ export interface RefHeight {
  * 높이 비율 기준 보정용(선택). `POST /cameras/{id}/calibration` 요청. API명세서 §4.5
  */
 export interface ReferencePerson {
-  px_height: number
+  height_px: number
   at_m: [number, number]
 }
 
@@ -955,6 +980,27 @@ export interface RepeatItem {
   violation_type: ViolationType
   count: number
   last_at: string
+}
+
+/**
+ * `GET /reports/{report_id}` 응답. API명세서 §4.4
+ */
+export interface ReportDetail {
+  report_id: string
+  status: 'pending' | 'ready' | 'failed'
+  period: ReportPeriod
+  body: string | null
+  stats: MetricsSummary | null
+  created_at: string
+  error: string | null
+}
+
+/**
+ * `GET /reports/{report_id}` 의 `period`. API명세서 §4.4
+ */
+export interface ReportPeriod {
+  from: string
+  to: string
 }
 
 /**
@@ -1043,6 +1089,8 @@ export interface TableAttachment {
  */
 export interface TimeSyncStatus {
   edge_offset_ms: number | null
+  edge_synced: boolean | null
+  server_offset_ms: number | null
 }
 
 /**
@@ -1111,7 +1159,7 @@ export interface WeeklyReportRequest {
  */
 export interface WeeklyReportResponse {
   report_id: string
-  status: string
+  status: 'pending' | 'ready' | 'failed'
   estimated_sec: number
 }
 

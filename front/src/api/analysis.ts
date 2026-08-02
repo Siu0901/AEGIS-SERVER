@@ -17,6 +17,7 @@ import type {
   MetricsDistributionResponse,
   MetricsRepeatResponse,
   MetricsTimeseriesResponse,
+  ReportDetail,
   SceneSearchRequest,
   SceneSearchResponse,
 } from '../types/contracts'
@@ -96,15 +97,13 @@ export async function fetchBriefing(
   return brief
 }
 
-/** 생성 중인 주간 보고서 한 건(§4.4 + 조회 경로). */
-export type WeeklyReport = {
-  report_id: string
-  status: string
-  from: string
-  to: string
-  body: string | null
-  stats?: { total_violations: number }
-}
+/**
+ * 주간 보고서 한 건. 계약은 `ReportDetail`(§4.4 `GET /reports/{report_id}`)이다.
+ *
+ * `status` 는 `pending` / `ready` / `failed` 셋뿐이다 — 생성은 비동기이므로 즉시
+ * `ready` 가 아닐 수 있고, 화면은 `pending` 동안 진행 중임을 표시한다.
+ */
+export type WeeklyReport = ReportDetail
 
 /** §4.4 `POST /reports/weekly` — 생성을 **예약**한다. 응답은 즉시 온다(FN-AI-10). */
 export async function requestWeeklyReport(
@@ -122,7 +121,7 @@ export async function requestWeeklyReport(
   return started.report_id
 }
 
-/** 예약한 보고서를 받는다. 아직이면 `status = "generating"` 이다. */
+/** 예약한 보고서를 받는다. 아직이면 `status = "pending"` 이다(§4.4). */
 export async function fetchReport(
   reportId: string,
   signal?: AbortSignal,

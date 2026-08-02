@@ -432,3 +432,18 @@
   max-width: 100%;
   border-radius: var(--radius-sm);
 }
+
+/* 이상 프레임 썸네일 (FN-AI-04 · §4 `GET /anomalies`).
+   판정은 숫자가 하지만, 사람이 그 판정을 확인하려면 그때 화면이 있어야 한다. */
+.analysis__thumb {
+  display: block;
+  width: 96px;
+  height: 54px; /* 16:9 — 메인·서브가 같은 화면비다 */
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+
+.analysis__muted {
+  color: var(--text-muted);
+}

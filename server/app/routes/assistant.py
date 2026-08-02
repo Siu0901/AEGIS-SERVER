@@ -24,6 +24,7 @@ from aegis_contracts import (
     ChatResponse,
     ErrorBody,
     ErrorResponse,
+    ReportDetail,
     WeeklyReportRequest,
     WeeklyReportResponse,
 )
@@ -114,21 +115,21 @@ async def weekly_report(request: Request, body: WeeklyReportRequest) -> WeeklyRe
     report_id = await service.start_weekly_report(from_, to)
     return WeeklyReportResponse(
         report_id=report_id,
-        status="generating",
+        status="pending",
         estimated_sec=REPORT_ESTIMATED_SEC,
     )
 
 
 @router.get(
     "/reports/{report_id}",
+    response_model=ReportDetail,
     responses={404: {"model": ErrorResponse}, 503: {"model": ErrorResponse}},
 )
-async def read_report(request: Request, report_id: str) -> dict[str, object]:
-    """예약한 보고서를 받는다. 아직이면 `status = "generating"` 이다.
+async def read_report(request: Request, report_id: str) -> ReportDetail:
+    """§4.4 — 예약한 보고서를 받는다. 아직이면 `status = "pending"` 이다.
 
-    §4.4 는 생성 요청만 정의하고 조회 경로를 적지 않았다. `report_id` 를 돌려주는
-    이상 그것으로 받아올 자리가 필요하므로 같은 이름 공간에 둔다 —
-    `docs/INDEX.md` 「명세서 확인 필요」에 올려 두었다.
+    생성이 비동기이므로 즉시 `ready` 가 아닐 수 있다. 화면은 `pending` 동안 진행
+    중임을 표시하고 다시 조회한다 — 없는 본문을 빈 문자열로 채우지 않는다.
     """
     service = _ai(request)
     report = service.report(report_id)

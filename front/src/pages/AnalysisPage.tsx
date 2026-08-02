@@ -34,7 +34,9 @@ import type {
   RepeatItem,
   TimeseriesPoint,
 } from '../types/contracts'
-import { cameraName, stamp, violationLabel } from '../types/labels'
+import { useCameraName } from '../api/cameraNames'
+import { stamp, violationLabel } from '../types/labels'
+import { UNMEASURED } from '../types/system'
 import { formatRate, formatRatePair, type MetricsSummary } from '../types/system'
 import './analysis.css'
 
@@ -48,7 +50,15 @@ const RANGES: { label: string; days: number; bucket: MetricBucket }[] = [
 /** 보고서 생성 상태를 다시 묻는 간격(ms). §4.4 예상 20초의 1/10 이다. */
 const REPORT_POLL_MS = 2000
 
+/** §4.4 `status` — 사람이 읽는 말. `pending` 은 「생성 중」이지 「없음」이 아니다. */
+const REPORT_STATUS_LABEL: Record<'pending' | 'ready' | 'failed', string> = {
+  pending: '생성 중',
+  ready: '완료',
+  failed: '생성 실패',
+}
+
 export default function AnalysisPage() {
+  const cameraName = useCameraName()
   const [rangeIndex, setRangeIndex] = useState(1)
   const range = RANGES[rangeIndex]
 
@@ -114,7 +124,7 @@ export default function AnalysisPage() {
         try {
           const found = await fetchReport(reportId)
           setReport(found)
-          if (found.status !== 'generating' && pollRef.current !== null) {
+          if (found.status !== 'pending' && pollRef.current !== null) {
             window.clearInterval(pollRef.current)
             pollRef.current = null
             setReportBusy(false)
@@ -140,7 +150,17 @@ export default function AnalysisPage() {
         period.from.slice(0, 10),
         period.to.slice(0, 10),
       )
-      setReport({ report_id: id, status: 'generating', from: '', to: '', body: null })
+      // 예약 직후의 자리표시자. 서버 응답이 오면 통째로 갈린다 — 없는 본문을
+      // 빈 문자열로 채우지 않는다(§4.4 `pending` 은 아직 없다는 뜻이다).
+      setReport({
+        report_id: id,
+        status: 'pending',
+        period: { from: period.from.slice(0, 10), to: period.to.slice(0, 10) },
+        body: null,
+        stats: null,
+        created_at: new Date().toISOString(),
+        error: null,
+      })
       poll(id)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
@@ -270,6 +290,7 @@ export default function AnalysisPage() {
                 <th>시각</th>
                 <th>카메라</th>
                 <th>이상 점수</th>
+                <th>그때 화면</th>
                 <th>무엇이 달랐나</th>
               </tr>
             </thead>
@@ -282,6 +303,23 @@ export default function AnalysisPage() {
                     <span className={`badge badge--${anomalyTone(item.score)}`}>
                       {item.score.toFixed(2)}
                     </span>
+                  </td>
+                  {/* ★ 그림이 있어야 사람이 판정을 확인할 수 있다(§4 `GET /anomalies`).
+                      `media/anomalies/{id}.jpg` · 30일 순환이며, 저장에 실패했으면
+                      `null` 이다 — 없는 URL 을 문자열로 내보내지 않는다(§5.2). */}
+                  <td>
+                    {item.keyframe_url ? (
+                      <a href={item.keyframe_url} target="_blank" rel="noreferrer">
+                        <img
+                          className="analysis__thumb"
+                          src={item.keyframe_url}
+                          alt={`${stamp(item.detected_at)} 이상 프레임`}
+                          loading="lazy"
+                        />
+                      </a>
+                    ) : (
+                      <span className="analysis__muted">{UNMEASURED}</span>
+                    )}
                   </td>
                   {/* 설명은 클라우드가 살아 있을 때만 붙는다(§5.3 `note` 는 nullable).
                       없다고 「이상 없음」이라고 쓰지 않는다 — 점수는 이미 넘었다. */}
@@ -311,11 +349,17 @@ export default function AnalysisPage() {
           </button>
           {report && (
             <span className="settings__state">
-              {report.report_id} · {report.status === 'ready' ? '완료' : report.status}
+              {report.report_id} · {REPORT_STATUS_LABEL[report.status]}
             </span>
           )}
         </div>
         {report?.body && <pre className="analysis__report">{report.body}</pre>}
+        {report?.status === 'failed' && (
+          <p className="card__note analysis__error">
+            보고서를 만들지 못했다{report.error ? ` — ${report.error}` : ''}. 집계를 읽지
+            못했을 때다 — 클라우드가 꺼져 있어도 집계 문장만으로는 나온다.
+          </p>
+        )}
         <p className="card__note">
           숫자는 SQL 집계가 만들고 LLM 은 그것을 문장으로 옮긴다. 클라우드가 꺼져 있으면
           집계 문장만 나온다 — 비어 있는 것보다 낫다.
