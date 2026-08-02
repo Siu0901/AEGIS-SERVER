@@ -83,12 +83,10 @@ _REFERENCE = ReferenceHeight(
     at_m=(float(DEV_REF_HEIGHT["at_m"][0]), float(DEV_REF_HEIGHT["at_m"][1])),
 )
 
-#: 형태 변화 임계. 카메라 화각·설치 높이에 따라 달라지는 값이라 실물에서는
-#: `edge/config.yaml` 의 `posture` 절에서 온다(CLAUDE.md 절대규칙 6).
-#:
-#: **이동량과 창 길이는 여기 없다** — 명세서가 정책 키(`stillness_move_px` ·
-#: `stillness_window_s`)로 승격시켜 `_POLICIES` 에서 읽는다(§4.5).
-_STILLNESS_SHAPE_MAX = 0.15
+# 정지 판정 임계 셋(`stillness_move_px` · `stillness_window_s` ·
+# `stillness_shape_change_max`)은 **전부 정책 키다**(§4.5). 세 값을 함께 조정해야
+# 하는데 두 곳에 나뉘어 있으면 한쪽만 바뀐 채로 돌게 된다 — 그래서 `_POLICIES`
+# 하나에서 읽는다(CLAUDE.md 절대규칙 6).
 
 #: 뎁스 캐시 무효화 이동량(m). §6.6 「임계 이상 이동하면 즉시 무효화」.
 _DEPTH_MOVE_INVALIDATE_M = 0.5
@@ -306,7 +304,7 @@ def _apply_person_gauges(
             stillness=StillnessTracker(
                 move_px=_POLICIES.stillness_move_px,
                 window_s=_POLICIES.stillness_window_s,
-                shape_change_max=_STILLNESS_SHAPE_MAX,
+                shape_change_max=_POLICIES.stillness_shape_change_max,
             )
         ),
     )

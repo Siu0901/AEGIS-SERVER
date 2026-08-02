@@ -891,24 +891,40 @@ POLICIES_EXAMPLE: dict[str, Any] = {
     "fall_height_ratio_max": 0.5,
     "fall_axis_angle_min_deg": 55.0,
     "fall_stillness_s": 5.0,
-    # ★ §4.5 가 `edge/config.yaml` 에서 승격시킨 두 키. 정지 판정은 오탐 억제의 핵심
+    # ★ §4.5 가 `edge/config.yaml` 에서 승격시킨 세 키. 정지 판정은 오탐 억제의 핵심
     #   조건이라 현장 튜닝이 잦은데, 장비 설정 파일에 있으면 조정이 곧 배포가 된다.
     "stillness_move_px": 0.008,
     "stillness_window_s": 1.0,
+    "stillness_shape_change_max": 0.15,
+    # 이상 탐지 임계는 조명·현장 특성에 좌우되므로 코드 상수로 두지 않는다(§4.5).
     "anomaly_sample_interval_min": 5,
+    "anomaly_threshold": 0.35,
+    "anomaly_knn_k": 5,
+    "anomaly_min_pool": 12,
+    "anomaly_time_bucket_h": 3,
     "mute_default_duration_s": 900,
     "clip_extract_margin_s": 2,
     "alert_duration_s": 5,
+    # FN-SYS-02 — 넘으면 `system`(component:"edge", state:"degraded")을 발행한다.
+    "clock_offset_warn_ms": 100,
 }
+
+#: ⚠ **§4.4 는 정책 키라고 적었는데 §4.5 예시 JSON 에는 없는 키.**
+#:
+#: 「유지 턴 수 8 (`assistant_history_turns`)」이 §4.4 대화 이력 표에 있다. 정책값이
+#: 맞으므로 모델에 두되, §4.5 예시와의 대조에서는 **이 차이를 명시적으로 적어 둔다** —
+#: 조용히 예시에 끼워 넣으면 테스트가 명세서에 없는 것을 있다고 말하게 된다.
+#: (`docs/INDEX.md` 「명세서 확인 필요」)
+SPEC_44_ONLY: dict[str, Any] = {"assistant_history_turns": 8}
 
 
 def test_policy_defaults_match_spec_exactly() -> None:
     """기본값이 명세서와 한 글자도 달라지면 안 된다 — DB 시드의 원천이다."""
-    assert Policies().model_dump(mode="json") == POLICIES_EXAMPLE
+    assert Policies().model_dump(mode="json") == POLICIES_EXAMPLE | SPEC_44_ONLY
 
 
 def test_policy_key_set_matches_spec() -> None:
-    assert set(Policies.model_fields) == set(POLICIES_EXAMPLE)
+    assert set(Policies.model_fields) == set(POLICIES_EXAMPLE) | set(SPEC_44_ONLY)
 
 
 def test_durations_and_thresholds_accept_fractions() -> None:

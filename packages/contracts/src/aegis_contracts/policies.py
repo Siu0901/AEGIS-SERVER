@@ -173,9 +173,58 @@ class Policies(SpecModel):
     짧은 움직임은 보이지 않으므로, `stillness_move_px` 와 **함께** 조정해야 한다.
     """
 
+    stillness_shape_change_max: float = 0.15
+    """마스크 **형태** 변화가 이 값 이하일 때만 정지로 본다(§4.5).
+
+    ★ `edge/config.yaml` 에서 정책 테이블로 **승격**된 키다. 위치 이동만 보면 제자리에서
+    몸을 크게 움직이는 사람이 「정지」로 잡혀 쓰러짐 조건 ③이 성립한다 — 형태 변화를
+    함께 봐야 그 오탐이 걸러진다. 나머지 두 정지 임계와 **함께** 조정해야 하므로 같은
+    자리에 둔다.
+    """
+
     # --- 이상 탐지 (FN-AI-04) ---
     anomaly_sample_interval_min: float = 5.0
     """정상 풀 샘플링 주기(분)."""
+
+    anomaly_threshold: float = 0.35
+    """이상 점수가 이 값을 넘으면 플래그(§6.8).
+
+    ★ 조명·현장 특성에 좌우되는 **현장 조정 대상**이라 코드 상수로 두지 않는다.
+    낮추면 조명 변화가 곧 이상이 되고, 올리면 진짜 이상이 묻힌다.
+    """
+
+    anomaly_knn_k: int = 5
+    """k-최근접 개수. 풀에서 가장 가까운 이 개수의 평균 거리로 점수를 낸다."""
+
+    anomaly_min_pool: int = 12
+    """이 개수 미만이면 **판정하지 않는다.**
+
+    풀이 얇을 때의 큰 거리는 「이상」이 아니라 「모른다」다. `anomaly_knn_k` 보다 넉넉해야
+    한 장의 이상치가 평균을 끌고 다니지 않는다.
+    """
+
+    anomaly_time_bucket_h: int = 3
+    """시간대 버킷 크기(시간). 주야 조명 차이를 흡수한다.
+
+    잘게 나눌수록 조명이 균질해지지만 풀이 `anomaly_min_pool` 에 도달하지 못한다.
+    """
+
+    # --- 시각 동기화 (FN-SYS-02) ---
+    clock_offset_warn_ms: float = 100.0
+    """엣지 시계 오차가 이 값을 넘으면 경고(§4.6).
+
+    ★ 시각이 어긋난 상태에서 잘라낸 클립은 **정상적으로 생성되고 재생되지만 다른
+    구간을 담는다.** 사람이 열어보기 전까지 드러나지 않으므로 화면에 상시 노출한다.
+    """
+
+    # --- 챗봇 (FN-AI-08) ---
+    assistant_history_turns: int = 8
+    """세션 하나가 기억하는 최근 턴 수(§4.4).
+
+    이력이 없으면 후속 질문이 독립 질의로 처리되어 「이번 주 위반 몇 건」 다음의
+    「각각 무슨 위반이야?」가 장면 검색으로 샌다. 넉넉히 두면 프롬프트가 길어지고
+    오래된 화제가 답변을 끌고 간다.
+    """
 
 
 class PolicyPatch(SpecModel):
@@ -212,4 +261,11 @@ class PolicyPatch(SpecModel):
     fall_stillness_s: float | None = None
     stillness_move_px: float | None = None
     stillness_window_s: float | None = None
+    stillness_shape_change_max: float | None = None
     anomaly_sample_interval_min: float | None = None
+    anomaly_threshold: float | None = None
+    anomaly_knn_k: int | None = None
+    anomaly_min_pool: int | None = None
+    anomaly_time_bucket_h: int | None = None
+    clock_offset_warn_ms: float | None = None
+    assistant_history_turns: int | None = None
