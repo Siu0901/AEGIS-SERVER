@@ -41,7 +41,7 @@ import {
 } from '../api/settings'
 import { useSystemStatus } from '../api/useSystemStatus'
 import { startPlayback, type PlaybackKind } from '../live/player'
-import { cameraName, retentionLabel, stamp, violationLabel } from '../types/labels'
+import { cameraFallbackName, retentionLabel, stamp, violationLabel } from '../types/labels'
 import type { Policies, Zone } from '../types/system'
 import './settings.css'
 
@@ -185,7 +185,7 @@ export default function SettingsPage() {
 
       <ZoneList
         zones={zones.filter((zone) => zone.cam_id === camId)}
-        camName={camera?.name ?? cameraName(camId)}
+        camName={camera?.name ?? cameraFallbackName(camId)}
         onDeleted={(zoneId) => {
           setNotice(`구역 ${zoneId} 을 삭제했다`)
           reload()
@@ -336,7 +336,8 @@ function CameraPanel({
       const referencePerson =
         heightPx !== null && reference.x !== '' && reference.y !== ''
           ? {
-              px_height: heightPx,
+              // 요청과 저장이 같은 이름이다(§4.5 · §6 모두 `height_px`).
+              height_px: heightPx,
               at_m: [Number(reference.x), Number(reference.y)] as [number, number],
             }
           : null

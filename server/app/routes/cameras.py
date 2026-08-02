@@ -164,11 +164,12 @@ async def calibrate(
         log.warning("cam%d 캘리브레이션을 거부했다: %s", cam_id, exc)
         raise _validation(str(exc)) from exc
 
-    # 요청은 `px_height`(§4.5), 저장은 `height_px`(기능명세서 §6). 이름이 다른 두 규약을
-    # 경계에서 한 번만 바꾼다 — 안쪽으로 흘려보내면 어느 쪽 이름인지 매번 따져야 한다.
+    # 요청과 저장이 **같은 이름**이다(§4.5 · §6 모두 `height_px`). 전에는 경계에서
+    # `px_height` → `height_px` 로 뒤집었는데, 같은 값에 이름이 둘이면 그 변환 자체가
+    # 버그 지점이 된다 — 명세서가 한쪽으로 통일하면서 변환이 사라졌다.
     reference = (
         RefHeight(
-            height_px=body.reference_person.px_height, at_m=body.reference_person.at_m
+            height_px=body.reference_person.height_px, at_m=body.reference_person.at_m
         ).model_dump(mode="json")
         if body.reference_person
         else None

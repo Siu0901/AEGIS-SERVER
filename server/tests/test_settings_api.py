@@ -139,8 +139,11 @@ def test_reference_person_is_recorded_with_the_place_it_was_measured() -> None:
     """★ 기능명세서 §6 — 저장 형태는 `{height_px, at_m}` 이다. **스칼라가 아니다.**
 
     기준 높이를 잰 지면 위치가 없으면 다른 거리의 기대 높이를 구할 수 없다 — 같은
-    사람도 카메라에서 멀수록 화면상 픽셀 높이가 줄어든다. 요청 이름(`px_height`,
-    §4.5)과 저장 이름(`height_px`, §6)이 다르므로 경계에서 바뀌는지도 함께 본다.
+    사람도 카메라에서 멀수록 화면상 픽셀 높이가 줄어든다.
+
+    요청(§4.5)과 저장(§6)이 **같은 이름**(`height_px`)이다 — 전에는 `px_height` 대
+    `height_px` 로 갈려 라우터가 경계에서 뒤집었는데, 같은 값에 이름이 둘이면 그 변환
+    자체가 버그 지점이 된다.
     """
     client, parts = build()
     with client:
@@ -148,7 +151,7 @@ def test_reference_person_is_recorded_with_the_place_it_was_measured() -> None:
             "/api/v1/cameras/1/calibration",
             json={
                 "points": SPEC_POINTS,
-                "reference_person": {"px_height": 0.42, "at_m": [2.5, 3.0]},
+                "reference_person": {"height_px": 0.42, "at_m": [2.5, 3.0]},
             },
         )
     assert response.json()["ref_height_calibrated"] is True
@@ -163,7 +166,7 @@ def test_camera_list_returns_the_reference_height_as_an_object() -> None:
             "/api/v1/cameras/1/calibration",
             json={
                 "points": SPEC_POINTS,
-                "reference_person": {"px_height": 0.42, "at_m": [2.5, 3.0]},
+                "reference_person": {"height_px": 0.42, "at_m": [2.5, 3.0]},
             },
         )
         rows = client.get("/api/v1/cameras").json()
