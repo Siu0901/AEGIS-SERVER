@@ -7,11 +7,14 @@ API명세서 §4.5 · FN-CFG-03
 
 1. **`fall` 의 등급을 3 미만으로 내릴 수 없다**(§3). 안전 하한은 설정 대상이 아니다.
 2. 등록되지 않은 키를 새로 만들 수 없다. 오타가 새 음원 키가 되면 아무도 재생하지 않는다.
+3. **없는 파일을 저장할 수 없다**(§4.5). 저장은 성공하고 그 사실은 다음 위반 때까지
+   드러나지 않는데, 하필 경고가 필요한 그 순간에 소리가 나지 않는다.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -30,14 +33,21 @@ from .conftest import (
     make_settings,
 )
 
+#: 실제 음원이 있는 폴더. `PUT` 의 파일 존재 검사가 이곳을 본다(§4.5).
+AUDIO_DIR = Path(__file__).resolve().parents[2] / "assets" / "audio"
+
 NOW = datetime(2026, 8, 14, 5, 37, 0, tzinfo=UTC)
 
 
-def build(sounds: FakeSoundStore | None = None) -> tuple[TestClient, FakeSoundStore]:
+def build(
+    sounds: FakeSoundStore | None = None,
+    audio_dir: Path | None = None,
+) -> tuple[TestClient, FakeSoundStore]:
     store = sounds or FakeSoundStore()
     clock = FakeClock(NOW)
     app = create_app(
-        make_settings(),
+        # `PUT` 이 저장 전에 파일 존재를 검사하므로(§4.5) 실제 음원 폴더를 가리킨다.
+        make_settings(audio_dir=audio_dir or AUDIO_DIR),
         clock,
         rec_client=FakeRecClient(),
         stream_watcher=FakeWatcher({1: "ok", 2: "ok"}),
@@ -79,12 +89,29 @@ def test_update_changes_file_level_and_label() -> None:
     with client:
         response = client.put(
             "/api/v1/alert-sounds/no_helmet",
-            json={"file_path": "custom/no_helmet_ko.wav", "level": 3, "label": "안전모"},
+            json={"file_path": "proximity.wav", "level": 3, "label": "안전모"},
         )
     assert response.status_code == 200
     assert response.json()["level"] == 3
-    assert store.mapping["no_helmet"].file_path == "custom/no_helmet_ko.wav"
+    assert store.mapping["no_helmet"].file_path == "proximity.wav"
     assert store.mapping["no_helmet"].label == "안전모"
+
+
+def test_missing_sound_file_is_rejected_at_save_time() -> None:
+    """★ §4.5 — 없는 경로를 저장하면 **다음 위반까지 그 사실이 드러나지 않는다.**
+
+    그리고 하필 경고가 필요한 그 순간에 소리가 나지 않는다. 파일을 먼저 배치해야
+    하는 순서 제약이 생기지만, 안전 기능이 조용히 비활성화되는 것보다 낫다.
+    """
+    client, store = build()
+    with client:
+        response = client.put(
+            "/api/v1/alert-sounds/no_helmet", json={"file_path": "custom/no_helmet_ko.wav"}
+        )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+    # 거부됐으면 저장도 되지 않아야 한다 — 반만 반영되면 화면과 재생이 어긋난다.
+    assert store.mapping["no_helmet"].file_path == "no_helmet.wav"
 
 
 def test_fall_cannot_be_lowered_below_three() -> None:
@@ -106,11 +133,13 @@ def test_fall_can_still_be_raised_and_otherwise_edited() -> None:
     with client:
         assert client.put("/api/v1/alert-sounds/fall", json={"level": 3}).status_code == 200
         assert (
-            client.put("/api/v1/alert-sounds/fall", json={"file_path": "fall_ko.wav"}).status_code
+            client.put(
+                "/api/v1/alert-sounds/fall", json={"file_path": "custom_notice.wav"}
+            ).status_code
             == 200
         )
     assert store.mapping["fall"].level == 3
-    assert store.mapping["fall"].file_path == "fall_ko.wav"
+    assert store.mapping["fall"].file_path == "custom_notice.wav"
 
 
 def test_other_types_can_be_lowered() -> None:

@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Protocol
 
 from fastapi import APIRouter, HTTPException, Request
@@ -87,6 +88,8 @@ async def update_alert_sound(
             check_level(violation_type, level)
         except LevelFloorError as exc:
             raise _validation(str(exc), 422) from exc
+    if (file_path := changes.get("file_path")) is not None:
+        _require_file(request, str(file_path))
 
     store = _store(request)
     try:
@@ -100,6 +103,29 @@ async def update_alert_sound(
     log.info("음원 매핑 변경 — %s %s", violation_type, changes)
     await _refresh(request)
     return updated
+
+
+def _require_file(request: Request, file_path: str) -> None:
+    """저장 시점에 음원 파일이 **실제로 있는지** 본다(§4.5). 없으면 `422`.
+
+    ★ **없는 경로를 저장하면 그 사실이 다음 위반까지 드러나지 않는다.** 그리고 하필
+    경고가 필요한 그 순간에 소리가 나지 않는다 — 안전 기능이 조용히 비활성화되는
+    것이므로, 파일을 먼저 배치해야 하는 순서 제약을 감수한다.
+
+    검사 기준은 경고 집행자가 실제로 읽는 폴더(`AUDIO_DIR`)다. 다른 곳을 보면 검사를
+    통과한 파일이 재생 시점에 없을 수 있고, 그건 검사하지 않은 것과 같다.
+    """
+    root: Path | None = getattr(request.app.state, "audio_dir", None)
+    if root is None:
+        # 어디를 봐야 하는지 모르는 채로 통과시키지 않는다(절대규칙 9).
+        raise _unavailable("음원 폴더가 설정되지 않아 파일 존재를 확인할 수 없습니다")
+    if not (root / file_path).is_file():
+        raise _validation(
+            f"음원 파일이 없습니다: {file_path} ({root}). "
+            "파일을 먼저 배치해야 합니다 — 없는 경로를 저장하면 경고가 필요한 순간에 "
+            "소리가 나지 않고 그 사실이 다음 위반까지 드러나지 않습니다.",
+            422,
+        )
 
 
 async def _refresh(request: Request) -> None:
