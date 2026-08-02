@@ -732,9 +732,18 @@ class CameraCalibration(SpecModel):
     cam_id: int
     name: str
     rtsp_main: str
-    """1080p 메인 — 서버(라이브 · 녹화 · 클립 원본)."""
+    """1080p 메인 — 서버(라이브 · 녹화 · 클립 원본).
+
+    ★ **조회용 기록이다.** 각 구성요소는 이 값을 읽지 않고 자기 로컬 설정으로
+    구독한다 — REC 은 `RTSP_BASE` 환경변수, 라이브는 브라우저가 mediamtx 로 직결.
+    어느 카메라가 어느 주소를 쓰는지 확인하는 자리이며 **값을 고쳐도 구독 대상은
+    바뀌지 않는다**(기능명세서 §6).
+    """
     rtsp_sub: str
-    """640×360 서브 — 엣지(추론). **메인과 16:9 로 같아야** 정규화 좌표가 대응한다."""
+    """640×360 서브 — 엣지(추론). **메인과 16:9 로 같아야** 정규화 좌표가 대응한다.
+
+    `rtsp_main` 과 같은 규약이다 — 엣지는 `edge/config.yaml` 을 읽고 이 값을 보지 않는다.
+    """
     homography: Homography | None
     """3×3 픽셀→지면 변환. 아직 캘리브레이션하지 않았으면 `null`."""
     calib_points: list[CalibrationPoint] | None
@@ -763,8 +772,16 @@ class CameraPatch(SpecModel):
     """
 
     name: str | None = None
+    """표시 이름. **모든 화면이 쓰는 단일 원천이다**(§4.5)."""
+
     rtsp_main: str | None = None
     rtsp_sub: str | None = None
+    """★ **기록을 갱신할 뿐 재구독을 일으키지 않는다**(기능명세서 §6).
+
+    실제 주소를 바꾸려면 그 장비의 설정을 고치고 다시 띄운다 — REC 은 `RTSP_BASE`,
+    엣지는 `edge/config.yaml`. 화면에 이 입력란을 만들 거라면 **바꿔도 아무 일도
+    일어나지 않는다는 사실을 함께 적어야 한다.**
+    """
 
 
 class Zone(SpecModel):
