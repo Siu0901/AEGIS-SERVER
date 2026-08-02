@@ -10,6 +10,11 @@
  * | 쓰러진 사람 | 적색(점멸) | `작업자 #5 · 쓰러짐 감지` |
  * | 지게차 | 앰버 | `지게차 #1 · 이동 중` |
  * | 근접 거리선 | 적색 점선 + 거리 라벨 | `3.2 m` |
+ * | 금지구역 | 보라 점선 + 옅은 채움 | `금지구역 · 지게차 통행로` |
+ *
+ * **금지구역만 좌표와 무관하게 그린다**(§5.1 · §5.4). 폴리곤은 `overlay` 에 실려
+ * 오지 않고 `GET /zones` 캐시에서 오므로, 엣지가 끊겨도 화면에 남아 있어야 한다 —
+ * 「사람이 안 보인다」와 「구역이 설정되지 않았다」는 다른 사실이다.
  *
  * **확정 전(`alert_state === 'candidate'`)은 적색으로 그리지 않는다** (§5.1).
  * 위반 조건이 관측됐을 뿐 확정된 것이 아니므로 위반으로 단정할 수 없다. 청록을
@@ -38,6 +43,10 @@ const COLOR = {
   normal: '#22d3ee', // 청록 — 정상 사람 · 확정 전 후보
   violation: '#ef4444', // 적색 — 확정된 위반 사람 · 근접 거리선
   vehicle: '#f59e0b', // 앰버 — 지게차
+  //: 금지구역 경계. **사람·지게차 어느 색과도 겹치지 않아야 한다** — 구역은 관측된
+  //: 대상이 아니라 사람이 설정한 경계선이고, 그 둘이 같은 색이면 화면에서 "지금 무엇이
+  //: 감지된 것"과 "여기가 어디"가 섞인다.
+  zone: '#a855f7', // 보라 — 금지구역 폴리곤
 } as const
 
 /** 위반 유형 라벨. 시안의 건설현장 용어가 아니라 명세서 용어다(부록 B). */
@@ -105,7 +114,7 @@ type Props = {
   kind: PlaybackKind
   /** `GET /policies` 값. 없으면 **그리지 않는다** — 틀린 위치의 박스가 없는 박스보다 나쁘다. */
   policies: OverlayPolicies | null
-  /** 캐시된 금지구역. 라벨에 구역 표시 이름을 쓰기 위해서다(§5.1 · §5.4). */
+  /** 캐시된 금지구역. 폴리곤을 그리고 사람 라벨의 구역 이름에도 쓴다(§5.1 · §5.4). */
   zones: Zone[]
   /** 디버그 표시가 켜져 있을 때만 넘어온다. 꺼져 있으면 계산도 하지 않는다. */
   onDebug?: (info: OverlayDebug) => void
@@ -156,6 +165,11 @@ export default function OverlayCanvas({ camId, videoRef, kind, policies, zones, 
 
       resize(canvas, video)
       context.clearRect(0, 0, canvas.width, canvas.height)
+
+      // ★ **좌표와 무관하게 먼저 그린다.** 구역은 관측 결과가 아니라 설정이므로,
+      //   엣지가 끊겨 `overlay` 가 한 건도 없어도 화면에 있어야 한다. 아래 `render`
+      //   안에 넣으면 「사람이 안 보이면 구역도 사라지는」 화면이 된다.
+      drawZones(context, canvas, video, zonesRef.current)
 
       if (settings && bufferKey) {
         // `expectedDisplayTime` 은 `performance.now()` 기준이다. `timeOrigin` 을 더하면
@@ -255,6 +269,58 @@ function viewport(canvas: HTMLCanvasElement, video: HTMLVideoElement) {
     /** 화면 크기에 비례하는 선 굵기·글자 크기. 단독 확대에서도 같은 인상이 나오게 한다. */
     unit: Math.max(1, canvas.height / 360),
   }
+}
+
+/**
+ * 금지구역 폴리곤 (§5.1 · §5.4 · FN-UI-02).
+ *
+ * **`overlay` 에 실려 오지 않는다.** 매 프레임 변하지 않으므로 `GET /zones` 로 한 번
+ * 조회해 캐시하고 `zone_updated` 로 갱신한 것을 여기서 그린다.
+ *
+ * 쓰는 좌표는 `polygon`(정규화 픽셀)이지 `polygon_m`(지면 미터)이 아니다. 판정은
+ * 지면 좌표로 하지만 화면에 얹는 것은 픽셀이고, 매번 역변환하면 캘리브레이션이
+ * 미세하게 바뀔 때마다 도형이 흔들린다 — 사용자가 화면에서 그린 위치가 원본이다.
+ *
+ * `active: false` 는 그리지 않는다. 꺼 둔 구역이 화면에 남아 있으면 「감시 중」으로
+ * 읽히고, 그건 침입이 감지되지 않는 이유를 화면이 숨기는 것이다.
+ */
+function drawZones(
+  context: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+  video: HTMLVideoElement,
+  zones: Zone[],
+): void {
+  const drawable = zones.filter((zone) => zone.active && zone.polygon.length >= 3)
+  if (drawable.length === 0) return
+
+  const view = viewport(canvas, video)
+  context.save()
+  context.lineJoin = 'round'
+  context.textBaseline = 'bottom'
+
+  for (const zone of drawable) {
+    const points = zone.polygon.map((vertex) => point(view, vertex))
+    context.beginPath()
+    context.moveTo(points[0].x, points[0].y)
+    for (const vertex of points.slice(1)) context.lineTo(vertex.x, vertex.y)
+    context.closePath()
+
+    // 옅게 채운다 — 진하면 영상이 가려져 정작 그 안에서 무슨 일이 벌어지는지 안 보인다.
+    context.fillStyle = 'rgba(168, 85, 247, 0.12)'
+    context.fill()
+    // 점선으로 그린다. 실선은 감지 박스와 같은 인상이라 「지금 잡힌 것」으로 읽힌다.
+    context.setLineDash([view.unit * 6, view.unit * 4])
+    context.lineWidth = view.unit * 1.6
+    context.strokeStyle = COLOR.zone
+    context.stroke()
+    context.setLineDash([])
+
+    // 라벨은 가장 위쪽 꼭짓점에 붙인다 — 폴리곤이 화면 아래에 있으면 무게중심에
+    // 찍은 글자가 영상 밖으로 밀린다.
+    const anchor = points.reduce((top, vertex) => (vertex.y < top.y ? vertex : top), points[0])
+    label(context, view, anchor.x, anchor.y, COLOR.zone, `금지구역 · ${zone.name}`)
+  }
+  context.restore()
 }
 
 function render(
