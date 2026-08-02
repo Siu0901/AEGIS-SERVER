@@ -216,7 +216,7 @@
 | FN-CFG-02 | 금지구역 편집 (폴리곤 → 지면 좌표 · `zone_updated` 발행) | P0 | SRV/WEB | 기능 §4.7 · API §4.5 · §5.4 | M6 | `server/app/routes/zones.py` · `front/src/pages/SettingsPage.tsx` | ✅ |
 | FN-CFG-03 | 경고 음원 매핑 (유형별 음원 + **등급** · `fall` 하한 3) | P0 | SRV/WEB | 기능 §4.7 · §6 · API §4.5 | M4 (저장소) / M5 (§6 컬럼) / M6 (API·화면) | `server/app/routes/sounds.py` · `server/domain/alerts.py`(`check_level`) · `front/src/pages/SettingsPage.tsx` | ✅ |
 | FN-CFG-04 | 임계값 정책 관리 (**재시작 없이 반영**) | P1 | SRV/WEB | 기능 §4.7 · API §4.5 | M6 | `server/app/routes/policies.py` · `front/src/pages/SettingsPage.tsx` | ✅ |
-| FN-CFG-05 | 위험 반경 설정 (클래스별) | P1 | SRV/WEB | 기능 §4.7 · API §4.5 | M6 | `server/app/routes/vehicles.py` · `server/infra/db/repository.py` | ✅ |
+| FN-CFG-05 | 위험 반경 설정 (클래스별) | P1 | SRV/WEB | 기능 §4.7 · §6 · API §4.5 | M6 (API) / M9 (시드) | `server/app/routes/vehicles.py` · `scripts/seed_vehicles.py` | ✅ |
 
 ---
 
@@ -227,7 +227,7 @@
 | FN-ID | 기능명 | 우선 | 계층 | 명세 위치 | 마일스톤 | 코드 위치(예정) | 상태 |
 |---|---|---|---|---|---|---|---|
 | FN-SYS-01 | 구성요소 상태 감시 (엣지·카메라·MCU·클라우드·저장소) | P0 | SRV | 기능 §4.8 · API §4.6 | M1 (카메라·저장소) / M2 (엣지) / M4 (MCU·클라우드) | `server/app/routes/system.py` · `server/domain/edge_state.py` · `mcu_state.py` · `cloud_state.py` | ✅ |
-| FN-SYS-02 | 시각 동기화 (NTP · 클립 정합의 전제) | P0 | SRV/EDGE | 기능 §4.8 | M1 (서버) / M2 (엣지 오프셋) | `server/infra/timesync.py` · `edge/` | 🟡 |
+| FN-SYS-02 | 시각 동기화 (NTP · 클립 정합의 전제) | P0 | SRV/EDGE | 기능 §4.8 · API §2.4 · §4.6 | M1 (서버) / M9 (엣지 보고) | `server/infra/timesync.py` · `server/domain/edge_state.py` · `server/app/routes/system.py` | ✅ (서버) |
 | FN-SYS-03 | 클라우드 장애 격리 | P1 | SRV | 기능 §4.8 | M4 (격리·표시) / M8 (실제 어댑터) | `server/domain/cloud_state.py` · `server/ai/guard.py` · `server/ai/gemini.py` | ✅ |
 | FN-SYS-04 | 지표 집계 (시정률 · 평균 시정 시간 · 판정 불가율 · 분포) | P0 | SRV | 기능 §4.8 · API §4.2·§6.7 | M3 (summary) / M8 (분포·시계열) | `server/domain/metrics.py` · `aggregates.py` · `routes/metrics.py` | ✅ |
 | FN-SYS-05 | 판정 불가 집계 (`expired` 별도 집계) | P0 | SRV | 기능 §4.8 · API §6.7 | M3 | `server/domain/metrics.py` | ✅ |
@@ -1368,44 +1368,33 @@ M6 이전 시나리오는 `foot_point`(픽셀)와 `foot_point_m`(미터)를 **�
 
 ### A. 남아 있는 확인 필요
 
-#### M7 에서 새로 드러난 것
+**M6~M8 에서 열려 있던 13건과 M9 준비 중 보고한 2건이 전부 확정됐다**(명세서 v13 ·
+`25a66d5`). 아래는 그 결과이며, 지금 열려 있는 것은 표 아래 한 건뿐이다.
+
+| 무엇 | 명세서가 정한 것 | 반영 |
+|---|---|---|
+| **★ FN-SYS-02 엣지 시각 오프셋** | §2.4 `heartbeat.clock`(`offset_ms`·`synced`·`source`·`last_sync_at`) 신설. **엣지가 자체 NTP 로 재서 스스로 보고한다** — 서버가 도착 시각으로 추정하면 네트워크 지연이 섞여 클립이 밀리는 원인을 가릴 수 없다. §4.6 에 `edge_synced` · `server_offset_ms` 추가, 임계는 `clock_offset_warn_ms`(100) | `EdgeClock` · `EdgeRuntime.clock_offset_ms/clock_synced` · `routes/system.py` 의 `edge_offset_ms=None` 상수 제거. 초과·동기화 실패 시 `system`(`component:"edge"`, `state:"degraded"`) 발행. 개요 화면에 「시각 동기화」 행 추가 |
+| **FN-CFG-05 위험 반경 시드** | §6 `vehicle_classes` 에 시드 규정 명시. 감지 클래스가 2종 고정이라 **행은 `vehicle` 하나**(3.0m·active) | `scripts/seed_vehicles.py` + `tasks.py migrate` 단계. 행이 없으면 `PATCH` 가 404 라 현장에서 조정할 수단이 사라진다 |
+| §4.3 `similarity` 가 필수인데 `sql` 경로엔 유사도가 없다 | **nullable 확정.** `mode:"sql"` 은 시각 역순이며 화면은 유사도 숫자를 그리지 않는다. `thumbnail_url`·`clip_url` 도 nullable | 계약이 이미 그 모양이었다 — 명세서가 따라왔다 |
+| 요청과 저장의 이름이 다르다 (`px_height` 대 `height_px`) | **`height_px` 로 통일** | `ReferencePerson.height_px` · 라우터 경계 변환 제거 · 설정 화면 요청 본문 |
+| §4.5 `GET /cameras` 예시가 옛 스칼라 | `ref_height` 객체로 수정 | 구현이 이미 §6 을 따르고 있었다 |
+| §4.4 에 보고서 조회 경로가 없다 | `GET /reports/{report_id}` 정의(`pending`·`ready`·`failed`) | `ReportDetail`·`ReportPeriod` 계약. 서버가 쓰던 `generating` 을 `pending` 으로 바꿨다 |
+| **★ §4.4 에 대화 이력의 자리가 없다** | 최근 8턴 유지 · 세션 상한 50 · **서버 메모리 보관(재시작 시 소멸)** · `DELETE /assistant/chat/{session_id}` · 정책 키 `assistant_history_turns` | 턴 수를 정책값에서 읽게 했다(코드 상수 제거) |
+| **★ §4 에 `GET /anomalies` 가 없다** | `GET /anomalies?days=&limit=` 추가. 발행만으로는 화면이 놓친 것과 이상이 없었던 것이 구분되지 않는다 | 경로·파라미터가 이미 그 모양이었다 |
+| 이상 탐지 임계값이 명세서에 없다 | `anomaly_threshold`(0.35) · `anomaly_knn_k`(5) · `anomaly_min_pool`(12) · `anomaly_time_bucket_h`(3) **정책 키 승격** | `server/ai/service.py` 상수 4개 제거 → `Policies` |
+| 정지 판정 임계의 자리 (**완전 해소**) | `stillness_shape_change_max`(0.15)도 정책 키 승격 — 세 값 모두 오탐 억제 핵심이라 **함께** 조정해야 한다 | `edge/config.yaml` `posture` 절이 비었다. `sim/edge_sim/derive.py` 도 `_POLICIES` 에서 읽는다 |
+| **★ §6 `normal_pool` 에 임베딩 모델 이름이 없다** | `embedding_model` **필수 추가.** 현재 모델과 다른 행은 판정에서 제외하고, 새 모델 풀이 `anomaly_min_pool` 에 도달하면 이전 모델 행을 자동 정리한다. **사람이 `DELETE FROM` 하게 하지 않는다** | 마이그레이션 `0009`(기존 행은 비운다 — 어느 모델인지 알 수 없다) · `pool(…, model)` 필터 · `drop_other_models` |
+| `anomaly.keyframe_url` 을 채우지 않는다 | `media/anomalies/{anomaly_id}.jpg` 에 저장하고 URL 로 노출. **보존 30일 순환**이며 이벤트 클립과 정책이 다르다(진단용). 실패 시 `null` | 저장 + `set_anomaly_keyframe` 로 경로를 행에 남긴다 · 30일 스윕 · 분석 화면에 썸네일 열 |
+| `alert_sounds` 에 없는 파일을 저장할 수 있다 | **저장 시점에 파일 존재를 검사하고 없으면 `422`.** 파일을 먼저 배치해야 하는 순서 제약을 감수한다 | `PUT /alert-sounds` 가 `AUDIO_DIR` 기준으로 검사 |
+| **카메라 표시 이름의 원천이 둘이다** | `GET /cameras` 의 `name` 이 **단일 원천**이다. 프론트 코드에 이름 표를 두지 않는다 | `labels.ts` 의 `CAMERA_NAMES` 제거 → `api/cameraNames.ts`(한 번 받아 캐시하는 `useCameraName` 훅). 6개 화면 전부 API 값을 쓴다 |
+| §4.4 스냅샷 디코딩 전제 | 하드웨어 디코딩(NVDEC) 전제를 명시 | 문서 사안 — 코드 변경 없음 |
+
+#### 아직 열려 있는 것
 
 | 내용 | 상세 |
 |---|---|
-| ~~**★ `proximity` 해소 판정이 후보를 만든 거리와 다른 거리를 쓴다**~~ **해소됨** — §2.1 에 `frame.objects[].nearby[]`(`dist_m` · `basis` · `in_danger_zone`)가 신설됐다. 서버가 그 값으로 해소를 판정하고 오버레이 거리선도 같은 값을 쓴다. `proximity_forklift.yaml` 의 우회를 되돌렸고 실측 최근접 **1.55m** · 접지점 **2.90m** 로 경고 임계(2.0m)를 사이에 두고 갈리는 위치가 시나리오의 요점이 됐다 | 엣지는 **마스크 최근접**(`nearby[].dist_m` · §6.5)으로 후보를 올리는데, 서버의 해소 판정(§4.2 FN-EVT-03 「거리가 임계값 초과」)은 `frame` 의 **접지점↔`anchor` 거리**로 잰다. `frame`(§2.1)에 마스크 최근접이 실리지 않아서다. 두 값은 **FN-DET-09 가 존재하는 바로 그 상황**(포크가 뻗은 지게차)에서 갈린다 — 실측으로 최근접 1.55m · 접지점 거리 3.50m 였다. 그러면 엣지가 근접이라고 올린 순간에 서버는 「이미 해소」로 보아 확정에 도달하지 못한다. `sim/cases/proximity_forklift.yaml` 은 두 값이 함께 임계 안에 들도록 작업자를 더 가까이 세워 우회했다. **§2.1 `frame` 에 최근접 거리를 실을지, §4.2 해소 조건을 후보 기준으로 바꿀지 정해 달라** |
-| ~~**§6 `zones` 에 `polygon`(픽셀) 칸이 없다**~~ **해소됨** — §6 `zones` 에 `polygon`(정규화 픽셀 원본)이 추가됐다 | §4.5 는 「두 표현을 모두 저장하고 반환한다」고 확정했는데 §6 테이블 목록에는 `polygon_m` 만 있다. 마이그레이션 `0007` 로 컬럼을 넣었고 `test_db_schema.py` 가 그 사실을 주석과 함께 잠갔다. §6 에 추가해 달라 |
-| ~~**§6 `cameras` 에 `calib_points` · `reproj_error_m` 칸이 없다**~~ **해소됨** — 둘 다 §6 `cameras` 에 추가됐다 | §4.5 `GET /cameras` 는 둘 다 반환한다. 행렬만 남기면 설정 화면이 **어느 점을 찍었는지 복원할 수 없어** 한 점만 고치려 해도 네 점을 다시 찍어야 한다. 같은 마이그레이션으로 넣었다. §6 에 추가해 달라 |
-| ~~**`ref_height_px_at_m` 이 응답에서는 스칼라인데 계산에는 두 값이 필요하다**~~ **해소됨** — §6 이 `ref_height`(jsonb · `{height_px, at_m}`)로 바꿨다. 마이그레이션 `0008` 이 컬럼 이름과 JSON 키를 함께 옮겼고, `GET /cameras` 가 객체를 그대로 반환하며, 설정 화면에 「기준 인물 찍기」(발끝·머리끝 두 점 + 실측 좌표)가 생겼다 | §4.5 `GET /cameras` 예시는 `"ref_height_px_at_m": 0.42` 로 **높이 하나**다. 그런데 기대 높이 곡선을 정하려면 「그 높이를 **어느 위치에서** 쟀는가」(`reference_person.at_m`)가 함께 있어야 한다. DB 는 `{px_height, at_m}` 을 통째로 들고 있고 응답에는 높이만 싣는다 — 설정 화면이 기준점 위치를 되그릴 수 없다. 응답에 위치를 함께 실을지 정해 달라 |
-| ~~**정지 판정 임계 두 개의 자리**~~ **부분 해소** — `stillness_move_px`(0.008) · `stillness_window_s`(1.0)가 §4.5 정책 키로 승격됐다. 형태 변화 임계만 `edge/config.yaml` 에 남았다(카메라 설치에 종속). 창 방식으로 바뀌면서 쓰러짐 판정이 약 0.9초 늦어졌고(`fall_detected`: 7.5s → 8.375s) 시나리오 시각을 실제 게이지에 맞춰 옮겼다 | `stillness_move_max` · `stillness_shape_change_max` 는 §4.5 정책 키 목록에 없다. 카메라 화각·설치 높이에 종속되는 값이라 `edge/config.yaml` 의 `posture` 절에 두었다(지속 시간 `fall_stillness_s` 는 정책값 그대로다). 화면에서 조정할 값이라면 `policies` 로 옮겨야 한다 |
+| **`assistant_history_turns` 가 §4.5 정책 예시 JSON 에 없다** | §4.4 대화 이력 표는 「유지 턴 수 8 (`assistant_history_turns`)」로 **정책 키라고 적었는데**, §4.5 `GET /policies` 예시 JSON 에는 그 키가 없다. 모델에는 두었고(정책값이 맞다), `test_spec_examples.py` 는 그 차이를 `SPEC_44_ONLY` 로 **명시적으로 적어** 대조한다 — 조용히 예시에 끼워 넣으면 테스트가 명세서에 없는 것을 있다고 말하게 된다. §4.5 예시에 추가해 달라 |
 
-#### M8 에서 새로 드러난 것
-
-| 내용 | 상세 |
-|---|---|
-| **★ §4.3 `SceneSearchItem.similarity` 가 필수인데 `mode:"sql"` 경로에는 유사도가 없다** | §4.3 은 세 경로(`sql` / `vector` / `hybrid`)를 정의하는데, `sql` 경로에는 질의 임베딩 자체가 없다 — 「지난주 1번 카메라 안전모」처럼 조건이 전부 구조화되면 벡터를 만들 이유가 없기 때문이다. 그런데 응답 항목의 `similarity` 는 필수 `float` 이라 **재지 않은 값을 채워야** 스키마를 만족한다. 계약을 `float \| None` 로 바꾸고 화면은 `null` 일 때 숫자를 그리지 않게 했다(`thumbnail_url` · `clip_url` 도 같은 이유로 nullable — 확정 직후에는 키프레임·클립이 아직 없다). **§4.3 예시가 `hybrid` 응답이라 이 칸이 채워져 있는 것이니, `sql` 경로의 표기를 정해 달라** |
-| **§4.5 `GET /cameras` 예시가 아직 `ref_height_px_at_m` 스칼라다** | §6 은 `ref_height`(jsonb · `{height_px, at_m}`)로 바꿨는데 §4.5 응답 예시(773행 부근)는 옛 이름과 스칼라 그대로다. 구현은 **§6 을 따랐다**(사용자 지시). §4.5 예시도 함께 고쳐 달라 |
-| **요청과 저장의 이름이 다르다 — `px_height` 대 `height_px`** | §4.5 `POST /cameras/{id}/calibration` 의 `reference_person.px_height` 와 §6 `cameras.ref_height.height_px` 가 같은 값인데 이름이 뒤집혀 있다. 라우터 경계에서 한 번만 바꾸고 그 사실을 주석에 적었다. 한쪽으로 통일할지 정해 달라 |
-| **§4.4 에 보고서 조회 경로가 없다** | `POST /reports/weekly` 가 `report_id` 를 돌려주는데 그것으로 받아올 경로가 §4.4 에 없다. `GET /reports/{report_id}` 를 같은 이름 공간에 두었다(`status` · `body` · `stats`). 경로와 스키마를 정해 달라 |
-| **이상 탐지 임계값이 명세서에 없다** | §6.8 은 「임계 초과 시 이상 플래그」라고만 적는다. 판정 임계(0.35) · k(5) · 최소 풀 크기(12) · 시간대 버킷(3시간)을 서버가 정했고 `server/ai/service.py` 상수로 두었다. 현장에서 조정할 값이라면 `policies` 로 올려야 한다 |
-| **`anomaly.keyframe_url` 을 채우지 않는다** | §5.3 `anomaly` 는 `keyframe_url` 을 정의하지만, 이상 프레임을 `media/` 에 저장하는 규칙이 §4.4 에 없다(그쪽은 이벤트 클립·키프레임 전용이다). 지금은 `null` 로 보낸다 — 없는 URL 을 문자열로 내보내지 않는 §5.2 규약과 같은 처리다. 저장 위치를 정해 달라 |
-| **§6 `normal_pool` 에 임베딩 모델 이름이 없다** | 벡터는 모델마다 다른 공간에 산다. 모델을 바꾸면 옛 벡터가 남아 새 모델의 첫 샘플들이 전부 「평소와 다르다」로 잡힌다 — **실측으로 4회 연속 오탐**이 났다(k=5 라 풀이 새 벡터로 채워질 때까지 이어진다). 지금은 사람이 `DELETE FROM normal_pool` 로 비운다. 서버가 알아서 비우게 하려면 행에 모델 이름을 함께 저장해야 하고, 그건 §6 에 칸을 늘리는 일이다. 추가할지 정해 달라 |
-| **★ §4.4 에 대화 이력의 자리가 없다** | `session_id` 를 받는데 그것으로 무엇을 하는지 명세서에 없어서, 서버가 아무것도 기억하지 않고 있었다 — 그 결과 「이번 주 위반 몇 건」 다음의 「각각 무슨 위반이야?」가 장면 검색으로 새고 답변은 매번 같은 오늘치였다. 서버가 세션별 최근 8턴을 들고 프롬프트에 싣게 했고(상한 50세션), 비울 자리로 `DELETE /assistant/chat/{session_id}` 를 두었다. §4.4 에 이력 규약과 삭제 경로를 정해 달라 |
-| **★ §4 에 `GET /anomalies` 가 없다** | §5.3 은 `anomaly` **발행**만 정의한다. 발행만으로는 새로고침한 화면과 서버가 죽어 있던 동안의 이상을 볼 수 없다 — 화면이 메시지를 놓친 것과 이상이 없었던 것이 같아 보인다. `GET /anomalies?days=&limit=`(`AnomalyListResponse`)를 지표 라우터에 두었고, 응답 원소는 §5.3 `anomaly` 에서 `type` 만 뺀 것과 같다. §4 에 추가할지 정해 달라 |
-
-#### M6 에서 드러나 아직 열려 있는 것
-
-M5 에서 보고한 9건은 **전부 명세서에 반영되어 해소됐다**(위 「명세서 갱신 반영 (v12)」).
-아래는 M6 에서 새로 드러난 것들이며, 전부 **명세서가 요구하는 기능을 구현하려는데 둘
-자리가 없어서** 서버가 임시로 정한 것이다. 코드에는 그 사실을 주석으로 표시해 두었다.
-
-| 내용 | 상세 |
-|---|---|
-| ~~**§4.5 에 캘리브레이션 조회 경로가 없다**~~ **해소됨** — `GET`/`PATCH /cameras` 가 §4.5 에 정의됐다 | `POST /cameras/{cam_id}/calibration` 은 있는데 그 결과를 다시 읽을 곳이 없다. 설정 화면(FN-UI-07)은 저장된 구역을 영상 위에 다시 그려야 하는데 `zones.polygon_m` 은 지면 좌표라 **호모그래피 없이는 화면에 그릴 수 없다** — `POST` 응답만으로는 새로고침 뒤에 아무것도 그리지 못한다. `GET /cameras`(`cam_id` · `name` · `homography` · `ref_height_calibrated` · `calibrated_at`)를 만들어 두었다(`CameraCalibration`). §4.5 에 추가할지 정해 달라 |
-| ~~**`POST /zones` 에 픽셀 폴리곤 자리가 없다**~~ **해소됨** — 요청이 정규화 픽셀 `polygon` 으로 확정됐고 `polygon_m` 은 클라이언트가 보내지 않는다 | §4.5 는 「화면에서 그린 픽셀 좌표를 **서버가** 호모그래피로 변환해 저장」한다고 적었는데, 요청 예시에는 `polygon_m`(미터)만 있다. 미터만 받으면 변환을 클라이언트가 해야 하고, 그러면 호모그래피 적용 코드가 `packages/vision` 과 프론트 두 곳에 생긴다. `ZoneUpsertRequest` 에 `polygon`(정규화 픽셀)을 두고 **둘 중 정확히 하나만** 받게 했다(§1.2 좌표 규약대로 접미사 없는 이름이 픽셀이다). §4.5 요청 스키마를 정해 달라 |
-| ~~**`DELETE /zones/{zone_id}` 가 §4.5 에 없다**~~ **해소됨** — §4.5 에 정의됐다 | §5.4 는 `zone_updated.action: "delete"` 를 정의하는데 그 전이를 일으킬 REST 경로가 없다. 설정 화면에서 구역을 지울 수 없으면 잘못 그린 구역이 영구히 남는다. `DELETE /zones/{zone_id}?cam_id=` 로 두었다 — `cam_id` 는 §5.4 가 메시지 최상위에 요구하기 때문이다 |
-| **카메라 표시 이름의 원천이 둘이다** | §6 `cameras.name` 이 있는데 프론트 `labels.ts` 에도 표가 박혀 있다(`CAMERA_NAMES`). 설정 화면만 `GET /cameras` 의 값을 쓰게 했고 나머지 화면은 아직 코드의 표를 쓴다 — 같은 카메라가 화면마다 다른 이름으로 보인다. 절대규칙 6 대로라면 전부 DB 값이어야 한다. `GET /cameras` 가 §4.5 에 확정되면 함께 정리하겠다 |
-| ~~**§4.4 「초당 1장은 무시할 수준」이 소프트웨어 디코딩에서는 성립하지 않는다**~~ **해소됨(M7)** — 명세서가 비트스트림 보관 방식으로 재설계됐고 `REC_SNAPSHOT_KEYFRAMES_ONLY` 는 제거됐다. 스냅샷 CPU 66% → 2.4%. 아래는 그때의 기록이다 | 비용은 인코딩이 아니라 **디코딩**이다(실측: 1080p 한 대에 코어 33% · 카메라 2대면 66%). 젯슨은 NVDEC 이 있어 전제가 성립하지만 개발 노트북은 아니다. `REC_SNAPSHOT_KEYFRAMES_ONLY`(기본 끔)를 두었고 켜면 코어 7% 로 내려가되 **샘플 간격이 스트림 GOP 를 따른다** — §4.4 가 보장한 「최대 0.5초 차이」가 GOP 2초에서는 최대 1초가 된다. 개발 환경 기본값을 켬으로 바꿀지, §4.4 에 「하드웨어 디코딩 전제」를 명시할지 정해 달라 |
-| `alert_sounds` 의 **표시 이름과 키를 화면이 자유롭게 바꾼다** | `PUT /alert-sounds/{violation_type}` 은 `file_path` 를 문자열로 받는다. 존재하지 않는 파일을 저장해도 API 는 성공하고, 그 사실은 **다음 경고 때** 로그로만 드러난다(`SoundLibrary` 가 파일 없음을 ERROR 로 남긴다). 저장 시점에 파일 존재를 검사해 422 로 막을지 정해 달라 — 막으면 파일을 먼저 올려야 하는 순서 제약이 생긴다 |
 
 ### B. 개발 환경에서 발견한 것 (명세서 사안 아님)
 
