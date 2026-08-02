@@ -79,6 +79,9 @@ __all__ = [
     "ReferencePerson",
     "RegulationRef",
     "RepeatItem",
+    "ReportDetail",
+    "ReportPeriod",
+    "ReportStatus",
     "SceneSearchFilters",
     "SceneSearchItem",
     "SceneSearchRequest",
@@ -620,12 +623,42 @@ class WeeklyReportRequest(SpecModel):
     to: date
 
 
+#: 보고서 생성 상태. API명세서 §4.4 `GET /reports/{report_id}`
+ReportStatus = Literal["pending", "ready", "failed"]
+
+
 class WeeklyReportResponse(SpecModel):
     """`POST /reports/weekly` 응답. API명세서 §4.4"""
 
     report_id: str
-    status: str
+    status: ReportStatus
     estimated_sec: int
+
+
+class ReportPeriod(SpecModel):
+    """`GET /reports/{report_id}` 의 `period`. API명세서 §4.4"""
+
+    from_: date = Field(alias="from")
+    to: date
+
+
+class ReportDetail(SpecModel):
+    """`GET /reports/{report_id}` 응답. API명세서 §4.4
+
+    생성이 비동기이므로 **즉시 `ready` 가 아닐 수 있다.** 화면은 `pending` 동안
+    진행 중임을 표시하고 다시 조회한다 — 없는 본문을 빈 문자열로 채우지 않는다.
+    """
+
+    report_id: str
+    status: ReportStatus
+    period: ReportPeriod
+    body: str | None = None
+    """마크다운 본문. `pending` 이면 `null` 이다."""
+    stats: MetricsSummary | None = None
+    """LLM 이 문장으로 옮긴 **원본 집계**. 사람이 문장과 대조할 수 있어야 한다."""
+    created_at: AwareDatetime
+    error: str | None = None
+    """`failed` 일 때의 사유. 그 외에는 `null`."""
 
 
 # --------------------------------------------------------------------------
@@ -649,12 +682,13 @@ class ReferencePerson(SpecModel):
 
     **`at_m` 이 함께 필수다.** 높이 하나만으로는 다른 거리에서의 기대 높이를 구할 수
     없다 — 같은 사람도 카메라에서 멀수록 화면상 픽셀 높이가 줄어들기 때문이다.
-    저장되는 형태는 `RefHeight`(기능명세서 §6 `cameras.ref_height`)이며, **필드 이름이
-    다르다**(`px_height` 대 `height_px`). 요청 이름은 §4.5 예시가, 저장 이름은 §6 이
-    정한 것이라 어느 한쪽으로 통일하지 않고 경계에서 바꾼다.
+
+    ★ **저장 이름과 같다.** §4.5 가 `height_px` 로 통일했다(§6 `cameras.ref_height`).
+    전에는 요청이 `px_height`, 저장이 `height_px` 라 라우터가 경계에서 뒤집었는데,
+    같은 값에 이름이 둘이면 그 변환 자체가 버그 지점이 된다.
     """
 
-    px_height: float
+    height_px: float
     at_m: PointM
 
 
@@ -999,10 +1033,24 @@ class TimeSyncStatus(SpecModel):
     """엣지–서버 시각 차이. 크면 클립 추출 구간이 어긋난다. API명세서 §4.6"""
 
     edge_offset_ms: int | None
-    """`heartbeat` 로 관측한다. **엣지가 붙기 전에는 `null`**(§4.6 null 규약).
+    """`heartbeat.clock.offset_ms` 를 **그대로 전달**한다(§2.4).
 
+    **엣지가 붙기 전이거나 `clock.synced == false` 면 `null`**(§4.6 null 규약).
     `0` 은 "완벽히 동기화됨"이라는 강한 주장이고, 측정한 적이 없다는 사실과 정반대다.
     클립 구간 정합이 이 값에 걸려 있으므로 측정 없음을 동기화됨으로 보이게 하면 안 된다.
+    """
+
+    edge_synced: bool | None = None
+    """엣지 NTP 동기화 상태. **`false` 면 클립 구간을 신뢰할 수 없다.**
+
+    `edge_offset_ms` 가 `null` 인 이유를 가른다 — 「엣지가 없다」(`null`)와 「엣지는
+    있는데 시계를 못 맞췄다」(`false`)는 대응이 다르다.
+    """
+
+    server_offset_ms: float | None = None
+    """서버 자체의 NTP 오차(ms). 기동 시 1회 측정한다(`server/infra/timesync.py`).
+
+    엣지 오차와 나란히 봐야 어느 쪽 시계가 틀렸는지 가릴 수 있다.
     """
 
 

@@ -93,10 +93,25 @@ async def system_status(request: Request) -> SystemStatus:
         # `available: false` · `quota_used: null` 이다("쓸 수 있다"로 낙관하지 않는다).
         cloud=cloud.status(),
         storage=_storage(rec),
-        # 엣지 시각 오프셋(FN-SYS-02)은 `heartbeat` 에 실리지 않는다(§2.4). 관측 수단이
-        # 생기기 전까지 `null` 이다 — 0 은 "완벽히 동기화됨"이라는 다른 주장이다.
-        time_sync=TimeSyncStatus(edge_offset_ms=None),
+        # FN-SYS-02 — 엣지가 `heartbeat.clock` 으로 **스스로 보고한** 값이다(§2.4).
+        # 서버가 도착 시각으로 추정하지 않는다: 그러면 네트워크 지연이 섞여, 클립이
+        # 밀리는 원인(시계 오차)을 전송 지연과 구분할 수 없다.
+        time_sync=TimeSyncStatus(
+            edge_offset_ms=edge.clock_offset_ms(now),
+            edge_synced=edge.clock_synced(now),
+            server_offset_ms=_server_offset_ms(request),
+        ),
     )
+
+
+def _server_offset_ms(request: Request) -> float | None:
+    """기동 시 잰 서버 자신의 NTP 오차(§4.6 `server_offset_ms`).
+
+    엣지 오차와 나란히 놓아야 어느 쪽 시계가 틀렸는지 가릴 수 있다. 측정에 실패했으면
+    `null` 이다 — 0 은 "완벽히 동기화됨"이라는 다른 주장이다.
+    """
+    reading = getattr(request.app.state, "time_sync", None)
+    return getattr(reading, "offset_ms", None)
 
 
 async def _rec_status(state: object) -> RecStatusResponse | None:

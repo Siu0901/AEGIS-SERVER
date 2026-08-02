@@ -47,6 +47,9 @@ class EdgeRuntime:
 
     stale_after_s: float = DEFAULT_STALE_AFTER_S
 
+    clock_offset_warn_ms: float = 100.0
+    """`clock_offset_warn_ms`(§4.5). 넘으면 `degraded` 다 — 주입받는 정책값이다."""
+
     connected: bool = False
     """`/ws/edge` 소켓이 붙어 있는가. 서버가 직접 아는 사실이다."""
 
@@ -109,6 +112,9 @@ class EdgeRuntime:
                     component="edge", state=self._state(), detail="하트비트 수신", at=at
                 )
             )
+        clock_msg = self._clock_warning(message, at)
+        if clock_msg is not None:
+            out.append(clock_msg)
         out += [
             CameraSystemMsg(
                 cam_id=camera.cam_id,
@@ -148,6 +154,57 @@ class EdgeRuntime:
         if self.last_heartbeat is None:
             return {}
         return {camera.cam_id: camera.sub_state for camera in self.last_heartbeat.cameras}
+
+    def clock_offset_ms(self, at: datetime) -> int | None:
+        """`time_sync.edge_offset_ms`(§4.6) — 엣지가 스스로 보고한 시계 오차.
+
+        **`synced == false` 면 `null` 이다.** 엣지 NTP 가 실패했는데도 숫자를 그대로
+        내보내면, 맞춘 적 없는 시계의 오차가 측정값처럼 화면에 남는다. 하트비트가
+        낡았거나 `clock` 절이 없는 엣지도 마찬가지로 `null` 이다.
+        """
+        beat = self.last_heartbeat if self._fresh(at) else None
+        clock = beat.clock if beat else None
+        if clock is None or not clock.synced:
+            return None
+        return round(clock.offset_ms)
+
+    def clock_synced(self, at: datetime) -> bool | None:
+        """`time_sync.edge_synced`(§4.6).
+
+        `edge_offset_ms` 가 `null` 인 **이유**를 가른다 — 「엣지가 없다」(`null`)와
+        「엣지는 있는데 시계를 못 맞췄다」(`false`)는 대응이 다르다.
+        """
+        beat = self.last_heartbeat if self._fresh(at) else None
+        return beat.clock.synced if beat and beat.clock else None
+
+    def _clock_warning(self, message: HeartbeatMsg, at: datetime) -> ComponentSystemMsg | None:
+        """시계가 어긋났으면 `degraded` 를 발행한다(§4.6 임계).
+
+        ★ **이 실패는 조용하다.** 시각이 어긋난 상태에서 잘라낸 클립은 정상적으로
+        생성되고 재생되지만 다른 구간을 담는다 — 사람이 열어보기 전까지 드러나지
+        않으므로 화면에 밀어 넣는다.
+        """
+        clock = message.clock
+        if clock is None:
+            return None
+        if not clock.synced:
+            return ComponentSystemMsg(
+                component="edge",
+                state="degraded",
+                detail="엣지 시각 동기화 실패 — 이 동안 추출한 클립은 구간을 신뢰할 수 없다",
+                at=at,
+            )
+        if abs(clock.offset_ms) <= self.clock_offset_warn_ms:
+            return None
+        return ComponentSystemMsg(
+            component="edge",
+            state="degraded",
+            detail=(
+                f"엣지 시계 오차 {clock.offset_ms:+.0f}ms "
+                f"(허용 {self.clock_offset_warn_ms:.0f}ms) — 클립 구간이 밀린다"
+            ),
+            at=at,
+        )
 
     def status(self, at: datetime) -> EdgeStatus:
         """`GET /system/status` 의 `edge` 절. API명세서 §4.6"""

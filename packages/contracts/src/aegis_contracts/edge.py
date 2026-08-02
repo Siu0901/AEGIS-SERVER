@@ -39,6 +39,7 @@ __all__ = [
     "DetectedObject",
     "DetectedPerson",
     "DetectedVehicle",
+    "EdgeClock",
     "EdgeMessage",
     "FrameMsg",
     "FrameNearby",
@@ -250,6 +251,27 @@ class CameraHealth(SpecModel):
     """실제 처리 프레임 수. **8 미만 지속 시 대시보드 경고**."""
 
 
+class EdgeClock(SpecModel):
+    """`heartbeat.clock` — 엣지가 **자체 NTP 로 잰** 자기 시계 오차. API명세서 §2.4
+
+    ★ **서버가 도착 시각으로 추정하지 않는다.** 이 값의 용도는 「클립 추출 구간을
+    믿어도 되는가」 하나뿐인데, `ts` 와 도착 시각의 차이로 재면 네트워크 지연이 섞여
+    시계 오차와 전송 지연을 구분할 수 없다. 클립이 밀리는 원인은 시계 오차뿐이다.
+
+    자기 신고의 약점 — 엣지 NTP 자체가 실패하면 틀린 값을 자신 있게 보고한다 — 은
+    `synced` 로 막는다. `false` 면 서버는 `edge_offset_ms` 를 `null` 로 전달한다.
+    """
+
+    offset_ms: float
+    """엣지 시계가 기준시보다 얼마나 앞서 있는가(ms). `synced == false` 면 무의미하다."""
+    synced: bool
+    """엣지 NTP 동기화 성공 여부. **`false` 면 `offset_ms` 를 신뢰하지 않는다.**"""
+    source: str | None = None
+    """동기 서버. 진단용이며 판정에 쓰지 않는다."""
+    last_sync_at: AwareDatetime | None = None
+    """마지막 동기 시각. 오래되면 `synced` 가 참이어도 값이 낡았다."""
+
+
 class HeartbeatMsg(SpecModel):
     """`heartbeat` — 상태 보고 (5초 주기). API명세서 §2.4"""
 
@@ -261,6 +283,13 @@ class HeartbeatMsg(SpecModel):
     cls_calls_per_min: int
     cls_cache_hit_rate: float
     depth_calls_per_min: int
+    clock: EdgeClock | None = None
+    """FN-SYS-02 — 엣지 시계 상태(§2.4).
+
+    ★ **없으면 `null` 이지 0이 아니다.** 옛 엣지 빌드가 이 절을 안 보낼 수 있는데,
+    그때 서버가 「오차 0」으로 읽으면 동기화된 적 없는 엣지가 완벽한 것으로 보인다.
+    보고하지 않는 엣지는 `time_sync.edge_offset_ms` 가 `null` 로 남는다.
+    """
 
 
 #: `/ws/edge` 로 올라오는 모든 메시지. `type` 값으로 구분되는 판별 유니온.

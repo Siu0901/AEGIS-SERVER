@@ -186,8 +186,31 @@ def load_case(case: str, start: datetime, speed: float = 1.0) -> list[ScheduledM
         # 시각은 시나리오가 적지 않는다. 시작 시각 + 경과로 주입한다.
         body = _with_ground_coordinates(dict(payload), default_cam)
         body[_TS_FIELD[str(body["type"])]] = start + timedelta(seconds=played_at)
+        body = _with_clock(body, start + timedelta(seconds=played_at))
         scheduled.append(ScheduledMessage(at_s=played_at, message=_ADAPTER.validate_python(body)))
     return scheduled
+
+
+def _with_clock(payload: dict[str, Any], at: datetime) -> dict[str, Any]:
+    """`heartbeat.clock` 을 채운다 (API명세서 §2.4 · FN-SYS-02).
+
+    시나리오가 적지 않으면 **동기화된 시계**로 본다. 시뮬레이터는 서버와 같은 기계에서
+    도므로 실제 오차가 0이고, 그 사실을 그대로 보고하는 것이 「엣지가 자기 시계를
+    신고한다」는 구조와 맞다.
+
+    시나리오가 `clock` 을 적으면 그것을 쓴다 — 시계가 어긋난 엣지(오차 경고·동기화
+    실패)를 재현하려면 그 값을 시나리오가 정해야 하기 때문이다.
+    """
+    if payload.get("type") != "heartbeat" or "clock" in payload:
+        return payload
+    return payload | {
+        "clock": {
+            "offset_ms": 0.0,
+            "synced": True,
+            "source": "sim",
+            "last_sync_at": at,
+        }
+    }
 
 
 def _with_ground_coordinates(payload: dict[str, Any], default_cam: int) -> dict[str, Any]:
