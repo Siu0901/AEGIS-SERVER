@@ -10,6 +10,11 @@
 | ✅ | 완료 (`uv run tasks.py verify` 통과 + 테스트 존재) |
 | 보류 | P2 — 여유 시 구현. 일정 부족 시 조정 |
 
+**임베디드 인수인계**: `docs/AEGIS_엣지연동_명세서.md` — Jetson(`/ws/edge` 4종)과
+ESP32(MQTT 2종)가 구현해야 하는 것 전량. API명세서 §1~§3·§6 에서 옮긴 **파생
+문서**이며 충돌하면 API명세서가 맞다. 문서의 예시 JSON 은 실제 계약(`aegis_contracts`)
+검증을 통과한 것만 실었다.
+
 ---
 
 ## 마일스톤 로드맵
@@ -1394,6 +1399,7 @@ M6 이전 시나리오는 `foot_point`(픽셀)와 `foot_point_m`(미터)를 **�
 | 내용 | 상세 |
 |---|---|
 | **`assistant_history_turns` 가 §4.5 정책 예시 JSON 에 없다** | §4.4 대화 이력 표는 「유지 턴 수 8 (`assistant_history_turns`)」로 **정책 키라고 적었는데**, §4.5 `GET /policies` 예시 JSON 에는 그 키가 없다. 모델에는 두었고(정책값이 맞다), `test_spec_examples.py` 는 그 차이를 `SPEC_44_ONLY` 로 **명시적으로 적어** 대조한다 — 조용히 예시에 끼워 넣으면 테스트가 명세서에 없는 것을 있다고 말하게 된다. §4.5 예시에 추가해 달라 |
+| **★ 엣지가 `policies` 를 어떻게 받는지 정의되어 있지 않다** (M9 인수인계 중 드러남) | `edge/config.yaml` 은 「판정 임계값은 서버 `policies` 에서 받아온다」고 적고 있고 실제로 엣지가 `cls_min_crop_px` · `cls_min_conf` · `cls_cache_ms` · `depth_band_m` · `depth_cache_ms` · `screening_radius_m` · 쓰러짐 5개 임계를 **전부** 써야 한다. 그런데 §2 는 엣지→서버 **단방향**이고 하행 메시지가 없으며, §4.5 `GET /policies` 는 대시보드용으로 정의된 것이다. 엣지가 그 REST 를 주기적으로 폴링할지(간단하나 반영 지연이 폴링 주기만큼), `/ws/edge` 에 `policy_updated` 하행 메시지를 신설할지(즉시 반영이나 단방향 규약이 깨진다) **정해 달라.** 정하지 않으면 M9 구현자가 임계값을 `config.yaml` 에 복사해 두게 되고, 그러면 화면에서 바꾼 값과 어긋난 채로 돈다(절대규칙 6 위반) |
 
 
 ### B. 개발 환경에서 발견한 것 (명세서 사안 아님)
