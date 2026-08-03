@@ -92,6 +92,7 @@ v2.0 · 2026-07-18
       "foot_point_m": [4.21, 7.85],
       "foot_conf": 0.88,
       "posture": "standing",
+      "riding_track_id": null,
       "height_ratio": 0.97,
       "axis_angle_deg": 8.2,
       "stillness_s": 0.4,
@@ -141,6 +142,7 @@ v2.0 · 2026-07-18
 | `axis_angle_deg` | float | 마스크 주축과 수직축의 각도(도). 0에 가까우면 수직, 90에 가까우면 수평 |
 | `stillness_s` | float | 정지 상태 지속 시간(초) |
 | `in_zone` | string·null | 접지점이 포함된 구역 ID. **필드는 항상 싣고, 해당 없으면 `null`** |
+| `riding_track_id` | int·null | **탑승 중인 차량의 `track_id`.** 탑승 중이 아니면 `null` (FN-DET-13) |
 | `nearby[]` | object[] | 이 사람과 차량 사이의 거리. 없으면 빈 배열 |
 | `nearby[].dist_m` | float | 지면 거리 |
 | `nearby[].basis` | string | `mask_nearest`(P1, 기본) / `anchor`(마스크 없을 때 대체) |
@@ -777,7 +779,10 @@ v2.0 · 2026-07-18
   "mute_default_duration_s": 900,
   "clip_extract_margin_s": 2,
   "alert_duration_s": 5,
-  "clock_offset_warn_ms": 100
+  "clock_offset_warn_ms": 100,
+  "occupancy_overlap_min": 0.35,
+  "occupancy_confirm_s": 1.5,
+  "occupancy_release_s": 3.0
 }
 ```
 
@@ -825,6 +830,9 @@ v2.0 · 2026-07-18
 | `clip_extract_margin_s` | 세그먼트가 닫힌 뒤 클립 추출까지의 여유(초). 기본 2. **세그먼트 길이는 이 값에 포함되지 않으며 REC이 보고하는 값을 따로 더한다**(기능명세서 §4.4) |
 | `alert_duration_s` | 경광등·부저 지속 시간(초). 기본 5. `AlertCommand.duration_s` 로 나간다 |
 | `clock_offset_warn_ms` | 엣지 시계 오차가 이 값을 넘으면 경고. 기본 100 |
+| `occupancy_overlap_min` | 탑승 판별의 마스크 겹침 최소 비율. 기본 0.35 |
+| `occupancy_confirm_s` | 탑승 확정까지의 지속 시간. 기본 1.5초 |
+| `occupancy_release_s` | 하차 확정까지의 지속 시간. 기본 3.0초 (히스테리시스) |
 
 #### `GET /cameras` / `PATCH /cameras/{cam_id}`
 
@@ -1103,6 +1111,7 @@ FN-UI-02 표시 규칙(위반자 적색·근접 거리선·거리 라벨)을 채
       "in_zone": "forklift_lane",
       "helmet": "off",
       "posture": "standing",
+      "riding_track_id": null,
       "violations": ["no_helmet", "proximity"],
       "event_ids": ["EV-20260814-0231", "EV-20260814-0232"],
       "alert_state": "alerted",
@@ -1133,6 +1142,7 @@ FN-UI-02 표시 규칙(위반자 적색·근접 거리선·거리 라벨)을 채
 | `objects[].bbox` | float[4] | **`[x1, y1, x2, y2]`** 좌상단·우하단 정규화 좌표(§1.2). `[x, y, w, h]` 가 아니다 |
 | `objects[].violations` | string[] | 현재 이 트랙에 걸려 있는 위반 유형. 없으면 빈 배열. **박스 색을 결정한다** |
 | `objects[].event_ids` | string[] | 대응하는 진행 중 이벤트 ID. 클릭 시 상세로 이동 |
+| `objects[].riding_track_id` | int·null | 탑승 중인 차량의 `track_id`. 대시보드는 이 사람 박스에 **「운전 중」 표시**를 붙이고 해당 차량과의 거리선을 그리지 않는다 |
 | `objects[].alert_state` | string·null | `candidate` / `active` / `alerted` / `re_alerted` / `lost` 중 하나. **진행 중 이벤트가 아예 없으면 `null`** |
 
 **`candidate` 와 `null` 은 다르다**: `candidate` 는 위반 조건이 관측됐으나 아직 확정 전인 상태이고, `null` 은 이 트랙에 이벤트가 없다는 뜻이다. 대시보드는 `candidate` 를 **위반 색(적색)으로 그리지 않는다** — 확정 전이므로 위반으로 단정할 수 없다. 다만 확정 진행 중임을 알 수 있도록 구분 가능한 표시를 둔다.
