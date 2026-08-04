@@ -64,9 +64,20 @@ def _windows_rss_mb() -> int:
     if windll is None:
         msg = "windll 이 없다 — 윈도우가 아니다"
         raise OSError(msg)
-    handle = windll.kernel32.GetCurrentProcess()
-    if not windll.psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
-        msg = "GetProcessMemoryInfo 실패"
+
+    # ★ **반환형을 지정해야 한다.** `GetCurrentProcess` 는 HANDLE(포인터 크기)을
+    # 돌려주는데 ctypes 기본 반환형은 `c_int`(32비트)라 64비트에서 잘린다. 잘린 값을
+    # 넘기면 `GetProcessMemoryInfo` 가 조용히 0을 돌려주고, heartbeat 의
+    # `mem_used_mb` 가 계속 0으로 나간다.
+    get_current = windll.kernel32.GetCurrentProcess
+    get_current.restype = ctypes.c_void_p
+    get_current.argtypes = []
+    info = windll.psapi.GetProcessMemoryInfo
+    info.argtypes = [ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD]
+    info.restype = wintypes.BOOL
+
+    if not info(get_current(), ctypes.byref(counters), counters.cb):
+        msg = f"GetProcessMemoryInfo 실패 (GetLastError={ctypes.get_last_error()})"
         raise OSError(msg)
     return int(counters.WorkingSetSize) // _BYTES_PER_MB
 
