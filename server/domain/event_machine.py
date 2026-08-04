@@ -295,6 +295,13 @@ class EventMachine:
         self._severity: dict[ViolationType, AlertLevel] = {}
         """DB `alert_sounds.level` 이 정한 등급. 비어 있으면 `SEVERITY` 를 쓴다."""
 
+        self.stale_index_total = 0
+        """트랙 색인이 사라진 이벤트를 가리킨 횟수.
+
+        정상이면 **0으로 유지된다.** 0이 아니면 색인 정리 경로에 구멍이 있다는 뜻이다 —
+        방어 코드가 죽는 것은 막아 주지만 그 사실까지 감추면 안 되므로 세어 둔다
+        (CLAUDE.md 절대규칙 9)."""
+
     # -- 정책 · 조회 ----------------------------------------------------
 
     @property
@@ -504,7 +511,13 @@ class EventMachine:
         self._foot[key] = message.last_foot_point_m
         effects: list[Effect] = []
         for event_id in list(self._by_track.get(key, {}).values()):
-            effects += self._to_lost(self._events[event_id], at)
+            # `_see` 와 같은 이유로 방어한다 — `track_lost` 하나가 엣지 연결을 끊으면
+            # 그 뒤의 모든 관측이 함께 사라진다.
+            event = self._events.get(event_id)
+            if event is None:
+                self.stale_index_total += 1
+                continue
+            effects += self._to_lost(event, at)
         self._seen.pop(key, None)
         self._helmet_checked.pop(key, None)
         return effects
@@ -542,7 +555,14 @@ class EventMachine:
             return
         slot = self._by_track.get((event.cam_id, event.track_id))
         if slot is not None:
-            slot.pop(event.violation_type, None)
+            # ★ **이 이벤트를 가리키는 항목만 지운다.** 유형만 보고 지우면, 같은
+            # (트랙 · 위반유형) 자리를 나중 이벤트가 차지한 경우 **그 새 이벤트의
+            # 색인까지 사라진다.** 그러면 색인과 `_events` 가 어긋나 `_see` 가
+            # KeyError 로 죽고, 그 예외가 `/ws/edge` 핸들러를 타고 올라가 **엣지
+            # 연결 전체를 끊는다**(실측: 6초마다 재접속, heartbeat 유실로 카메라가
+            # `down` 으로 표시됨).
+            if slot.get(event.violation_type) == event_id:
+                slot.pop(event.violation_type, None)
             if not slot:
                 self._by_track.pop((event.cam_id, event.track_id), None)
 
@@ -561,8 +581,21 @@ class EventMachine:
     def _see(self, key: tuple[int, int], at: datetime, foot_point_m: tuple[float, float]) -> None:
         self._seen[key] = at
         self._foot[key] = foot_point_m
-        for event_id in self._by_track.get(key, {}).values():
-            self._events[event_id].last_seen_at = at
+        # 색인이 사라진 이벤트를 가리키더라도 **여기서 죽지 않는다.** 이 함수는 매
+        # 프레임 불리므로 예외 하나가 곧 엣지 연결 단절이다. 어긋난 항목은 정리하고
+        # 넘어가되, 그 사실은 `stale_index_total` 로 드러난다(조용히 넘기지 않는다).
+        slot = self._by_track.get(key)
+        if not slot:
+            return
+        for violation, event_id in list(slot.items()):
+            event = self._events.get(event_id)
+            if event is None:
+                slot.pop(violation, None)
+                self.stale_index_total += 1
+                continue
+            event.last_seen_at = at
+        if not slot:
+            self._by_track.pop(key, None)
 
     def _helmet_gate(self, key: tuple[int, int], person: DetectedPerson) -> bool:
         """게이팅 보류인가. API명세서 §6.3
