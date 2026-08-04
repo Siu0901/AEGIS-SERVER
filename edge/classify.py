@@ -8,8 +8,8 @@
 클래스로 만들면 서버가 그것을 「판정 결과」로 받아 타이머를 리셋한다 — 명세는 그때
 타이머를 **동결**하라고 정한다.
 
-게이트 값(`cls_min_crop_px` · `cls_min_conf`)은 **여기 없다.** 현장에서 화면으로
-조정하는 값이라 서버 `policies` 소관이고, 매 호출에 주입받는다.
+게이트 값(`cls_min_crop_px` · `cls_min_conf` · `cls_cache_ms`)은 **여기 없다.**
+현장에서 화면으로 조정하는 값이라 서버 `policies` 소관이고, 매 호출에 주입받는다.
 """
 
 from __future__ import annotations
@@ -41,10 +41,18 @@ class HelmetReading:
 
     helmet: HelmetState
     conf: float
+    cached: bool
+    """캐시에서 나왔는가. `heartbeat.cls_cache_hit_rate`(§2.4)가 이것을 센다."""
+
+
+@dataclass(slots=True)
+class _CacheEntry:
+    reading: HelmetReading
+    at_s: float
 
 
 class HelmetClassifier:
-    """사람 크롭을 배치로 분류한다."""
+    """사람 크롭을 배치로 분류한다. 트랙별 캐시로 호출 수를 줄인다(FN-DET-05)."""
 
     def __init__(self, config: ClassifyConfig, runtime: RuntimeConfig) -> None:
         self._config = config
@@ -61,7 +69,9 @@ class HelmetClassifier:
                 " (분류 모델은 dynamic=True 로 나간다)",
                 config.model_path.name,
             )
+        self._cache: dict[int, _CacheEntry] = {}
         self._calls = 0
+        self._hits = 0
         self._gated_small = 0
         log.info(
             "분류 모델 적재 — %s (클래스 %s → %s)",
@@ -74,8 +84,13 @@ class HelmetClassifier:
 
     @property
     def calls(self) -> int:
-        """실제 모델 호출 수."""
+        """실제 모델 호출 수. 캐시 적중은 세지 않는다."""
         return self._calls
+
+    @property
+    def cache_hit_rate(self) -> float:
+        total = self._calls + self._hits
+        return self._hits / total if total else 0.0
 
     @property
     def gated_small(self) -> int:
@@ -91,24 +106,45 @@ class HelmetClassifier:
         frame_bgr: npt.NDArray[np.uint8],
         detections: dict[int, Detection],
         *,
+        at_s: float,
         min_crop_px: int,
         min_conf: float,
+        cache_ms: float,
     ) -> dict[int, HelmetReading]:
         """트랙별 안전모 판정. 게이트를 통과한 트랙만 결과에 담긴다.
 
         `detections` 는 `{track_id: Detection}` 이며 **사람만** 담겨 있어야 한다.
         """
+        results: dict[int, HelmetReading] = {}
         pending: list[tuple[int, npt.NDArray[np.float32]]] = []
+
         for track_id, detection in detections.items():
             if detection.box_height_px < min_crop_px:
                 # 원거리라 크롭이 작다. 판정하지 않고 **직전 값도 새로 만들지 않는다** —
-                # 부르는 쪽이 마지막 판정을 유지할지 필드를 뺄지 정한다.
+                # 부르는 쪽이 캐시된 마지막 판정을 유지할지 필드를 뺄지 정한다.
                 self._gated_small += 1
+                continue
+            cached = self._cache.get(track_id)
+            if cached is not None and (at_s - cached.at_s) * 1000.0 <= cache_ms:
+                self._hits += 1
+                results[track_id] = HelmetReading(
+                    helmet=cached.reading.helmet, conf=cached.reading.conf, cached=True
+                )
                 continue
             crop = self._crop(frame_bgr, detection)
             if crop is not None:
                 pending.append((track_id, crop))
-        return dict(self._run(pending, min_conf=min_conf))
+
+        for track_id, reading in self._run(pending, min_conf=min_conf):
+            results[track_id] = reading
+            self._cache[track_id] = _CacheEntry(reading=reading, at_s=at_s)
+
+        return results
+
+    def forget(self, track_ids: set[int]) -> None:
+        """소실된 트랙의 캐시를 버린다. 새 트랙이 같은 번호를 받을 수 있다."""
+        for track_id in track_ids:
+            self._cache.pop(track_id, None)
 
     # -- 내부 --------------------------------------------------------------
 
@@ -176,5 +212,5 @@ class HelmetClassifier:
             if mapped is None:
                 log.warning("분류 클래스 %r 이 config 의 classify.classes 에 없다", name)
                 continue
-            readings.append((track_id, HelmetReading(helmet=mapped, conf=conf)))
+            readings.append((track_id, HelmetReading(helmet=mapped, conf=conf, cached=False)))
         return readings
