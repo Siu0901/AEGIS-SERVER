@@ -43,24 +43,52 @@ ESP32(MQTT 2종)가 구현해야 하는 것 전량. API명세서 §1~§3·§6 �
 **M6**에 구현되고, 실물 추론·디코딩은 **M9**에 `edge/` 로 이식된다. 그 사이 서버가 보는
 입력은 `sim/edge_sim` 이 만든다(**M2**).
 
+> **M9 진행 중 — 노트북(CPU·ONNX)에서 실물 모델이 돈다.** `edge/` 에 러너가 들어왔고
+> 학습된 seg·분류 모델과 Depth Anything V2 Small 을 ONNX 로 돌려 `frame` · `candidate` ·
+> `track_lost` · `heartbeat` 를 실제로 만든다. 젯슨 이식에서 바뀌는 것은
+> `runtime.backend`(`onnx` → `tensorrt`)와 디코더(`cpu` → `nvdec`) 두 값이다.
+>
+> **시뮬레이터는 버리지 않는다.** `sim/edge_sim` 은 서버의 테스트 하네스로 남는다 —
+> 재결합·판정 불가·게이팅 동결 같은 전이를 사람과 장비 없이 만드는 유일한 수단이고
+> CI 가 그것에 의존한다. 운영 시 메시지를 누가 보내는가만 바뀐다.
+>
+> 노트북 실측(Intel Core 5 120U · CPU · ONNX). 목표 8fps 에 크게 못 미치며, 로직
+> 문제가 아니라 CPU 한계다. `heartbeat.cameras[].fps` 에 실측값이 그대로 실려 대시보드
+> 경고로 드러난다 — 목표값을 대신 보고하지 않는다.
+>
+> | 단계 | 실측 |
+> |---|---|
+> | 감지 seg 640×384 | 약 440 ms (2.3 fps) |
+> | 안전모 분류 224 | 약 33 ms / 크롭 (배치) |
+> | 뎁스 126 / 252 / 518 | 875 ms / 2,745 ms / — |
+> | **전체(뎁스 126 포함)** | **약 2 s → 0.5 fps** |
+>
+> 뎁스가 전체를 지배하므로 `depth.input_size` 를 126 으로 내렸다. 판단하는 것이
+> 「앞뒤로 갈렸는가」 하나뿐이라 해상도를 낮춰도 결론이 거의 바뀌지 않는다(§6.6).
+> 젯슨에서는 TensorRT FP16 이라 사정이 다르다.
+>
+> **낮은 처리율이 판정을 깨지는 않는다.** 확정 3초·해소 10초는 벽시계 기준이라
+> 프레임 수가 줄어도 같은 시간이 걸린다. 다만 `track.buffer_frames` 는 프레임 수라
+> 처리율이 바뀌면 다시 잡아야 한다.
+
 ---
 
 ## 4.1 감지 (FN-DET) · 12건
 
 | FN-ID | 기능명 | 우선 | 계층 | 명세 위치 | 마일스톤 | 코드 위치(예정) | 상태 |
 |---|---|---|---|---|---|---|---|
-| FN-DET-01 | 영상 수신 및 하드웨어 디코딩 (NVDEC · 서브 640×360 15fps) | P0 | EDGE | 기능 §4.1 · API §1.2 | M9 (sim: M2) | `edge/capture.py` · `edge/config.yaml` · `sim/edge_sim/` | ⬜ |
-| FN-DET-02 | 1단계 객체 감지 (person·vehicle 단일 모델 · 640×384 rect) | P0 | EDGE | 기능 §4.1 · §5 | M9 | `edge/detect.py` · `edge/config.yaml` | ⬜ |
-| FN-DET-03 | 객체 추적 및 트랙 ID 부여 (ByteTrack) | P0 | EDGE | 기능 §4.1 | M9 | `edge/track.py` | ⬜ |
-| FN-DET-04 | 2단계 안전모 분류 (크롭 기반 · 게이팅) | P0 | EDGE | 기능 §4.1 | M9 | `edge/classify.py` | ⬜ |
-| FN-DET-05 | 분류 결과 캐싱 (`cls_cache_ms`) | P0 | EDGE | 기능 §4.1 | M9 | `edge/classify.py` | ⬜ |
+| FN-DET-01 | 영상 수신 및 하드웨어 디코딩 (NVDEC · 서브 640×360 15fps) | P0 | EDGE | 기능 §4.1 · API §1.2 | M9 (sim: M2) | `edge/main.py`(`_LatestFrame`) · `edge/config.yaml` · `sim/edge_sim/` | 🟡 (CPU 디코딩 · NVDEC 는 젯슨) |
+| FN-DET-02 | 1단계 객체 감지 (person·vehicle 단일 모델 · 640×384 rect) | P0 | EDGE | 기능 §4.1 · §5 | M9 | `edge/detect.py` · `edge/letterbox.py` · `edge/tests/test_letterbox.py` | ✅ (ONNX·CPU) |
+| FN-DET-03 | 객체 추적 및 트랙 ID 부여 (ByteTrack) | P0 | EDGE | 기능 §4.1 | M9 | `edge/track.py` · `edge/tests/test_track.py` | 🟡 (2단계 연결 O · 칼만 X) |
+| FN-DET-04 | 2단계 안전모 분류 (크롭 기반 · 게이팅) | P0 | EDGE | 기능 §4.1 | M9 | `edge/classify.py` | 🟡 (경로 O · **모델 미분별**) |
+| FN-DET-05 | 분류 결과 캐싱 (`cls_cache_ms`) | P0 | EDGE | 기능 §4.1 | M9 | `edge/classify.py` | ✅ |
 | FN-DET-06 | 접지점 산출 및 실좌표 변환 | P0 | EDGE | 기능 §4.1 · API §6.1·6.2 | M6 (로직) / M9 (엣지) | `packages/vision/footpoint.py` · `homography.py` · `sim/edge_sim/scripted.py` | ✅ (로직·sim) |
 | FN-DET-07 | 금지구역 침입 판정 (히스테리시스) | P0 | EDGE | 기능 §4.1 | M6 / M9 | `packages/vision/zones.py` · `sim/tests/test_coordinates.py` | ✅ (로직) |
 | FN-DET-08 | 지게차 근접 판정 | P1 | EDGE | 기능 §4.1 | M7 / M9 | `packages/vision/distance.py`(`proximity_candidate`) · `sim/edge_sim/derive.py` | ✅ (로직·sim) |
 | FN-DET-09 | 마스크 기반 최근접 거리 | P1 | EDGE | 기능 §4.1 · API §6.5 | M7 / M9 | `packages/vision/distance.py` · `sim/edge_sim/masks.py` · `sim/cases/mask_vs_center.yaml` | ✅ (로직·sim) |
 | FN-DET-10 | 쓰러짐 판정 (3조건 동시 충족) | P1 | EDGE | 기능 §4.1 · API §6.4 | M7 / M9 | `packages/vision/posture.py` · `sim/tests/test_masks.py` | ✅ (로직·sim) |
-| FN-DET-11 | 뎁스 온디맨드 검증 | P1 | EDGE | 기능 §4.1 · API §6.6 | M7 (트리거·캐시) / M9 (모델) | `packages/vision/depth.py` · `edge/depth.py` | 🟡 (모델만 남음) |
-| FN-DET-12 | 이벤트 후보 생성 및 전송 | P0 | EDGE | 기능 §4.1 · API §2.2 | M2 (sim) / M9 | `sim/edge_sim/` · `sim/cases/` · `edge/rules.py` | ✅ (sim) |
+| FN-DET-11 | 뎁스 온디맨드 검증 | P1 | EDGE | 기능 §4.1 · API §6.6 | M7 (트리거·캐시) / M9 (모델) | `packages/vision/depth.py` · `edge/depth.py` | ✅ (Depth Anything V2 Small · ONNX) |
+| FN-DET-12 | 이벤트 후보 생성 및 전송 | P0 | EDGE | 기능 §4.1 · API §2.2 | M2 (sim) / M9 | `sim/edge_sim/` · `sim/cases/` · `edge/pipeline.py` | ✅ (sim · 실물) |
 
 > **주의** — 안전모에는 별도 bbox가 없다. 1단계는 `person`/`vehicle` 2클래스뿐이고
 > 안전모는 사람 크롭을 2단계 분류가 판정한다. `helmet` 값은 `on`/`off` 둘뿐이며
