@@ -69,7 +69,27 @@ webrtcAllowOrigins: ['*']
 # 인터페이스 수집을 끄고 127.0.0.1 만 광고한 뒤, 그 포트를 compose 에서 매핑한다.
 webrtcIPsFromInterfaces: no
 webrtcAdditionalHosts: [127.0.0.1]
-webrtcLocalUDPAddress: :8189
+
+# ★ **UDP 후보를 올리지 않는다 — Docker Desktop(Windows) 에서 RTP 가 통과하지 못한다.**
+#
+# UDP 를 켜두면 ICE 는 **성공한다.** mediamtx 로그에 `peer connection established`
+# 가 찍히고 트랙 읽기도 시작된다. 그런데 화면은 검은 채로 남고 브라우저는
+# `videoWidth = 2` (크롬이 디코드 불가일 때 내놓는 자리표시자)를 보고한다.
+#
+# 원인은 패킷 크기다. STUN 바인딩은 100바이트 안쪽이라 Docker 의 UDP 전달을 통과하지만
+# RTP 비디오는 1,200바이트급이라 넘어오지 못한다. ICE 는 STUN 만 보고 그 경로를
+# 「유효」로 확정하므로 **TCP 로 폴백하지도 않는다** — 조용히 검은 화면으로 끝난다.
+#
+# 코덱 문제로 오인하기 쉽다(프로파일을 baseline 으로 맞춰도 증상이 같다). 실제로
+# RTSP·HLS 는 정상이고 WebRTC 만 실패하는 것이 이 원인의 특징이다.
+#
+# TCP 만 남기면 Docker 의 TCP 포트 발행을 그대로 타므로 확실하다. 지연은 UDP 대비
+# 수십 ms 늘지만 HLS 폴백(약 2.5초)보다 압도적으로 낫다.
+# 젯슨(리눅스 host 네트워크)으로 옮기면 이 제약이 사라지므로 UDP 를 되살려도 된다.
+#
+# **키를 지우는 것으로는 안 꺼진다** — mediamtx 가 기본값 `:8189` 를 채운다.
+# 빈 문자열로 명시해야 UDP 리스너가 뜨지 않는다(로그의 `(UDP/ICE)` 가 사라지는지로 확인).
+webrtcLocalUDPAddress: ''
 webrtcLocalTCPAddress: :8189
 
 api: yes

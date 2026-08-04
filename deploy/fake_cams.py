@@ -363,7 +363,13 @@ def prepare_clip(ffmpeg: str, stream: Stream, source: str | None, font: str) -> 
         "-an",
         "-c:v", "libx264",
         "-preset", "veryfast",
-        "-profile:v", "baseline" if stream.kind == "sub" else "main",
+        # ★ **메인도 baseline 이다.** 브라우저 WebRTC 는 보통 Constrained Baseline
+        # (`profile-level-id=42e01f`) 하나만 협상하는데, Main 프로파일로 보내면
+        # 세션은 정상적으로 열리고 RTP 도 흐르지만 **디코더가 그림을 만들지 못한다.**
+        # 화면에는 검은 타일만 남고 콘솔에는 「프레임 미도착」만 찍혀서, B-프레임
+        # 때와 달리 mediamtx 로그에도 오류가 없다(실제로 그렇게 찾았다).
+        # 라이브뷰가 재생하는 것이 `cam{id}/main` 이므로 이쪽이 맞아야 한다.
+        "-profile:v", "baseline",
         # ★ **B-프레임을 만들지 않는다.** WebRTC 는 B-프레임 H264 를 받지 못하고
         # (mediamtx: `WebRTC doesn't support H264 streams with B-frames`) 세션을 즉시
         # 닫는다. 기본 모드는 `-tune zerolatency` 가 이것을 함께 껐기 때문에 드러나지
