@@ -1,12 +1,33 @@
 [project]
 name = "aegis-edge"
 version = "0.1.0"
-description = "AEGIS 실물 Jetson 러너 — M9 까지 비워 둔다"
+description = "AEGIS 엣지 러너 — 디코드 · 감지 · 추적 · 분류 · 뎁스 → /ws/edge"
 requires-python = ">=3.13"
 dependencies = [
     "aegis-contracts",
+    "aegis-vision",
+    "httpx2>=2.0",              # 카메라(호모그래피) · 구역 · 정책 조회 (httpx 는 deprecated)
+    "numpy>=2.1",
+    "onnxruntime>=1.20",
+    "opencv-python-headless>=4.10",
+    "pyyaml>=6.0",
+    "websockets>=13.1",
 ]
 
-# 휠로 빌드하지 않는다. 실물 젯슨에서 레포 루트를 기준으로 실행한다.
+# ★ **`torch` 도 `ultralytics` 도 런타임 의존성이 아니다.**
+#
+# 여기 있는 것은 **추론만** 하는 의존성이다. 학습된 `.pt` 를 `.onnx` 로 바꾸는 일은
+# `scripts/export_onnx.py` 가 하며, 그쪽이 쓰는 무거운 의존성(torch·ultralytics,
+# 합계 수 GB)은 루트의 `export` 그룹에 따로 있다. 한 번 변환하고 나면 엣지는 다시
+# 필요로 하지 않는다 — 젯슨에 torch 를 올릴 이유가 없다.
+#
+# `onnxruntime` 은 **노트북(CPU) 전용이다.** 젯슨에서는 TensorRT 엔진을 쓰며
+# (`models/engines/*.engine`), 어느 쪽을 쓸지는 `config.yaml` 의 `runtime.backend` 가
+# 정한다 — 코드가 정하지 않는다(CLAUDE.md 절대규칙 6).
+#
+# `opencv-python-headless` 를 쓴다. GUI 빌드(`opencv-python`)는 Qt 를 끌고 오는데
+# 엣지는 창을 띄우지 않는다.
+
+# 휠로 빌드하지 않는다. 레포 루트에서 `python -m edge.main` 으로 실행한다.
 [tool.uv]
 package = false

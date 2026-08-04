@@ -1,11 +1,28 @@
-# 엣지(Jetson Orin Nano) 설정
+# 엣지 설정
 #
-# 모델 경로·엔진·입력 형태는 **코드에 하드코딩하지 않는다**(CLAUDE.md 절대규칙 6).
-# 여기 있는 것은 엣지 장비에 종속된 값뿐이고, 판정 임계값(확정/해소 지속시간, 근접
-# 임계, 분류 게이트 등)은 서버 DB `policies` 테이블에서 받아온다 — 현장에서 관리자가
-# 화면으로 조정하는 값이기 때문이다.
+# 모델 경로·입력 형태·백엔드는 **코드에 하드코딩하지 않는다**(CLAUDE.md 절대규칙 6).
+# 여기 있는 것은 장비에 종속된 값뿐이고, 판정 임계값(확정/해소 지속시간, 근접 임계,
+# 분류 게이트 등)은 서버 DB `policies` 에서 받아온다 — 현장에서 관리자가 화면으로
+# 조정하는 값이기 때문이다.
 #
-# M9 에서 실물 러너가 이 파일을 읽는다. 그 전까지는 규격 기록 겸 자리다.
+# **같은 코드가 노트북과 젯슨에서 돈다.** 다른 것은 `runtime.backend` 하나다.
+
+runtime:
+  # onnx     — 노트북(Intel CPU). `models/weights/*.onnx` 를 onnxruntime 으로 돌린다.
+  # tensorrt — 젯슨 Orin Nano. `models/engines/*.engine` 을 쓴다.
+  #
+  # ★ 조용히 폴백하지 않는다. `onnx` 인데 `.onnx` 가 없으면 엔진으로 넘어가지 않고
+  #   죽는다 — 젯슨용 엔진은 노트북에서 열리지 않으므로, 폴백하면 원인을 알 수 없는
+  #   실패가 된다(`edge/config.py`).
+  backend: onnx
+
+  # CPU 전용이다. 노트북에 CUDA 가 없고, 있어도 이 단계에서 쓰지 않는다.
+  providers:
+    - CPUExecutionProvider
+
+  # 0 이면 onnxruntime 기본값(논리 코어 수)에 맡긴다. 카메라 2채널을 동시에 돌릴 때
+  # 스레드가 서로를 밀어내면 오히려 느려지므로, 실측을 보고 조정한다.
+  intra_op_threads: 0
 
 streams:
   # 서브 스트림만 엣지가 받는다. 메인(1920×1080)은 서버가 따로 받는다.
@@ -19,6 +36,14 @@ streams:
   #   실물 카메라를 붙일 때 아래 주소를 그 카메라 것으로 바꾼다
   #   (예: rtsp://192.168.0.10:554/Streaming/Channels/102).
   #
+  # ★ **영상 파일을 여기 적지 않는다.** 로컬 테스트에서도 엣지는 RTSP 만 본다.
+  #   테스트 영상은 가짜 카메라가 RTSP 로 송출한다:
+  #
+  #       uv run tasks.py cams --source media/lego_sample_1.mp4
+  #
+  #   그래야 엣지가 보는 것이 실물과 같아진다 — 파일 경로를 따로 받으면 그 경로에만
+  #   있는 버그(재연결·프레임 드랍·타임스탬프)가 M9 까지 숨는다.
+  #
   # cam_id 는 엣지가 정하지 않는다 — DB `cameras.cam_id` 가 원천이고 캘리브레이션·
   # 구역·이벤트가 전부 이 번호에 걸려 있다.
   - cam_id: 1
@@ -26,21 +51,25 @@ streams:
     width: 640
     height: 360
     fps: 15
-  - cam_id: 2
-    rtsp_sub: rtsp://127.0.0.1:8554/cam2/sub
-    width: 640
-    height: 360
-    fps: 15
 
 decode:
-  # NVDEC 하드웨어 디코더. CPU 디코딩 금지 — 2채널만으로 CPU가 포화된다(FN-DET-01).
-  backend: nvdec
+  # nvdec — 젯슨 하드웨어 디코더. cpu — 노트북.
+  # 젯슨에서 CPU 디코딩은 금지다. 2채널만으로 CPU가 포화된다(FN-DET-01).
+  backend: cpu
+
+  # 목표 처리 fps. **실측값은 heartbeat 에 따로 싣는다**(§2.4 `cameras[].fps`) —
+  # 이 값을 보고하면 노트북이 못 따라가고 있다는 사실이 화면에서 사라진다.
   target_fps: 8
 
 detect:
-  # 1단계 감지 — YOLO26-s-seg 단일 모델, person·vehicle 2클래스 (FN-DET-02).
-  engine: models/engines/yolo26s_seg_person_vehicle_fp16.engine
-  weights: models/weights/yolo26s_seg_person_vehicle.pt
+  # 1단계 감지 — seg 모델 하나, person·vehicle 2클래스 (FN-DET-02).
+  #
+  # ★ **제로샷이 아니다.** YOLOE 계열이더라도 이 가중치는 아래 두 클래스로 이미
+  #   학습된 것이므로 `set_classes()` 를 부르지 않는다. 텍스트 프롬프트로 클래스를
+  #   정하는 경로는 이 프로젝트에 없다(CLAUDE.md 절대규칙 11).
+  weights: models/weights/re_label_train_lego_50.pt
+  onnx: models/weights/re_label_train_lego_50.onnx
+  engine: models/engines/re_label_train_lego_50_fp16.engine
   precision: fp16
 
   # 모델 입력 형태. **정사각이 아니다.**
@@ -56,19 +85,65 @@ detect:
   imgsz: [384, 640]
   rect: true
 
+  # 감지 신뢰도·NMS IoU. 모델과 화각에 딸린 값이라 여기 둔다(판정 임계가 아니다).
+  conf: 0.25
+  iou: 0.45
+
+  # 학습된 클래스명 → 계약 클래스. **계약은 person · vehicle 2종 고정이다.**
+  # 여기 없는 클래스는 버린다 — 조용히 person 으로 떨어뜨리지 않는다.
+  classes:
+    toy_person: person
+    toy_truck: vehicle
+
 classify:
-  # 2단계 안전모 분류 — 사람 크롭 224×224 (FN-DET-04).
-  # 크기·신뢰도 게이트 값(cls_min_crop_px · cls_min_conf)은 서버 policies 에서 받는다.
-  engine: models/engines/yolo26_cls_helmet_fp16.engine
-  weights: models/weights/yolo26_cls_helmet.pt
+  # 2단계 안전모 분류 — 사람 크롭 (FN-DET-04).
+  # 크기·신뢰도 게이트(cls_min_crop_px · cls_min_conf)는 서버 policies 에서 받는다.
+  weights: models/weights/lego_head_cls.pt
+  onnx: models/weights/lego_head_cls.onnx
+  engine: models/engines/lego_head_cls_fp16.engine
   input_size: 224
   batch: true
+
+  # ★ **`on` · `off` 를 반드시 따옴표로 감싼다.** YAML 에서 따옴표 없는 on/off 는
+  #   불리언이라 `{Helmet: True}` 가 되어 매핑이 통째로 어긋난다(`edge/config.py`
+  #   가 되돌려 주지만, 여기서 명시하는 편이 읽는 사람에게 정직하다).
+  #   값은 `on` / `off` 두 개뿐이다 — `unknown` 은 없고, 판정 불가는 필드 생략이다.
+  classes:
+    Helmet: "on"
+    No_Helmet: "off"
 
 depth:
   # 온디맨드 뎁스 검증 — Depth Anything V2 Small (FN-DET-11).
   # 트리거 조건과 캐시 유효기간은 서버 policies 에서 받는다.
+  #
+  # **없어도 나머지는 전부 돈다.** 이 키를 비우면 `depth_verified` 가 계속 false 로
+  # 남고 그 사실이 로그와 heartbeat 에 드러난다 — 조용히 "검증됨"으로 올리지 않는다.
+  # 출처: huggingface `onnx-community/depth-anything-v2-small` (ONNX 로 배포된 것을
+  # 그대로 쓴다 — .pt 를 받아 변환할 필요가 없어서 `weights:` 가 없다).
+  onnx: models/weights/depth_anything_v2_small.onnx
   engine: models/engines/depth_anything_v2_small_fp16.engine
-  weights: models/weights/depth_anything_v2_small.pt
+
+  # ViT 패치가 14 라 입력은 14의 배수여야 한다. 표준은 518(=14×37)이다.
+  #
+  # ★ **노트북에서 이 값이 전체 처리율을 지배한다.** 실측(Intel Core 5 120U · CPU):
+  #
+  #     입력 126 →   875 ms      입력 196 → 1,357 ms
+  #     입력 154 → 1,156 ms      입력 252 → 2,745 ms
+  #
+  # 같은 조건에서 감지(seg)가 약 440ms 이므로, 252 로 두면 뎁스 한 번이 감지 여섯
+  # 번보다 비싸다. 여기서 하는 판단은 **앞뒤로 갈렸는가** 하나뿐이라(§6.6) 해상도를
+  # 낮춰도 결론이 거의 바뀌지 않으므로 126(=14×9)으로 둔다.
+  #
+  # 젯슨에서는 TensorRT FP16 이라 사정이 다르다 — 그때 518 로 올린다.
+  # 뎁스를 아예 끄고 싶으면 위 `onnx:` 를 비운다. 나머지 기능은 전부 돈다.
+  input_size: 126
+
+  # 두 영역의 깊이 중앙값 차이가 프레임 깊이 범위(5~95 백분위)의 이 비율 이하면
+  # 같은 평면으로 본다. **상대 역깊이라 절대 단위가 없어서 비율로 잰다.**
+  separation_max: 0.15
+
+  # 깊이 분산을 0~1 근처로 옮기는 배율. 쓰러짐 보강(트리거 D)이 읽는다.
+  variance_scale: 1.0
 
 # posture 절은 비어 있다 — 쓰러짐 판정 임계가 **전부 서버 policies 로 옮겨졌다**.
 #
@@ -85,8 +160,54 @@ depth:
 
 track:
   # ByteTrack (CPU). person·vehicle 모두에 track_id 를 부여한다(FN-DET-03).
+  #
+  # ★ **칼만 필터가 없는 구현이다**(`edge/track.py`). 두 단계 연결(높은 신뢰도 →
+  #   남은 트랙을 낮은 신뢰도로 한 번 더)이라는 ByteTrack 의 핵심은 그대로지만,
+  #   위치 예측은 등속 근사다. 젯슨으로 옮길 때 ultralytics 구현으로 교체한다.
   backend: bytetrack
+
+  # 1단계 연결과 새 트랙 시작에 쓰는 신뢰도.
+  high_conf: 0.5
+
+  # 2단계 연결에만 쓰는 하한. 가려져 신뢰도가 떨어진 프레임을 버리지 않기 위한 것이며,
+  # **이 구간에서 새 트랙을 만들지는 않는다** — 잡음이 번호를 얻으면 안 된다.
+  low_conf: 0.2
+
+  match_iou: 0.25
+
+  # 이 프레임 수만큼 안 보이면 `track_lost` 를 보낸다. 노트북 실측이 2~3fps 라
+  # 8프레임이면 약 3초다. 젯슨(8fps)에서는 같은 시간이 되도록 다시 잡아야 한다.
+  buffer_frames: 8
+
+  # 이 속도 이상이면 지게차가 「이동 중」이다(§2.1 `moving`).
+  #
+  # ★ **단위는 캘리브레이션이 정한다.** 실측 4점을 미터로 넣었으면 m/s 이고, 레고
+  #   보드처럼 cm 로 넣었으면 cm/s 다 — 호모그래피는 단위를 모른다. 아래 값은 보드 cm
+  #   기준(1 보드cm ≈ 0.425 실제 m)이라 실제 약 0.2 m/s 에 해당한다.
+  vehicle_moving_min_speed: 0.5
+
+footpoint:
+  # 접지점 신뢰도 산출(API명세서 §6.1).
+  #
+  # ★ **정책 키가 아니다.** 명세서 §4.5 정책 목록에 없어서 여기 둔다. 승격이
+  #   필요하다고 판단되면 코드보다 명세서를 먼저 고친다(절대규칙 8).
+  #
+  # 마스크 윤곽 점을 최대 48개로 솎으므로(`edge/detect.py`), 하위 8% 띠에 들어오는
+  # 점은 대략 4~8개다. 6이면 만점 기준이 현실적이다.
+  expected_band_pixels: 6.0
+
+  # 띠의 x 폭이 bbox 폭의 이 비율을 넘으면 그림자·반사가 섞인 것으로 보고 감점한다.
+  max_spread_ratio: 0.8
+
+  # 접지점 신뢰도가 이 값 미만이면 뎁스 트리거 C 가 걸린다(FN-DET-11 ③).
+  min_conf_for_depth: 0.5
 
 server:
   ws_url: ws://127.0.0.1:8000/ws/edge
+
+  # 호모그래피(카메라)·구역·정책을 여기서 읽는다. 엣지가 이 값들을 **자기 파일에
+  # 적지 않는 이유**는 현장에서 화면으로 바뀌는 값이기 때문이다 — 캘리브레이션을
+  # 다시 하면 엣지도 새 행렬을 받아야 한다.
+  rest_url: http://127.0.0.1:8000/api/v1
+
   heartbeat_interval_s: 5

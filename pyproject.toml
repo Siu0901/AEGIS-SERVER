@@ -29,6 +29,21 @@ dev = [
     "types-pyyaml>=6.0",
 ]
 
+# 학습된 `.pt` → `.onnx` **일회성 변환에만** 쓴다 (`scripts/export_onnx.py`).
+#
+# 기본 설치에 넣지 않는 이유는 크기다 — torch 와 ultralytics 를 합치면 수 GB 이고,
+# 서버·시뮬레이터·테스트 어디도 이것을 필요로 하지 않는다. 엣지 런타임도 마찬가지다
+# (`edge/pyproject.toml` 은 onnxruntime 만 쓴다). 변환은 모델을 새로 학습했을 때만
+# 다시 하면 되므로 명시적으로 설치한다:
+#
+#     uv sync --group export
+export = [
+    "onnx>=1.17",
+    "onnxslim>=0.1.48",
+    "torch>=2.6",
+    "ultralytics>=8.3",
+]
+
 # --------------------------------------------------------------------------
 # ruff
 # --------------------------------------------------------------------------
@@ -81,7 +96,7 @@ ban-relative-imports = "parents"
 python_version = "3.13"
 strict = true
 mypy_path = "packages/contracts/src:packages/vision/src:."
-files = ["packages", "server", "recorder", "sim", "scripts", "deploy", "tasks.py"]
+files = ["packages", "server", "recorder", "sim", "edge", "scripts", "deploy", "tasks.py"]
 exclude = "(^front/|^media/|^models/|/migrations/versions/)"
 plugins = ["pydantic.mypy"]
 warn_unreachable = true
@@ -92,6 +107,15 @@ explicit_package_bases = true
 [[tool.mypy.overrides]]
 module = ["pgvector.*"]
 ignore_missing_imports = true
+
+# 엣지 추론 스택은 타입 스텁을 제공하지 않거나 불완전하다. `ultralytics` 는 일회성
+# 변환 스크립트에서만 쓰이며 기본 설치에도 없다(`export` 그룹).
+[[tool.mypy.overrides]]
+module = ["cv2.*", "onnxruntime.*", "ultralytics.*"]
+ignore_missing_imports = true
+# ultralytics 는 `YOLO` 를 `__init__` 에서 재수출하지만 `__all__` 로 선언하지 않는다.
+# 일회성 변환 스크립트에서만 쓰므로 여기서 허용한다.
+implicit_reexport = true
 
 [tool.pydantic-mypy]
 init_forbid_extra = true
@@ -110,6 +134,7 @@ testpaths = [
     "server/tests",
     "recorder/tests",
     "sim/tests",
+    "edge/tests",
     "scripts/tests",
 ]
 addopts = "-q --strict-markers --strict-config"
