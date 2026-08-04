@@ -137,6 +137,18 @@ class _Camera:
             self.window_started_s = at_s
 
 
+def _limit_threads(config: EdgeConfig) -> None:
+    """OpenCV 도 같은 상한에 묶는다.
+
+    `cv2` 는 자체 스레드 풀을 쓰며 기본값이 **논리 코어 전부**다. onnxruntime 만
+    제한하면 레터박스·리사이즈·윤곽 추출이 나머지 코어를 다시 채워서 ffmpeg 송출이
+    굶는다 — 상한을 한쪽에만 걸면 의미가 없다.
+    """
+    if config.runtime.intra_op_threads:
+        cv2.setNumThreads(config.runtime.intra_op_threads)
+        log.info("스레드 상한 %d (onnxruntime · OpenCV)", config.runtime.intra_op_threads)
+
+
 def _build(config: EdgeConfig, stream: StreamConfig) -> CameraPipeline:
     letterbox = Letterbox(
         source_width=stream.width,
@@ -177,6 +189,9 @@ async def run(config: EdgeConfig, *, cam_ids: set[int] | None, clock: Clock) -> 
     if not streams:
         log.error("실행할 카메라가 없다 — --cam 값을 확인해라")
         return 1
+
+    # 모델을 만들기 **전에** 건다. 세션이 만들어진 뒤에는 스레드 풀이 이미 잡혀 있다.
+    _limit_threads(config)
 
     cameras = [
         _Camera(
@@ -246,7 +261,14 @@ async def _pump(
                 continue
             worked = True
             camera.observe(at_s)
-            output = camera.pipeline.process(frame, ts=clock.now(), at_s=at_s)
+            # ★ **추론을 이벤트 루프에서 직접 돌리지 않는다.**
+            # `process()` 는 CPU 로 수 초가 걸리는 동기 함수다. 루프 안에서 부르면 그
+            # 시간 동안 루프가 멎어 WebSocket 이 핑에 응답하지 못하고 서버가 연결을
+            # 끊는다 — 실측으로 10초마다 끊겼다 붙기를 반복했고, 그 사이 heartbeat 가
+            # 유실되어 대시보드에는 카메라가 `down` 으로 보였다.
+            output = await asyncio.to_thread(
+                camera.pipeline.process, frame, ts=clock.now(), at_s=at_s
+            )
             outgoing: list[EdgeMessage] = [
                 *([output.frame] if output.frame is not None else []),
                 *output.candidates,

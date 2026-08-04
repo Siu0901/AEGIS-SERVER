@@ -31,7 +31,11 @@ class Session:
     def __init__(self, path: Path, runtime: RuntimeConfig) -> None:
         options = ort.SessionOptions()
         if runtime.intra_op_threads:
+            # **둘 다 막아야 한다.** `intra_op` 만 정하면 `inter_op` 이 여전히 논리 코어
+            # 수만큼 잡혀서 상한이 새어 나간다. 같이 굶는 것은 같은 노트북에서 도는
+            # ffmpeg 송출이고, 그러면 라이브가 검게 죽는다(`edge/config.yaml` 주석).
             options.intra_op_num_threads = runtime.intra_op_threads
+            options.inter_op_num_threads = runtime.intra_op_threads
         providers = list(runtime.providers) or ["CPUExecutionProvider"]
         self._session = ort.InferenceSession(str(path), options, providers=providers)
         self._input = self._session.get_inputs()[0].name
