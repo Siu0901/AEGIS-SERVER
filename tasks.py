@@ -685,6 +685,22 @@ def task_mcu(extra: Sequence[str]) -> int:
     return 0
 
 
+def task_edge(cams: Sequence[int] | None, extra: Sequence[str]) -> int:
+    """실물 엣지 러너. `sim` 과 달리 **영상에서 직접** 후보를 만든다.
+
+    영상은 RTSP 로만 받으므로 먼저 카메라가 떠 있어야 한다:
+
+        uv run tasks.py cams --source media/lego_sample_1.mp4
+
+    호모그래피가 없으면 좌표를 낼 수 없어 프레임을 건너뛴다 — 설정 화면에서 4점을
+    먼저 찍어야 한다(FN-CFG-01).
+    """
+    say("[edge] 엣지 러너 — 모델 추론 → /ws/edge")
+    selected = [item for cam in cams or () for item in ("--cam", str(cam))]
+    run(uv("python", "-m", "edge.main", *selected, *extra))
+    return 0
+
+
 def task_types(check: bool = False) -> int:
     """contracts -> front TypeScript 타입 생성 (Pydantic -> JSON Schema -> TS).
 
@@ -776,6 +792,21 @@ def build_parser() -> argparse.ArgumentParser:
     mcu = sub.add_parser("mcu", help="가짜 ESP32 실행")
     mcu.add_argument("extra", nargs=argparse.REMAINDER, help="mcu_sim 에 그대로 넘길 인자")
 
+    edge = sub.add_parser("edge", help="실물 엣지 러너 (모델 추론 → /ws/edge)")
+    # `--cam` 을 여기 선언한다. `extra`(REMAINDER)만 두면 argparse 가 서브커맨드 **뒤에
+    # 바로 오는 옵션**을 상위 파서 것으로 보고 거부한다 — `sim --case` 와 같은 처리다.
+    edge.add_argument(
+        "--cam",
+        type=int,
+        action="append",
+        help="이 카메라만 실행 (여러 번 지정 가능 · 기본: config.yaml 전부)",
+    )
+    edge.add_argument(
+        "extra",
+        nargs=argparse.REMAINDER,
+        help="edge 에 그대로 넘길 인자 (--config · --log-level)",
+    )
+
     return parser
 
 
@@ -805,6 +836,8 @@ def dispatch(args: argparse.Namespace) -> int:
             return task_sim(args.case, args.extra)
         case "mcu":
             return task_mcu(args.extra)
+        case "edge":
+            return task_edge(args.cam, args.extra)
         case _:  # argparse 가 막아주므로 도달하지 않는다.
             raise TaskError(f"알 수 없는 태스크: {args.task}")
 
