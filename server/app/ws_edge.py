@@ -93,7 +93,24 @@ class EdgeGateway:
         log.info("엣지 접속")
         try:
             while True:
-                await self.handle(await websocket.receive_text())
+                raw = await websocket.receive_text()
+                try:
+                    await self.handle(raw)
+                except WebSocketDisconnect:
+                    raise
+                except Exception:
+                    # ★ **메시지 하나 때문에 연결을 끊지 않는다.**
+                    # 여기서 예외가 올라가면 `/ws/edge` 가 통째로 닫히고 엣지는 재접속을
+                    # 반복한다. 그 사이 `frame` · `candidate` · `heartbeat` 이 전부
+                    # 유실되어 대시보드에는 카메라가 `down` 으로 보인다 — 실제로 상태머신
+                    # 색인 버그 하나가 6초마다 재접속을 일으켰다.
+                    #
+                    # 삼키는 것이 아니다. 스택을 남기고 거부 카운터를 올려 `GET
+                    # /system/status` 와 대시보드에 드러낸다(FN-SYS-06 과 같은 취급).
+                    log.exception("엣지 메시지 처리 실패 — 이 건만 버리고 연결은 유지한다")
+                    await self._publish(
+                        self._edge.reject("unknown", "handler_error", self._clock.now())
+                    )
         except WebSocketDisconnect:
             pass
         finally:
