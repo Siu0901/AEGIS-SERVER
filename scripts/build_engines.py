@@ -1,0 +1,198 @@
+"""`.onnx` → TensorRT `.engine` 빌드. **젯슨에서만 돈다.**
+
+    uv run python -m scripts.build_engines --list      # 무엇을 빌드할지만 본다
+    uv run python -m scripts.build_engines             # 세 모델 전부 FP16 으로
+
+★ **엔진은 빌드한 GPU 와 TensorRT 버전에 종속된다.** 노트북에서 만든 엔진은 젯슨에서
+열리지 않고, 그 반대도 마찬가지다. 그래서 `models/engines/` 는 git 에서 제외돼 있고
+(`models/README.md`) 이 스크립트를 **젯슨 위에서** 돌려야 한다.
+
+★ **클래스 이름 사이드카를 함께 쓴다.** `trtexec` 로 만든 엔진은 ONNX 의 `names`
+메타데이터를 물고 가지 않는다. 그대로 두면 엣지가 클래스를 매핑하지 못해 감지가
+0건이 되므로(`edge/session.py` `class_names()`), 원본 ONNX 에서 뽑아 엔진 옆에
+`<이름>.names.json` 으로 남긴다.
+
+★ **정밀도는 FP16 이다.** Orin Nano Super 에서 INT8 은 FP16 보다 약 0.8ms 빠르지만
+mAP 가 0.480 → 0.449 로 떨어진다. 속도 여유가 있으므로 정확도를 택한다
+(기능명세서 §3 「정밀도 방침」). 실측에서 부족할 때만 INT8 을 검토한다.
+
+경로의 원천은 `edge/config.yaml` 이다 — 여기에 다시 적으면 설정과 어긋난다
+(CLAUDE.md 절대규칙 6).
+"""
+
+from __future__ import annotations
+
+import argparse
+import io
+import json
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+__all__ = ["build", "main", "sidecar_names", "targets"]
+
+#: 레포 루트. `scripts/build_engines.py` 기준 한 단계 위다.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+#: `edge/config.yaml` 에서 모델을 들고 있는 절과, 그 절의 ONNX·엔진 키.
+#: 뎁스는 `onnx` 가 주석 처리돼 있을 수 있다 — 없으면 건너뛰고 그 사실을 알린다.
+_SECTIONS = ("detect", "classify", "depth")
+
+if isinstance(sys.stdout, io.TextIOWrapper):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+
+def _say(message: str = "") -> None:
+    print(message, flush=True)
+
+
+def _config() -> dict[str, Any]:
+    raw = yaml.safe_load((REPO_ROOT / "edge" / "config.yaml").read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        msg = "edge/config.yaml 을 읽을 수 없다"
+        raise SystemExit(msg)
+    return raw
+
+
+def _resolve(value: str) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else REPO_ROOT / path
+
+
+def targets(config: dict[str, Any]) -> list[tuple[str, Path, Path]]:
+    """(절 이름, ONNX 경로, 엔진 경로) 목록.
+
+    **`onnx` 와 `engine` 이 둘 다 있는 절만 고른다.** 한쪽만 있으면 무엇을 무엇으로
+    바꿔야 할지 정해지지 않으므로 조용히 넘기지 않고 이유를 적어 알린다.
+    """
+    found: list[tuple[str, Path, Path]] = []
+    for name in _SECTIONS:
+        section = config.get(name)
+        if not isinstance(section, dict):
+            _say(f"  · {name}: 절이 없다 — 건너뛴다")
+            continue
+        onnx, engine = section.get("onnx"), section.get("engine")
+        if not onnx or not engine:
+            missing = "onnx" if not onnx else "engine"
+            _say(f"  · {name}: `{missing}:` 가 비어 있다 — 건너뛴다")
+            continue
+        found.append((name, _resolve(str(onnx)), _resolve(str(engine))))
+    return found
+
+
+def sidecar_names(onnx_path: Path, engine_path: Path) -> bool:
+    """ONNX 메타데이터의 `names` 를 엔진 옆 JSON 으로 뽑는다.
+
+    `onnx` 패키지 하나만 쓴다 — onnxruntime 도 torch 도 필요 없다. 젯슨에 무거운 것을
+    올리지 않기 위해서다.
+
+    뎁스 모델처럼 클래스가 없는 모델은 `names` 가 없는 것이 정상이라 조용히 넘어간다.
+    """
+    try:
+        import onnx
+    except ImportError:
+        _say("    ! `onnx` 가 없어 클래스 이름을 뽑지 못했다")
+        _say("      `uv pip install onnx` 후 다시 실행해라")
+        return False
+
+    model = onnx.load(str(onnx_path), load_external_data=False)
+    raw = next((prop.value for prop in model.metadata_props if prop.key == "names"), None)
+    if not raw:
+        _say("    · `names` 메타데이터가 없다 (클래스 없는 모델이면 정상)")
+        return False
+
+    import ast
+
+    parsed = ast.literal_eval(raw)
+    if not isinstance(parsed, dict):
+        _say(f"    ! `names` 가 매핑이 아니다: {raw!r}")
+        return False
+
+    table = {str(int(index)): str(value) for index, value in parsed.items()}
+    sidecar = engine_path.with_suffix(".names.json")
+    sidecar.write_text(json.dumps(table, ensure_ascii=False, indent=2), encoding="utf-8")
+    _say(f"    · 클래스 이름 {len(table)}개 → {sidecar.name}  {list(table.values())}")
+    return True
+
+
+def build(name: str, onnx_path: Path, engine_path: Path, *, workspace_mb: int) -> None:
+    """`trtexec` 로 FP16 엔진을 만든다."""
+    if not onnx_path.is_file():
+        msg = f"{name}: ONNX 가 없다 — {onnx_path}"
+        raise SystemExit(msg)
+
+    trtexec = shutil.which("trtexec") or "/usr/src/tensorrt/bin/trtexec"
+    if not Path(trtexec).is_file() and shutil.which("trtexec") is None:
+        msg = (
+            "trtexec 를 찾지 못했다. JetPack 의 TensorRT 가 깔려 있는지 확인해라 "
+            "(보통 /usr/src/tensorrt/bin/trtexec). 이 스크립트는 젯슨에서 돌린다."
+        )
+        raise SystemExit(msg)
+
+    engine_path.parent.mkdir(parents=True, exist_ok=True)
+    argv = [
+        trtexec,
+        f"--onnx={onnx_path}",
+        f"--saveEngine={engine_path}",
+        "--fp16",
+        f"--memPoolSize=workspace:{workspace_mb}M",
+    ]
+    _say(f"  $ {' '.join(argv)}")
+    # **출력을 삼키지 않는다.** trtexec 는 지원하지 않는 연산자를 경고로만 알리고
+    # 계속 진행하는 일이 있어서, 로그를 감추면 느린 엔진이 만들어진 이유를 놓친다.
+    result = subprocess.run(argv, check=False)
+    if result.returncode != 0:
+        msg = f"{name}: trtexec 가 코드 {result.returncode} 로 실패했다"
+        raise SystemExit(msg)
+
+    size_mb = engine_path.stat().st_size / (1024 * 1024)
+    _say(f"    · {engine_path.name}  {size_mb:,.1f} MB")
+    sidecar_names(onnx_path, engine_path)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="build_engines",
+        description="ONNX → TensorRT FP16 엔진 (젯슨 전용)",
+    )
+    parser.add_argument("--list", action="store_true", help="빌드 대상만 보고 끝낸다")
+    parser.add_argument(
+        "--workspace-mb",
+        type=int,
+        default=2048,
+        help="trtexec 작업 메모리 상한 (기본 2048 · Orin Nano 8GB 기준)",
+    )
+    args = parser.parse_args(argv)
+
+    _say("[engines] edge/config.yaml 에서 대상을 읽는다")
+    found = targets(_config())
+    if not found:
+        msg = (
+            "빌드할 대상이 없다 — config.yaml 의 detect·classify·depth 에 "
+            "onnx 와 engine 을 둘 다 적어라"
+        )
+        raise SystemExit(msg)
+
+    for name, onnx_path, engine_path in found:
+        _say(f"  · {name}: {onnx_path.name} → {engine_path.name}")
+    if args.list:
+        return 0
+
+    _say()
+    for name, onnx_path, engine_path in found:
+        _say(f"[engines] {name}")
+        build(name, onnx_path, engine_path, workspace_mb=args.workspace_mb)
+        _say()
+
+    _say("=" * 34)
+    _say(f"엔진 {len(found)}개 빌드 완료")
+    _say("edge/config.yaml 의 runtime.backend 를 tensorrt 로 바꿔라")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

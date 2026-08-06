@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import ctypes
 import io
 import logging
+import os
 import sys
 import threading
 from dataclasses import dataclass
@@ -54,6 +56,60 @@ _SETUP_REFRESH_S = 30.0
 #: 스트림이 끊겼을 때 재연결 간격(초).
 _RECONNECT_S = 2.0
 
+#: 프레임 하나를 처리한 뒤 그 소요 시간의 이 비율만큼 쉰다.
+#:
+#: 0.35 면 대략 CPU 듀티 사이클 74% 다. 처리율을 그만큼 잃지만, 기계를 포화시키지
+#: 않는 것이 우선이다 — 포화되면 Docker(WSL2) 가 무너져 **전부** 멎는다.
+#: 젯슨에서는 추론이 GPU 로 가고 목표 fps 에 실제로 닿으므로 이 값이 사실상 무의미해진다.
+_REST_RATIO = 0.35
+
+
+def _gstreamer_pipeline(url: str) -> str:
+    """젯슨 하드웨어 디코더(NVDEC)를 태우는 GStreamer 파이프라인.
+
+    `nvv4l2decoder` 가 H.264 를 전용 유닛에서 푼다 — CPU 와 GPU 를 추론에 온전히
+    남기기 위해서다. 노트북(CPU 디코딩)에서 ffmpeg 가 굶어 송출이 끊기던 문제가
+    젯슨에서 재현되지 않는 이유가 이것이다.
+
+    - `latency=0` · `drop=true` · `max-buffers=1` — **최신 프레임만** 본다.
+      `_LatestFrame` 이 파이썬 쪽에서 하는 일을 파이프라인에서도 같이 해 둔다.
+      쌓인 과거 프레임을 꺼내 쓰면 좌표가 영상보다 뒤처진다.
+    - `sync=false` — 표시 시각에 맞춰 기다리지 않는다. 우리는 재생기가 아니다.
+    - `protocols=tcp` — UDP 는 조용히 프레임을 흘린다. 끊기면 끊긴 것이 드러나는
+      편이 낫다.
+    - `nvvidconv` → `BGRx` → `videoconvert` → `BGR` — OpenCV 가 기대하는 배열 모양.
+      NVMM 메모리에서 한 번은 내려와야 한다.
+    """
+    return (
+        f"rtspsrc location={url} latency=0 protocols=tcp ! "
+        "rtph264depay ! h264parse ! "
+        "nvv4l2decoder ! "
+        "nvvidconv ! video/x-raw,format=BGRx ! "
+        "videoconvert ! video/x-raw,format=BGR ! "
+        "appsink drop=true max-buffers=1 sync=false"
+    )
+
+
+def _require_gstreamer() -> None:
+    """OpenCV 가 GStreamer 지원으로 빌드됐는지 확인한다.
+
+    ★ **여기서 조용히 CPU 로 떨어지면 안 된다.** PyPI 의 `opencv-python-headless` 는
+    GStreamer 없이 빌드돼 있어서, 젯슨에 그것을 깔면 `CAP_GSTREAMER` 가 그냥 열리지
+    않는다. 말없이 FFMPEG 로 되돌리면 **하드웨어 디코더를 쓰는 줄 알면서 CPU 로 돌게
+    되고**, 처리율이 안 나오는 원인을 엉뚱한 데서 찾게 된다(절대규칙 9).
+
+    젯슨에서는 JetPack 이 딸려 주는 OpenCV(GStreamer·CUDA 포함)를 써야 한다.
+    """
+    if "GStreamer:                   YES" in cv2.getBuildInformation():
+        return
+    msg = (
+        "decode.backend 가 nvdec 인데 OpenCV 에 GStreamer 지원이 없다. "
+        "PyPI 의 opencv-python-headless 는 GStreamer 없이 빌드돼 있다 — "
+        "젯슨에서는 JetPack 이 제공하는 OpenCV 를 써라. "
+        "노트북에서 돌리는 중이라면 decode.backend 를 cpu 로 두어라."
+    )
+    raise ConfigError(msg)
+
 
 class _LatestFrame:
     """RTSP 를 계속 읽어 **가장 최근 프레임 하나만** 남긴다.
@@ -64,8 +120,14 @@ class _LatestFrame:
     것은 물론이고 이벤트 시각 자체가 틀어진다.
     """
 
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, backend: str = "cpu") -> None:
         self._url = url
+        self._backend = backend
+        if backend == "nvdec":
+            _require_gstreamer()
+        elif backend != "cpu":
+            msg = f"모르는 디코드 백엔드다: {backend!r} (쓸 수 있는 것: cpu · nvdec)"
+            raise ConfigError(msg)
         self._frame: npt.NDArray[np.uint8] | None = None
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -89,9 +151,14 @@ class _LatestFrame:
             frame, self._frame = self._frame, None
             return frame
 
+    def _open(self) -> cv2.VideoCapture:
+        if self._backend == "nvdec":
+            return cv2.VideoCapture(_gstreamer_pipeline(self._url), cv2.CAP_GSTREAMER)
+        return cv2.VideoCapture(self._url, cv2.CAP_FFMPEG)
+
     def _loop(self) -> None:
         while not self._stop.is_set():
-            capture = cv2.VideoCapture(self._url, cv2.CAP_FFMPEG)
+            capture = self._open()
             if not capture.isOpened():
                 self._connected.clear()
                 log.warning("스트림을 열지 못했다 — %s (재시도)", self._url)
@@ -149,6 +216,57 @@ def _limit_threads(config: EdgeConfig) -> None:
         log.info("스레드 상한 %d (onnxruntime · OpenCV)", config.runtime.intra_op_threads)
 
 
+def _yield_cpu() -> None:
+    """이 프로세스의 우선순위를 낮춘다.
+
+    ★ **스레드 수를 깎는 것으로는 풀리지 않는 문제다.** 적게 주면 추론이 느려져
+    프레임 간격이 벌어지고, 그러면 추적기가 프레임 사이를 잇지 못해 이벤트가 확정에
+    도달하지 못한다. 많이 주면 같은 노트북의 ffmpeg 송출이 굶어 `Broken pipe` 로
+    죽는다 — 어느 쪽으로 돌려도 한쪽이 무너진다.
+
+    우선순위를 낮추면 둘 다 산다. **남는 CPU 는 전부 쓰되, 다투는 순간에는 양보한다.**
+    추론이 한 프레임 늦는 것은 다음 프레임에 회복되지만, 송출이 죽으면 라이브·녹화·
+    추론이 한꺼번에 멎는다 — 양보해야 하는 쪽이 명확하다.
+
+    젯슨에서는 추론이 GPU 로 가므로 이 조정이 사실상 무의미해진다. 그래도 남겨 둔다 —
+    디코딩과 전처리는 여전히 CPU 를 쓰고, 카메라 수가 늘면 같은 경합이 생긴다.
+    """
+    # 조건식으로 고른다 — `if` 문으로 나누면 `warn_unreachable` 이 반대편 분기를
+    # 도달 불가로 잡는다(`edge/sysinfo.py` 와 같은 처리).
+    lowered = _yield_windows() if sys.platform == "win32" else _yield_posix()
+    if lowered:
+        log.info("프로세스 우선순위를 낮췄다 — 송출에 양보한다")
+    else:
+        log.warning("우선순위를 낮추지 못했다 — 송출이 밀릴 수 있다")
+
+
+def _yield_windows() -> bool:
+    # **양쪽 함수의 형을 다 지정해야 한다.** `GetCurrentProcess` 의 반환형만 넓히면
+    # 그 값(0xFFFF…FFFF)이 `SetPriorityClass` 의 기본 인자형 `c_int` 에 들어가지 못해
+    # `OverflowError: int too long to convert` 로 죽는다.
+    below_normal = 0x00004000
+    get_current = ctypes.windll.kernel32.GetCurrentProcess
+    get_current.restype = ctypes.c_void_p
+    get_current.argtypes = []
+    set_priority = ctypes.windll.kernel32.SetPriorityClass
+    set_priority.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+    set_priority.restype = ctypes.c_int
+    return bool(set_priority(get_current(), below_normal))
+
+
+def _yield_posix() -> bool:
+    # `os.nice` 는 윈도우 타입 스텁에 없다. 이 함수는 POSIX 에서만 불리므로
+    # `getattr` 로 꺼내 플랫폼마다 다른 `type: ignore` 를 두지 않는다.
+    nice = getattr(os, "nice", None)
+    if nice is None:  # pragma: no cover - 윈도우에서는 호출되지 않는다
+        return False
+    try:
+        nice(5)
+    except OSError:
+        return False
+    return True
+
+
 def _build(config: EdgeConfig, stream: StreamConfig) -> CameraPipeline:
     letterbox = Letterbox(
         source_width=stream.width,
@@ -192,11 +310,12 @@ async def run(config: EdgeConfig, *, cam_ids: set[int] | None, clock: Clock) -> 
 
     # 모델을 만들기 **전에** 건다. 세션이 만들어진 뒤에는 스레드 풀이 이미 잡혀 있다.
     _limit_threads(config)
+    _yield_cpu()
 
     cameras = [
         _Camera(
             stream=stream,
-            reader=_LatestFrame(stream.rtsp_sub),
+            reader=_LatestFrame(stream.rtsp_sub, config.decode.backend),
             pipeline=_build(config, stream),
         )
         for stream in streams
@@ -285,10 +404,18 @@ async def _pump(
 
         if not worked:
             await asyncio.sleep(idle_s)
-        else:
-            # 다른 태스크(재연결·설정 조회)에 자리를 준다. 추론 자체가 수백 ms 라
-            # 여기서 더 쉬면 처리율만 떨어진다.
-            await asyncio.sleep(0)
+            continue
+
+        # ★ **남은 CPU 를 전부 쓰지 않는다.** `target_fps` 는 이 노트북에서 닿을 수
+        # 없는 값이라, 쉬지 않으면 루프가 무한정 100% 로 돌아간다. 그 부하가
+        # Docker Desktop(WSL2) 을 무너뜨려 mediamtx 가 죽고, 카메라·녹화·추론이
+        # 한꺼번에 멎었다(이 세션에서 두 번). 우선순위만 낮춰서는 막히지 않는다 —
+        # WSL2 VM 은 별 프로세스라 그 조정을 물려받지 않는다.
+        #
+        # 그래서 **직전 프레임에 쓴 시간에 비례해 쉰다.** 처리가 무거울수록 더 쉬므로
+        # 기계가 숨 쉴 틈이 생기고, 가벼우면 거의 쉬지 않아 처리율을 잃지 않는다.
+        spent = clock.monotonic() - origin - at_s
+        await asyncio.sleep(max(spent * _REST_RATIO, 0.0))
 
 
 async def _connect(socket: EdgeSocket) -> bool:

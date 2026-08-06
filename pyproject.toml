@@ -110,8 +110,13 @@ ignore_missing_imports = true
 
 # 엣지 추론 스택은 타입 스텁을 제공하지 않거나 불완전하다. `ultralytics` 는 일회성
 # 변환 스크립트에서만 쓰이며 기본 설치에도 없다(`export` 그룹).
+#
+# `tensorrt` · `cuda` 는 **젯슨에만 있다.** JetPack 이 apt 로 깔아 주는 것이라 PyPI 에
+# aarch64 휠이 없고, 노트북에는 설치할 수도 없다. `edge/session.py` 가 지연 import 로
+# 감싸 두었으므로 없는 기계에서도 `onnx` 백엔드는 그대로 돈다.
+# `onnx` 는 엔진 빌드 스크립트가 클래스 이름을 뽑을 때만 쓴다(젯슨, 일회성).
 [[tool.mypy.overrides]]
-module = ["cv2.*", "onnxruntime.*", "ultralytics.*"]
+module = ["cv2.*", "onnxruntime.*", "ultralytics.*", "tensorrt.*", "cuda.*", "onnx.*"]
 ignore_missing_imports = true
 # ultralytics 는 `YOLO` 를 `__init__` 에서 재수출하지만 `__all__` 로 선언하지 않는다.
 # 일회성 변환 스크립트에서만 쓰므로 여기서 허용한다.
