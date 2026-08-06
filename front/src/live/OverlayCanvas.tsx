@@ -49,6 +49,37 @@ const COLOR = {
   zone: '#a855f7', // 보라 — 금지구역 폴리곤
 } as const
 
+/** 선 굵기(`view.unit` 배수). 한 곳에 모아 화면 전체의 인상을 함께 조정한다. */
+const LINE = {
+  person: 3.0,
+  personConfirmed: 4.5,
+  vehicle: 3.0,
+  zone: 3.0,
+  nearby: 2.4,
+  nearbyDanger: 3.4,
+  dot: 2.6,
+} as const
+
+/**
+ * 어두운 테두리를 깔고 색을 얹는다.
+ *
+ * ★ **색만 진하게 해서는 안 보인다.** 레고 보드처럼 밝고 무늬가 촘촘한 배경에서는
+ * 얇은 선이 그대로 묻힌다. 검은 테두리를 한 겹 깔면 배경이 무엇이든 윤곽이 살아난다.
+ * 지도·방송 그래픽이 쓰는 방식과 같다.
+ *
+ * 호출 전에 경로(`beginPath` ~)가 만들어져 있어야 한다.
+ */
+function haloStroke(context: CanvasRenderingContext2D, color: string, width: number): void {
+  const dash = context.getLineDash()
+  context.strokeStyle = 'rgba(0, 0, 0, 0.62)'
+  context.lineWidth = width + Math.max(2, width * 0.7)
+  context.stroke()
+  context.setLineDash(dash)
+  context.strokeStyle = color
+  context.lineWidth = width
+  context.stroke()
+}
+
 /** 위반 유형 라벨. 시안의 건설현장 용어가 아니라 명세서 용어다(부록 B). */
 const VIOLATION_LABEL: Record<string, string> = {
   no_helmet: '안전모 미착용',
@@ -310,9 +341,7 @@ function drawZones(
     context.fill()
     // 점선으로 그린다. 실선은 감지 박스와 같은 인상이라 「지금 잡힌 것」으로 읽힌다.
     context.setLineDash([view.unit * 6, view.unit * 4])
-    context.lineWidth = view.unit * 1.6
-    context.strokeStyle = COLOR.zone
-    context.stroke()
+    haloStroke(context, COLOR.zone, view.unit * LINE.zone)
     context.setLineDash([])
 
     // 라벨은 가장 위쪽 꼭짓점에 붙인다 — 폴리곤이 화면 아래에 있으면 무게중심에
@@ -389,19 +418,22 @@ function drawPerson(
     context.globalAlpha *= 0.55 + 0.45 * Math.abs(Math.cos(phase * Math.PI))
   }
   const rect = box(view, person.bbox)
-  context.strokeStyle = color
-  context.lineWidth = view.unit * (confirmed ? 2.2 : 1.6)
   // 확정 전은 점선 — 색을 바꾸지 않고도 "아직 단정하지 않았다"가 읽힌다.
   if (pending) context.setLineDash([view.unit * 5, view.unit * 4])
-  context.strokeRect(rect.x, rect.y, rect.w, rect.h)
+  context.beginPath()
+  context.rect(rect.x, rect.y, rect.w, rect.h)
+  haloStroke(context, color, view.unit * (confirmed ? LINE.personConfirmed : LINE.person))
   context.setLineDash([])
 
   // 접지점 — 거리·구역 판정의 기준점이다(§6.1). 어디를 기준으로 판정했는지 보여준다.
   const foot = point(view, person.foot_point)
-  context.fillStyle = color
   context.beginPath()
-  context.arc(foot.x, foot.y, view.unit * 1.6, 0, Math.PI * 2)
+  context.arc(foot.x, foot.y, view.unit * LINE.dot, 0, Math.PI * 2)
+  context.fillStyle = color
   context.fill()
+  context.strokeStyle = 'rgba(0, 0, 0, 0.62)'
+  context.lineWidth = view.unit * 0.9
+  context.stroke()
 
   label(context, view, rect.x, rect.y, color, personLabel(person, zones, pending))
   context.restore()
@@ -429,17 +461,20 @@ function drawVehicle(
   vehicle: Extract<OverlayObject, { class: 'vehicle' }>,
 ): void {
   const rect = box(view, vehicle.bbox)
-  context.strokeStyle = COLOR.vehicle
-  context.lineWidth = view.unit * 1.6
-  context.strokeRect(rect.x, rect.y, rect.w, rect.h)
+  context.beginPath()
+  context.rect(rect.x, rect.y, rect.w, rect.h)
+  haloStroke(context, COLOR.vehicle, view.unit * LINE.vehicle)
 
   // 접지점은 **서버가 준 `anchor`** 다(§2.1). 마스크 하단에서 산출한 값이라
   // 박스 아래변 중앙과 다르다 — 포크가 뻗었거나 적재물이 있으면 어긋난다.
   const anchor = point(view, vehicle.anchor)
-  context.fillStyle = COLOR.vehicle
   context.beginPath()
-  context.arc(anchor.x, anchor.y, view.unit * 1.6, 0, Math.PI * 2)
+  context.arc(anchor.x, anchor.y, view.unit * LINE.dot, 0, Math.PI * 2)
+  context.fillStyle = COLOR.vehicle
   context.fill()
+  context.strokeStyle = 'rgba(0, 0, 0, 0.62)'
+  context.lineWidth = view.unit * 0.9
+  context.stroke()
 
   label(
     context,
@@ -459,13 +494,15 @@ function drawNearby(context: CanvasRenderingContext2D, view: View, person: Overl
   for (const other of person.nearby) {
     const to = point(view, other.anchor)
     context.save()
-    context.strokeStyle = COLOR.violation
-    context.lineWidth = view.unit * (other.in_danger_zone ? 1.6 : 1.1)
     context.setLineDash([view.unit * 4, view.unit * 3])
     context.beginPath()
     context.moveTo(from.x, from.y)
     context.lineTo(to.x, to.y)
-    context.stroke()
+    haloStroke(
+      context,
+      COLOR.violation,
+      view.unit * (other.in_danger_zone ? LINE.nearbyDanger : LINE.nearby),
+    )
     context.restore()
 
     label(
@@ -487,15 +524,20 @@ function label(
   color: string,
   text: string,
 ): void {
-  const size = view.unit * 11
-  context.font = `600 ${size}px system-ui, sans-serif`
+  // 라벨도 함께 키운다 — 박스만 굵게 하면 글자가 상대적으로 더 안 읽힌다.
+  const size = view.unit * 13
+  context.font = `700 ${size}px system-ui, sans-serif`
   const width = context.measureText(text).width
   const padding = size * 0.35
   const height = size * 1.5
   const top = Math.max(0, y - height)
 
-  context.fillStyle = 'rgba(0, 0, 0, 0.68)'
+  // 배경을 더 불투명하게. 밝은 영상 위에서 반투명 검정은 글자를 못 살린다.
+  context.fillStyle = 'rgba(0, 0, 0, 0.82)'
   context.fillRect(x, top, width + padding * 2, height)
+  context.strokeStyle = color
+  context.lineWidth = Math.max(1, view.unit * 0.8)
+  context.strokeRect(x, top, width + padding * 2, height)
   context.fillStyle = color
   context.fillText(text, x + padding, top + height - padding * 0.8)
 }
