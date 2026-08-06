@@ -22,6 +22,12 @@ models/engines/
 media/*
 !media/README.md
 
+# --- 실행 로그 (dev 가 띄운 프로세스별 stdout) ---
+.run/
+
 # --- 프론트 ---
 front/dist
 front/node_modules
+# vite 가 설정을 번들할 때 남기는 임시 파일. 실행마다 이름이 달라 그대로 두면
+# 커밋 후보에 계속 올라온다.
+front/vite.config.ts.timestamp-*.mjs
