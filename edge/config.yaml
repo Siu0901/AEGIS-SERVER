@@ -20,20 +20,18 @@ runtime:
   providers:
     - CPUExecutionProvider
 
-  # ★ **0(=모든 코어) 으로 두면 안 된다.** onnxruntime 이 논리 코어를 전부 가져가면
-  #   같은 노트북에서 도는 ffmpeg 송출이 굶어 죽는다. 실측으로 확인한 증상:
+  # 0 이면 onnxruntime 기본값(논리 코어 수)에 맡긴다.
   #
-  #     CPU 80% · edge 프로세스 단독 5,800 CPU-초
-  #     ffmpeg: "Resumed reading ... after a lag of 377.086s"
-  #             "Failed reading RTSP data: -10053" → Broken pipe → 송출 종료
+  # ★ **스레드 수로 경합을 조정하려 하지 마라.** 실측으로 양쪽 다 실패했다.
   #
-  #   그러면 라이브가 검게 죽고 재연결이 반복된다. **네트워크 문제로 오인하기 쉽다** —
-  #   전부 로컬호스트인데 불안정한 이유가 이것이다.
+  #     12(전부): ffmpeg 가 굶어 "Broken pipe" 로 송출이 죽는다
+  #      4(조임): seg 가 440ms → 2,856ms. 프레임 간격 3.4초라 추적기가 프레임 사이를
+  #               잇지 못하고 이벤트가 확정에 도달하지 못한다(전부 dropped)
   #
-  #   이 노트북은 논리 12개(물리 10)다. 추론에 4개만 주고 나머지는 송출·서버·브라우저
-  #   몫으로 남긴다. 추론은 그만큼 느려지지만, **끊기는 영상보다 느린 추론이 낫다.**
-  #   젯슨은 GPU 가 추론을 맡으므로 이 제약이 없다.
-  intra_op_threads: 4
+  # 해법은 개수가 아니라 **우선순위**다. `edge/main.py` 의 `_yield_cpu()` 가 이
+  # 프로세스를 BelowNormal 로 낮춘다 — 남는 CPU 는 전부 쓰되 다투는 순간 송출에
+  # 양보한다. 그래서 여기서는 코어를 묶지 않는다.
+  intra_op_threads: 0
 
 streams:
   # 서브 스트림만 엣지가 받는다. 메인(1920×1080)은 서버가 따로 받는다.
@@ -59,6 +57,11 @@ streams:
   # 구역·이벤트가 전부 이 번호에 걸려 있다.
   - cam_id: 1
     rtsp_sub: rtsp://127.0.0.1:8554/cam1/sub
+    width: 640
+    height: 360
+    fps: 15
+  - cam_id: 2
+    rtsp_sub: rtsp://127.0.0.1:8554/cam2/sub
     width: 640
     height: 360
     fps: 15
@@ -131,7 +134,18 @@ depth:
   # 남고 그 사실이 로그와 heartbeat 에 드러난다 — 조용히 "검증됨"으로 올리지 않는다.
   # 출처: huggingface `onnx-community/depth-anything-v2-small` (ONNX 로 배포된 것을
   # 그대로 쓴다 — .pt 를 받아 변환할 필요가 없어서 `weights:` 가 없다).
-  onnx: models/weights/depth_anything_v2_small.onnx
+  #
+  # ★ **노트북에서는 꺼 둔다.** 켜면 한 프레임에 875ms 가 더 들어 처리율이 0.4fps 로
+  #   떨어지는데, 그러면 **확정(3초 연속 관측)에 도달하지 못한다.** 실측으로 이벤트
+  #   60건이 전부 `candidate` → `dropped` 였고, 확정이 없으니 화면에 빨간 박스가
+  #   한 번도 뜨지 않았다(§5.1 — 확정 전은 적색으로 그리지 않는다).
+  #
+  #   뎁스는 근접 후보의 앞뒤 분리를 **보강**하는 수단이고, 없으면
+  #   `depth_verified` 가 false 로 남을 뿐 나머지 판정은 전부 돈다. 상태머신 전체를
+  #   못 보는 것보다 보강 하나를 포기하는 편이 낫다.
+  #
+  #   젯슨(TensorRT FP16)에서는 사정이 다르므로 아래 줄의 주석을 풀면 된다.
+  # onnx: models/weights/depth_anything_v2_small.onnx
   engine: models/engines/depth_anything_v2_small_fp16.engine
 
   # ViT 패치가 14 라 입력은 14의 배수여야 한다. 표준은 518(=14×37)이다.

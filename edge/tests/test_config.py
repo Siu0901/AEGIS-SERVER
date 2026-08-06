@@ -141,10 +141,27 @@ def test_duplicate_cam_id_is_rejected(make_config: Build) -> None:
 
 
 def test_depth_may_be_absent(make_config: Build) -> None:
-    """뎁스만은 없어도 나머지가 전부 돈다(FN-DET-11 은 보조 수단이다)."""
+    """뎁스만은 없어도 나머지가 전부 돈다(FN-DET-11 은 보조 수단이다).
+
+    `del` 이 아니라 `pop` 을 쓴다 — 레포 설정은 노트북 처리율 때문에 `depth.onnx` 를
+    **주석 처리해 둔 상태**이고, 키가 있든 없든 결론은 같아야 한다. 이 테스트가 레포
+    설정의 현재 값에 묶여 있으면 뎁스를 켰다 껐다 할 때마다 깨진다.
+    """
     raw = live_config_raw()
-    del raw["depth"]["onnx"]
+    raw["depth"].pop("onnx", None)
     assert load_config(make_config(raw)).depth.model_path is None
+
+
+def test_depth_loads_when_present(make_config: Build) -> None:
+    """반대쪽도 못박는다 — 경로가 있으면 실제로 읽어야 한다.
+
+    위 테스트만 있으면 로더가 뎁스를 **항상** 무시하도록 망가져도 통과한다.
+    """
+    raw = live_config_raw()
+    raw["depth"]["onnx"] = "models/weights/depth_anything_v2_small.onnx"
+    config = load_config(make_config(raw))
+    assert config.depth.model_path is not None
+    assert config.depth.model_path.name == "depth_anything_v2_small.onnx"
 
 
 # --------------------------------------------------------------------------
