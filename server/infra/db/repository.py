@@ -25,7 +25,8 @@ from datetime import datetime, timedelta
 from pathlib import PurePosixPath
 from typing import Any, cast
 
-from sqlalchemy import Engine, delete
+from sqlalchemy import Engine, Integer, delete
+from sqlalchemy import cast as sa_cast
 from sqlalchemy import select as sa_select
 from sqlmodel import Session, col, func, select
 
@@ -396,16 +397,27 @@ class DbEventRepository:
         return await asyncio.to_thread(self._next_event_id, at)
 
     def _next_event_id(self, at: datetime) -> str:
+        """★ **일련번호를 숫자로 비교한다.**
+
+        전에는 문자열 정렬로 최대값을 고르고 뒤 4글자를 잘라 썼는데, 하루 이벤트가
+        9,999건을 넘는 순간 두 가지가 함께 깨졌다.
+
+            정렬: "EV-…-9999" > "EV-…-10000"   (사전순이라 5자리가 뒤로 밀린다)
+            파싱: "EV-…-10000"[-4:] == "0000"  (앞자리를 잘라 먹는다)
+
+        그래서 최대값을 9999 로 잘못 읽고 10000 을 **영원히 다시 만들려 했다.**
+        `duplicate key value violates unique constraint "events_pkey"` 가 반복되며
+        그 뒤의 모든 이벤트 생성이 막혔다.
+
+        접두사 뒤를 정수로 캐스팅해 `MAX` 를 구하면 자릿수와 무관하게 맞다.
+        `NNNN` 표기(§6)는 그대로다 — `:04d` 는 **최소** 너비라 10000 은 그대로 나간다.
+        """
         prefix = format_event_id(at, 0)[:-4]
-        statement = (
-            select(EventRow.event_id)
-            .where(col(EventRow.event_id).startswith(prefix))
-            .order_by(col(EventRow.event_id).desc())
-            .limit(1)
-        )
+        suffix = sa_cast(func.substr(col(EventRow.event_id), len(prefix) + 1), Integer)
+        statement = select(func.max(suffix)).where(col(EventRow.event_id).startswith(prefix))
         with Session(self._engine) as session:
-            latest = session.exec(statement).first()
-        return format_event_id(at, int(latest[-4:]) + 1 if latest else 1)
+            latest = session.exec(statement).one_or_none()
+        return format_event_id(at, int(latest) + 1 if latest else 1)
 
     async def create(self, event: EventDetail) -> None:
         await asyncio.to_thread(self._create, event)
