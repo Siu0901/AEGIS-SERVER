@@ -116,6 +116,44 @@
   vector-effect: non-scaling-stroke;
 }
 
+.settings__modes {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.settings__rect {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+  padding: 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.settings__rect-field {
+  display: grid;
+  gap: 4px;
+}
+
+.settings__rect-field span {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.settings__rect-field strong {
+  color: var(--warn);
+}
+
+/* 미리보기는 두 칸을 가로질러 아래에 깔린다 — 입력과 결과가 한눈에 들어와야 한다. */
+.settings__rect-preview {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
 .settings__reference-form {
   display: grid;
   gap: 8px;
@@ -172,6 +210,39 @@
   margin-left: auto;
   color: var(--text-muted);
   font-size: 12px;
+}
+
+/* 세 상태를 색으로도 가른다 — 글자만으로는 「적용됨」과 「시드 기본값」이 스쳐 읽힌다. */
+.settings__state--saved {
+  color: var(--ok, #34d399);
+}
+
+.settings__state--seed {
+  color: var(--warn);
+}
+
+.settings__state--none {
+  color: var(--danger);
+}
+
+/* 찍은 점의 순서 번호. 점 자체를 가리지 않게 오른쪽 위로 비켜 놓는다 —
+   정확히 어디를 찍었는지가 좌표만큼 중요하다. */
+.settings__point-no {
+  position: absolute;
+  transform: translate(4px, -20px);
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--warn);
+  color: #000;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.7);
 }
 
 /* --- 입력 --------------------------------------------------------------- */

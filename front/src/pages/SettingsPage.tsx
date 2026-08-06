@@ -268,6 +268,15 @@ function CameraPanel({
   const [kind, setKind] = useState<PlaybackKind>('none')
   const [mode, setMode] = useState<Mode>('idle')
   const [points, setPoints] = useState<PendingPoint[]>([])
+  // 「변 길이만 입력」 모드가 기본이다.
+  //
+  // 점마다 (x, y)를 손으로 넣게 하면 사람이 좌표계를 머릿속에서 세워야 한다 — 원점을
+  // 어디로 둘지, 어느 축이 어느 방향인지. 정작 현장에서 손에 쥐고 있는 것은 줄자로 잰
+  // **변의 길이 하나**다. 네 점을 순서대로 찍었다면 그 두 길이만으로 좌표 여덟 개가
+  // 전부 결정되므로, 계산은 화면이 한다.
+  const [rectMode, setRectMode] = useState(true)
+  const [edgeA, setEdgeA] = useState('')
+  const [edgeB, setEdgeB] = useState('')
   const [reference, setReference] = useState<PendingReference>(EMPTY_REFERENCE)
   const [polygon, setPolygon] = useState<[number, number][]>([])
   const [zoneId, setZoneId] = useState('')
@@ -295,10 +304,36 @@ function CameraPanel({
   useEffect(() => {
     setMode('idle')
     setPoints([])
+    setEdgeA('')
+    setEdgeB('')
     setReference(EMPTY_REFERENCE)
     setPolygon([])
     setResult(null)
   }, [camId])
+
+  /**
+   * 찍은 순서를 직사각형의 꼭짓점으로 읽어 네 점의 지면 좌표를 만든다.
+   *
+   *   1 → (0, 0)   2 → (a, 0)   3 → (a, b)   4 → (0, b)
+   *
+   * `a` 는 1→2 변, `b` 는 2→3 변의 실측 길이다. 원점은 1번 점이고 축은 찍은 방향을
+   * 따라가므로, 사람은 좌표계를 세울 필요 없이 **줄자로 잰 숫자 두 개**만 넣으면 된다.
+   *
+   * 단위를 강제하지 않는다 — 실물 현장이면 m, 미니어처 시연이면 cm 를 그대로 넣는다.
+   * 임계값(`policies`)이 같은 단위로 맞춰져 있기만 하면 된다(기능명세서 §4.7).
+   */
+  const rectCoords = (): [number, number][] | null => {
+    const a = Number(edgeA)
+    const b = Number(edgeB)
+    if (edgeA.trim() === '' || edgeB.trim() === '') return null
+    if (!Number.isFinite(a) || !Number.isFinite(b) || a <= 0 || b <= 0) return null
+    return [
+      [0, 0],
+      [a, 0],
+      [a, b],
+      [0, b],
+    ]
+  }
 
   const handleClick = (event: React.MouseEvent<HTMLDivElement>) => {
     if (mode === 'idle') return
@@ -341,16 +376,19 @@ function CameraPanel({
               at_m: [Number(reference.x), Number(reference.y)] as [number, number],
             }
           : null
+      const derived = rectMode ? rectCoords() : null
       const response = await calibrate(camId, {
-        points: points.map((item) => ({
+        points: points.map((item, index) => ({
           px: item.px,
-          m: [Number(item.x), Number(item.y)] as [number, number],
+          m: derived ? derived[index] : ([Number(item.x), Number(item.y)] as [number, number]),
         })),
         reference_person: referencePerson,
       })
       setResult(response.reprojection_error_m)
       setMode('idle')
       setPoints([])
+      setEdgeA('')
+      setEdgeB('')
       setReference(EMPTY_REFERENCE)
       onDone(
         `cam${camId} 캘리브레이션 저장 — 재투영 오차 ${response.reprojection_error_m.toFixed(3)} m` +
@@ -392,8 +430,31 @@ function CameraPanel({
     }
   }
 
-  const measured = points.every((item) => item.x !== '' && item.y !== '')
+  const measured = rectMode
+    ? rectCoords() !== null
+    : points.every((item) => item.x !== '' && item.y !== '')
   const calibrated = camera?.homography ?? null
+
+  // 「적용됐는지 안 됐는지 모르겠다」를 없앤다.
+  //
+  // 행렬이 있다는 사실만으로는 부족하다 — 시드가 심어 둔 개발용 기본값도 행렬은 있다.
+  // 그래서 **화면에서 저장한 것**(`calibrated_at` 이 있다)과 **시드 기본값**(없다)을
+  // 갈라서 보여준다. 둘을 뭉뚱그리면 옛 캘리브레이션 위에서 거리를 재면서도
+  // "완료"만 보게 된다.
+  const calibState = calibrated ? (camera?.calibrated_at ? 'saved' : 'seed') : 'none'
+
+  // 입력한 지면 좌표의 가로·세로 범위. **재투영 오차 대신 이것을 보여준다** —
+  // 이 화면은 점을 정확히 4개만 받고, 4점은 언제나 정확히 맞아떨어져 오차가 늘 0 이다
+  // (기능명세서 §4.7 「5점 이상 입력하면 오차가 의미를 갖는다」). 0.000 을 띄우면
+  // 정확해서 0 인 것처럼 읽힌다. 반면 범위는 넣은 축척이 그대로 되비쳐 나오므로
+  // 「6.8 × 10.88 m」를 보고 내 입력이 반영됐음을 바로 확인할 수 있다.
+  const calibSpan = (() => {
+    const saved = camera?.calib_points ?? []
+    if (saved.length === 0) return null
+    const xs = saved.map((item) => item.m[0])
+    const ys = saved.map((item) => item.m[1])
+    return `${(Math.max(...xs) - Math.min(...xs)).toFixed(2)} × ${(Math.max(...ys) - Math.min(...ys)).toFixed(2)} m`
+  })()
 
   // 저장된 구역을 화면에 되그린다.
   //
@@ -499,6 +560,19 @@ function CameraPanel({
             ) : null,
           )}
         </svg>
+        {/* 찍은 순서를 화면에도 숫자로 얹는다. 아래 입력표는 `#` 열로만 점을 구분하는데,
+            화면의 점과 표의 줄을 눈으로 잇지 못하면 좌표를 엉뚱한 줄에 넣게 되고
+            그러면 호모그래피가 조용히 뒤틀린다.
+            SVG 는 `preserveAspectRatio="none"` 이라 글자가 가로로 늘어나므로 HTML 로 얹는다. */}
+        {points.map((item, index) => (
+          <span
+            key={`pn${index}`}
+            className="settings__point-no"
+            style={{ left: `${item.px[0] * 100}%`, top: `${item.px[1] * 100}%` }}
+          >
+            {index + 1}
+          </span>
+        ))}
         <span className="settings__badge">{kind === 'none' ? '재생 불가' : kind.toUpperCase()}</span>
         {mode !== 'idle' && (
           <span className="settings__pick">
@@ -547,6 +621,8 @@ function CameraPanel({
           onClick={() => {
             setMode('idle')
             setPoints([])
+            setEdgeA('')
+            setEdgeB('')
             setReference(EMPTY_REFERENCE)
             setPolygon([])
           }}
@@ -554,10 +630,13 @@ function CameraPanel({
         >
           취소
         </button>
-        <span className="settings__state">
-          {calibrated
-            ? `캘리브레이션 완료 · ${stamp(camera?.calibrated_at ?? null)}`
-            : '캘리브레이션 없음 — 구역을 저장할 수 없다'}
+        <span className={`settings__state settings__state--${calibState}`}>
+          {calibState === 'saved'
+            ? `호모그래피 적용됨 · ${stamp(camera?.calibrated_at ?? null)}` +
+              (calibSpan ? ` · 지면 범위 ${calibSpan}` : '')
+            : calibState === 'seed'
+              ? '호모그래피 있음 — 시드 기본값이다 (이 화면에서 저장한 적 없음)'
+              : '호모그래피 없음 — 구역을 저장할 수 없다'}
           {camera?.ref_height
             ? ` · 기준 인물 ${camera.ref_height.height_px} @ (${camera.ref_height.at_m[0]}, ${camera.ref_height.at_m[1]}) m`
             : ' · 기준 인물 없음'}
@@ -567,9 +646,28 @@ function CameraPanel({
       {mode === 'calibrate' && (
         <div className="settings__form">
           <p className="card__note">
-            찍은 네 점의 <strong>실측 지면 좌표(m)</strong>를 입력해라. 첫 점을 원점(0, 0)으로
-            두는 것이 편하다. 네 점이 한 직선 위에 있으면 서버가 거부한다.
+            네 점이 한 직선 위에 있으면 서버가 거부한다. 바닥에 <strong>직사각형</strong>으로
+            찍었다면 아래에서 <strong>변 길이 두 개</strong>만 넣으면 되고, 좌표는 화면이
+            계산한다.
           </p>
+          {/* 좌표를 손으로 넣는 길을 없애지는 않는다 — 사다리꼴로 찍어야 하는 현장이
+              있고(기둥·설비가 직사각형을 가로막는다), 그때는 점마다 좌표가 필요하다. */}
+          <div className="settings__modes">
+            <button
+              type="button"
+              className={rectMode ? 'chip chip--on' : 'chip'}
+              onClick={() => setRectMode(true)}
+            >
+              직사각형 · 변 길이만 입력
+            </button>
+            <button
+              type="button"
+              className={rectMode ? 'chip' : 'chip chip--on'}
+              onClick={() => setRectMode(false)}
+            >
+              점마다 좌표 입력
+            </button>
+          </div>
           {/* 기능명세서 §4.7 FN-CFG-01 「캘리브레이션과 축척」.
               현장에서 잘못 입력하면 M9 에서 임계값을 전부 다시 만져야 하므로,
               규칙을 입력란 바로 옆에 둔다. */}
@@ -579,32 +677,67 @@ function CameraPanel({
               점을 섞으면 지면 대 지면 변환이 성립하지 않는다.
             </li>
             <li>
-              모형 시연에서는 모형의 실측 치수가 아니라 <strong>환산 미터</strong>를 넣는다 —
-              1:20 모형에서 15cm 떨어진 두 점이면 <code>0.15</code> 가 아니라{' '}
-              <code>3.0</code> 이다.
+              모형 시연에서는 <strong>자로 잰 값을 그대로</strong> 넣는다 — 16cm 면{' '}
+              <code>16</code> 이다. 환산하지 마라.
             </li>
             <li>
-              <strong>임계값을 축척에 맞춰 바꾸지 마라.</strong> 위험 반경 3.0m · 근접 2.0m ·
-              보행 속도 1.5m/s 는 KOSHA 기준과 실제 보행 속도에서 나온 값이고, 축척 변환은
-              캘리브레이션이 혼자 흡수한다. 실물 현장으로 옮길 때 다시 하는 것은
-              캘리브레이션뿐이다.
+              <strong>축척은 임계값 쪽에서 이미 환산해 두었다.</strong> 위험 반경 3.0m ·
+              근접 2.0m · 보행 속도 1.5m/s 라는 현장 기준값을 모형 배율(인물 4cm ↔ 1.7m ·
+              42.5배)로 나눈 값이 <code>policies</code> 에 심겨 있다. 여기서 또 환산하면
+              이중 환산이 되어 거리 판정이 통째로 틀어진다.
             </li>
             <li>
-              기준 인물(<code>ref_height</code>)도 <strong>실제 작업자 신장(약 1.7m)</strong>{' '}
-              기준으로 입력해야 쓰러짐 판정이 명세서 임계값 그대로 돈다.{' '}
-              <strong>화면상 높이와 그 사람이 서 있던 지면 좌표를 함께</strong> 넣는다 —
-              같은 사람도 카메라에서 멀수록 화면상 높이가 줄어들므로, 위치 없는 높이
+              기준 인물(<code>ref_height</code>)의 지면 좌표도 <strong>4점과 같은 단위</strong>로
+              넣는다. <strong>화면상 높이와 그 사람이 서 있던 지면 좌표를 함께</strong> 넣어야
+              한다 — 같은 사람도 카메라에서 멀수록 화면상 높이가 줄어들므로, 위치 없는 높이
               하나로는 다른 거리의 기대 높이를 구할 수 없다.
             </li>
             <li>카메라를 고정한 뒤에 찍어라. 이후 카메라를 움직이면 캘리브레이션은 무효다.</li>
           </ul>
+          {rectMode ? (
+            <div className="settings__rect">
+              <label className="settings__rect-field">
+                <span>
+                  <strong>1 → 2</strong> 변 길이
+                </span>
+                <input
+                  value={edgeA}
+                  inputMode="decimal"
+                  placeholder="예: 25.6"
+                  onChange={(event) => setEdgeA(event.target.value)}
+                />
+              </label>
+              <label className="settings__rect-field">
+                <span>
+                  <strong>2 → 3</strong> 변 길이
+                </span>
+                <input
+                  value={edgeB}
+                  inputMode="decimal"
+                  placeholder="예: 16"
+                  onChange={(event) => setEdgeB(event.target.value)}
+                />
+              </label>
+              {/* 무엇이 저장될지 저장 전에 보여준다 — 축척을 잘못 넣으면 거리 판정이
+                  통째로 틀어지는데, 저장한 뒤에야 알아채면 이미 늦다. */}
+              <p className="settings__rect-preview">
+                {points.length < REQUIRED_POINTS
+                  ? `네 점을 순서대로 찍어라 (${points.length}/${REQUIRED_POINTS})`
+                  : rectCoords()
+                    ? `저장될 좌표 — ${rectCoords()!
+                        .map(([x, y], index) => `${index + 1}:(${x}, ${y})`)
+                        .join('  ')}`
+                    : '두 변의 길이를 넣어라 (0보다 큰 수)'}
+              </p>
+            </div>
+          ) : (
           <table className="settings__table">
             <thead>
               <tr>
                 <th>#</th>
                 <th>화면 좌표</th>
-                <th>실측 X (m)</th>
-                <th>실측 Y (m)</th>
+                <th>실측 X</th>
+                <th>실측 Y</th>
               </tr>
             </thead>
             <tbody>
@@ -640,6 +773,7 @@ function CameraPanel({
               ))}
             </tbody>
           </table>
+          )}
           <ReferenceFields
             reference={reference}
             picking={false}
