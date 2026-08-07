@@ -49,6 +49,16 @@ const COLOR = {
   zone: '#a855f7', // 보라 — 금지구역 폴리곤
 } as const
 
+/**
+ * 거리 라벨 단위.
+ *
+ * ★ **`_m` 은 스키마 필드명이며 그 숫자의 단위는 캘리브레이션이 정한다.** 미니어처
+ * 시연에서는 모형을 자로 잰 cm 를 그대로 넣으므로 화면에 나오는 숫자도 cm 다
+ * (기능명세서 §4.7 FN-CFG-01). 실물 현장으로 옮길 때는 캘리브레이션을 미터로 다시
+ * 하고 정책값도 되돌리므로, 그때 이 값을 `m` 으로 바꾼다 — 고칠 곳은 여기 하나다.
+ */
+const DISTANCE_UNIT = 'cm'
+
 /** 선 굵기(`view.unit` 배수). 한 곳에 모아 화면 전체의 인상을 함께 조정한다. */
 const LINE = {
   person: 3.0,
@@ -375,7 +385,12 @@ function render(
   }
   // 거리선은 박스 위에 그린다. 박스 테두리에 가려지면 라벨이 읽히지 않는다.
   for (const object of sample.objects) {
-    if (object.class === 'person') drawNearby(context, view, object)
+    if (object.class !== 'person') continue
+    // 확정된 근접 위반일 때만 적색이다. `alert_state === 'candidate'` 는 아직 위반이
+    // 아니므로(§5.1) 박스와 같은 기준으로 가른다.
+    const violating =
+      object.alert_state !== 'candidate' && object.violations.includes('proximity')
+    drawNearby(context, view, object, violating)
   }
 
   if (stale) drawStaleBadge(context, view, sample.ageMs)
@@ -486,10 +501,32 @@ function drawVehicle(
   )
 }
 
-/** 근접 거리선 — 적색 점선 + 거리 라벨 (기능명세서 §4.6 표시 규칙). */
-function drawNearby(context: CanvasRenderingContext2D, view: View, person: OverlayPerson): void {
+/**
+ * 근접 거리선 — 적색 점선 + 거리 라벨 (기능명세서 §4.6 표시 규칙).
+ *
+ * ★ **선이 그려지는 것과 위반은 다르다.** `nearby[]` 에는 스크리닝 반경
+ * (`screening_radius_m`) 안의 지게차가 **전부** 실려 오고(§2.2), 이 함수는 그것을
+ * 모두 그린다. 위반 후보가 되는 기준은 그보다 좁은 `proximity_threshold_m` 이고,
+ * 그마저도 3초 연속 관측을 채워야 서버가 확정한다.
+ *
+ * 위험 반경(`in_danger_zone`) 안이면 선을 굵게 해서 구분한다.
+ *
+ * ★ **적색은 확정된 근접 위반에만 쓴다.** 전부 적색으로 그리면 스크리닝 반경 안에
+ * 있을 뿐인 차량까지 위반처럼 읽혀서, 「선은 빨간데 확정이 안 된다」가 된다. 위반이
+ * 아닌 선은 차량 박스와 같은 앰버로 둬서 "이 차량과의 거리"라는 뜻만 남긴다.
+ *
+ * 판정은 서버가 준 `violations` · `alert_state` 로만 한다 — 거리와 임계값을 여기서
+ * 비교해 위반을 추론하지 않는다(`.claude/rules/front.md`).
+ */
+function drawNearby(
+  context: CanvasRenderingContext2D,
+  view: View,
+  person: OverlayPerson,
+  violating: boolean,
+): void {
   if (person.nearby.length === 0) return
   const from = point(view, person.foot_point)
+  const color = violating ? COLOR.violation : COLOR.vehicle
 
   for (const other of person.nearby) {
     const to = point(view, other.anchor)
@@ -500,7 +537,7 @@ function drawNearby(context: CanvasRenderingContext2D, view: View, person: Overl
     context.lineTo(to.x, to.y)
     haloStroke(
       context,
-      COLOR.violation,
+      color,
       view.unit * (other.in_danger_zone ? LINE.nearbyDanger : LINE.nearby),
     )
     context.restore()
@@ -510,8 +547,8 @@ function drawNearby(context: CanvasRenderingContext2D, view: View, person: Overl
       view,
       (from.x + to.x) / 2,
       (from.y + to.y) / 2,
-      COLOR.violation,
-      `${other.dist_m.toFixed(1)} m`,
+      color,
+      `${other.dist_m.toFixed(1)} ${DISTANCE_UNIT}`,
     )
   }
 }
