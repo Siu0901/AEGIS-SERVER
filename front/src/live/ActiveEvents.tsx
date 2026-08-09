@@ -94,7 +94,9 @@ export default function ActiveEvents({ camIds }: { camIds: number[] }) {
     <section className="card active">
       <header className="active__head">
         <h2 className="card__title">진행 중 이벤트</h2>
-        <span className="overview__hint">자동 갱신</span>
+        {/* 몇 건인지 적는다 — 목록이 5건에서 잘리므로 그 아래에 더 있다는 사실이
+            숫자로 보여야 한다. */}
+        {others.length > 0 && <span className="active__count">{others.length}건</span>}
       </header>
 
       {error && <p className="card__note events__error">{error}</p>}
@@ -120,38 +122,40 @@ export default function ActiveEvents({ camIds }: { camIds: number[] }) {
               상세
             </Link>
           </div>
-          <p className="urgent__why">
-            시정 유도가 아니라 <b>구조 대응</b>이다. 확인하지 않으면 유예 만료로 판정 불가가
-            된다.
-          </p>
         </div>
       ))}
 
-      {others.length === 0 && falls.length === 0 && (
-        <p className="card__note">진행 중인 이벤트가 없다.</p>
-      )}
-
-      <ul className="active__list">
-        {others.map((event) => (
-          <li key={event.event_id}>
-            <Link className="active__item" to={`/events?event=${event.event_id}`}>
-              <span className={`rows__mark rows__mark--${event.violation_type}`} />
-              <span className="rows__body">
-                <span className="rows__title">{violationLabel(event.violation_type)}</span>
-                <span className="rows__meta">
-                  #{event.track_id}
-                  {event.zone_id ? ` · ${event.zone_id}` : ''} ·{' '}
-                  {relativeTime(event.confirmed_at ?? event.detected_at)}
-                </span>
-                <span className={`badge badge--${STATUS_TONE[event.status]}`}>
-                  {statusLabel(event.status)}
-                  {event.alert_count > 1 ? ` · ${event.alert_count}회` : ''}
-                </span>
-              </span>
-            </Link>
-          </li>
-        ))}
-      </ul>
+      {/* ★ **다섯 줄 자리를 처음부터 잡아 둔다.** 높이를 내용에 맡기면 이벤트가 하나씩
+          들어올 때마다 이 카드가 자라면서 아래(챗봇)를 밀어낸다 — 관제 중에 화면이
+          계속 움직이는 것이 이 패널에서 가장 거슬리는 부분이다. 그래서 비어 있을 때도
+          같은 높이를 차지하고, 넘치면 **이 안에서만** 스크롤한다. */}
+      <div className="active__scroll">
+        {others.length === 0 && falls.length === 0 ? (
+          <p className="card__note">진행 중인 이벤트가 없다.</p>
+        ) : (
+          <ul className="active__list">
+            {others.map((event) => (
+              <li key={event.event_id}>
+                <Link className="active__item" to={`/events?event=${event.event_id}`}>
+                  <span className={`rows__mark rows__mark--${event.violation_type}`} />
+                  <span className="rows__body">
+                    <span className="rows__title">{violationLabel(event.violation_type)}</span>
+                    <span className="rows__meta">
+                      #{event.track_id}
+                      {event.zone_id ? ` · ${event.zone_id}` : ''} ·{' '}
+                      {relativeTime(event.confirmed_at ?? event.detected_at)}
+                    </span>
+                    <span className={`badge badge--${STATUS_TONE[event.status]}`}>
+                      {statusLabel(event.status)}
+                      {event.alert_count > 1 ? ` · ${event.alert_count}회` : ''}
+                    </span>
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
 
       {/* 이상 없는 채널도 적어 둔다 — 시안 2페이지가 「카메라 2 · 이상 없음」을 보여준다.
           진행 중 이벤트가 0건인 것과 그 카메라를 보고 있지 않은 것은 다르다. */}

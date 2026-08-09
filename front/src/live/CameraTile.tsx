@@ -11,6 +11,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { CameraStatus, OverlayPolicies, StreamState, Zone } from '../types/system'
 import OverlayCanvas, { type OverlayDebug } from './OverlayCanvas'
+import QuickControls from './QuickControls'
 import {
   OVERLAY_BUFFER_POLICY_KEY,
   preferenceFromLocation,
@@ -53,6 +54,11 @@ type Props = {
   zones: Zone[]
   /** 개발용 정합 진단 표시 (FN-UI-02). 꺼져 있으면 계산도 하지 않는다. */
   debug: boolean
+  /**
+   * 빠른 제어의 대상 선택지. 이 타일의 카메라만 넘기지 않는 이유는 「전체 카메라」
+   * 일시중지가 있어서다 — 한 대만 알면 그 선택지를 만들 수 없다(§4.5).
+   */
+  camIds: number[]
 }
 
 export default function CameraTile({
@@ -63,6 +69,7 @@ export default function CameraTile({
   policies,
   zones,
   debug,
+  camIds,
 }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [kind, setKind] = useState<PlaybackKind>('none')
@@ -70,6 +77,9 @@ export default function CameraTile({
   const [displayAt, setDisplayAt] = useState<string>('—')
   const [size, setSize] = useState<string>('—')
   const [probe, setProbe] = useState<OverlayDebug | null>(null)
+  // **기본은 접힌 상태다.** 펼친 채로 두면 타일이 밀려 영상이 작아지는데, 이 화면의
+  // 주역은 영상이다. 필요할 때만 열어 쓴다.
+  const [controlsOpen, setControlsOpen] = useState(false)
 
   const path = `cam${camera.cam_id}/main`
   const live = camera.main_state === 'ok'
@@ -237,6 +247,23 @@ export default function CameraTile({
       </figcaption>
 
       {error && <p className="tile__error">{error}</p>}
+
+      {/* 빠른 제어를 이 타일에 붙인다 — 대상 카메라를 고르는 단계를 없애려는 것이다.
+          우측 패널에 하나만 두면 「지금 보고 있는 이 채널」과 「선택된 대상」이 어긋날 수
+          있고, 방송은 잘못 나가면 되돌릴 수 없다. */}
+      <details
+        className="tile__controls"
+        open={controlsOpen}
+        onToggle={(event) => setControlsOpen((event.currentTarget as HTMLDetailsElement).open)}
+      >
+        <summary className="tile__controls-head">
+          <span className="tile__controls-caret" aria-hidden="true" />
+          빠른 제어
+        </summary>
+        <div className="tile__controls-body">
+          <QuickControls camIds={camIds} defaultTarget={camera.cam_id} embedded />
+        </div>
+      </details>
     </figure>
   )
 }

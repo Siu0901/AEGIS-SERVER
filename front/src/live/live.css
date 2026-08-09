@@ -6,9 +6,13 @@
    나가면 그건 관제 화면이 아니다. 그래서 화면 높이를 뷰포트에 못박아 **페이지 자체
    스크롤을 없애고**, 넘치는 쪽(우측 패널)만 자기 안에서 움직이게 한다.
    `--topbar-h` 는 상단 바, 40px 은 `.app__content` 의 위아래 패딩(20px×2)이다. */
+/* 우측 패널 폭은 `--live-side-w`(기본 300px)로 정하고 사이의 손잡이를 끌어 바꾼다.
+   영상 쪽은 `1fr` 이라 남는 폭을 자동으로 먹으므로 같이 자연스럽게 줄고 늘어난다.
+   최소·최대는 `LivePage` 가 끌기 중에 잡는다 — CSS 로만 잡으면 저장된 값이 창 크기가
+   바뀐 뒤 범위를 벗어난 채로 남는다. */
 .live {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 300px;
+  grid-template-columns: minmax(0, 1fr) auto var(--live-side-w, 300px);
   gap: 16px;
   align-items: stretch;
   height: calc(100vh - var(--topbar-h) - 40px);
@@ -34,6 +38,11 @@
   min-width: 0;
   /* 남은 높이를 타일이 나눠 먹으면 16:9 가 깨진다. 위에서부터 쌓고 남기는 둔다. */
   align-content: start;
+  /* ★ **타일이 행 높이에 맞춰 늘어나지 않게 한다.** 기본값(`stretch`)이면 한 타일에서
+     빠른 제어를 펼치는 순간 그 행이 높아지고, 같은 행의 다른 타일도 같이 늘어난다 —
+     펼치지 않은 쪽에 빈 공간이 생겨 **둘 다 열린 것처럼 보인다.** 각 타일이 자기
+     내용만큼만 차지하게 둔다. */
+  align-items: start;
 }
 
 .live__side {
@@ -46,6 +55,37 @@
   overscroll-behavior: contain;
   /* 스크롤바가 카드 테두리를 덮지 않도록 한 칸 띄운다. */
   padding-right: 4px;
+}
+
+/* ── 폭 조절 손잡이 ───────────────────────────────────
+   끌기 중에 커서가 영상 위로 가도 끊기지 않아야 하므로 포인터 캡처를 쓴다(`LivePage`).
+   여기서는 넉넉한 히트 영역과 잡을 곳 표시만 만든다 — 3px 선만 두면 못 잡는다. */
+.live__resizer {
+  width: 10px;
+  margin: 0 -3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: col-resize;
+  touch-action: none;
+  border-radius: 999px;
+}
+
+.live__resizer:hover,
+.live__resizer:active {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.live__resizer-grip {
+  width: 2px;
+  height: 42px;
+  border-radius: 999px;
+  background: var(--border-strong);
+}
+
+.live__resizer:hover .live__resizer-grip,
+.live__resizer:active .live__resizer-grip {
+  background: var(--accent);
 }
 
 /* 어두운 테마에 맞춘 얇은 스크롤바. 기본 스크롤바는 카드 위에서 눈에 튄다. */
@@ -82,21 +122,17 @@
   .live__side {
     overflow-y: visible;
   }
+
+  /* 1열에서는 끌 대상이 없다. */
+  .live__resizer {
+    display: none;
+  }
 }
 
 /* ── 단독 확대 보기 (FN-UI-02) ────────────────────────
-   확대 중에는 우측 패널을 접어 영상에 폭을 전부 준다. 분할 화면의 타일이 작아
-   위반 상황을 판별하기 어렵다는 것이 이 기능의 존재 이유이므로, 확대했는데도
-   영상이 조금밖에 안 커지면 아무것도 해결하지 못한다.
-   화면을 벗어나지 않도록 높이로 상한을 잡고 16:9 로 폭을 되돌려 가운데 놓는다. */
-.live--solo {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.live--solo .live__side {
-  display: none;
-}
-
+   확대 중에도 **우측 패널은 남긴다.** 확대한 채로 챗봇에 「지금 상황은?」을 묻는 것이
+   이 배치의 목적이라, 패널을 접으면 그 흐름이 끊긴다. 영상은 남은 폭 안에서 16:9 로
+   최대한 키우고, 폭이 더 필요하면 손잡이를 끌어 패널을 좁힌다. */
 .live__grid--solo {
   grid-template-columns: minmax(0, 1fr);
 }
@@ -501,6 +537,60 @@
   gap: 10px;
 }
 
+/* ── 카메라 타일 안의 빠른 제어 (접기) ─────────────────
+   기본은 접혀 있다. 펼치면 타일 아래로 자라고 영상 크기는 그대로 둔다. */
+.tile__controls {
+  border-top: 1px solid var(--border);
+}
+
+.tile__controls-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+
+/* 기본 삼각형을 지우고 직접 그린다 — 브라우저마다 모양과 자리가 다르다. */
+.tile__controls-head::-webkit-details-marker {
+  display: none;
+}
+
+.tile__controls-head:hover {
+  color: var(--text);
+}
+
+.tile__controls-caret {
+  width: 0;
+  height: 0;
+  border-left: 5px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform 120ms ease;
+}
+
+.tile__controls[open] .tile__controls-caret {
+  transform: rotate(90deg);
+}
+
+.tile__controls-body {
+  padding: 2px 10px 10px;
+}
+
+/* 타일 안에서는 카드 테두리를 두르지 않는다 — 타일이 이미 경계다. */
+.quick--embedded {
+  gap: 8px;
+}
+
+.quick--embedded .quick__group {
+  padding-top: 8px;
+}
+
 .active__head {
   display: flex;
   align-items: baseline;
@@ -522,6 +612,83 @@
 
 .active__list li + li {
   border-top: 1px solid var(--border);
+}
+
+/* ★ **다섯 줄 자리를 항상 차지한다.**
+   `max-height` 로 두면 이벤트가 하나씩 들어올 때마다 카드가 자라 아래(챗봇)를 밀어낸다.
+   `height` 로 못박아 비어 있을 때도 같은 자리를 잡고, 넘치면 이 안에서만 스크롤한다.
+   `--active-row-h` 는 `.active__item` 의 패딩(9px×2)과 3줄 본문에서 나온 실측값이다. */
+.active__scroll {
+  --active-row-h: 74px;
+  height: calc(var(--active-row-h) * 5);
+  overflow-y: auto;
+  /* 끝에 닿아도 우측 패널로 스크롤이 넘어가지 않게 한다. */
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+
+.active__scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.active__scroll::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+}
+
+.active__scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--text-dim);
+}
+
+.active__scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.active__count {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 관제 사이드의 챗봇 (FN-UI-06) ─────────────────────
+   이벤트 카드가 5줄로 고정이므로, 챗봇은 **남은 높이를 전부** 받아 그 안에서 대화가
+   스크롤된다. 높이를 내용에 맡기면 답이 길 때 사이드 전체가 늘어나 영상 옆이 계속
+   움직인다. */
+.live__side .chat--compact {
+  flex: 1 1 auto;
+  min-height: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.live__side .chat--compact .chat__log {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* 좁은 폭에서 예시 칩이 두 줄을 먹지 않게 줄인다. */
+.live__side .chat--compact .search__examples {
+  gap: 4px;
+}
+
+.live__side .chat--compact .chip {
+  font-size: 11px;
+  padding: 3px 7px;
+}
+
+/* 첨부 이미지·표가 사이드 폭을 넘지 않게 한다. */
+.live__side .chat--compact .chat__image img,
+.live__side .chat--compact .chat__clip img {
+  max-width: 100%;
+  height: auto;
+}
+
+.live__side .chat--compact .chat__table {
+  display: block;
+  overflow-x: auto;
 }
 
 .active__item {

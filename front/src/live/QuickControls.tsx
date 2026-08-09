@@ -61,9 +61,25 @@ const SOUND_CHOICES: { label: string; sound: string | null }[] = [
   })),
 ]
 
-export default function QuickControls({ camIds }: { camIds: number[] }) {
+type Props = {
+  camIds: number[]
+  /** 처음 선택돼 있을 대상. 카메라 타일에 붙을 때 그 타일의 채널을 넘긴다. */
+  defaultTarget?: number | null
+  /**
+   * 카메라 타일 안에 들어가는가.
+   *
+   * 들어갈 때는 **제목과 카드 테두리를 뺀다** — 타일이 이미 어느 카메라인지 말하고
+   * 있고, 접었다 펴는 `summary` 가 제목 역할을 한다. 두 겹으로 두면 좁은 타일에서
+   * 실제 조작 영역이 사라진다.
+   */
+  embedded?: boolean
+}
+
+export default function QuickControls({ camIds, defaultTarget, embedded = false }: Props) {
   const cameraName = useCameraName()
-  const [target, setTarget] = useState<number | null>(camIds[0] ?? null)
+  const [target, setTarget] = useState<number | null>(
+    defaultTarget !== undefined ? defaultTarget : (camIds[0] ?? null),
+  )
   const [sound, setSound] = useState<string | null>(null)
   const [level, setLevel] = useState<AlertLevel>(2)
   const [notifyDevice, setNotifyDevice] = useState(true)
@@ -179,8 +195,8 @@ export default function QuickControls({ camIds }: { camIds: number[] }) {
   const active = Object.entries(mutes).filter(([, state]) => state.muted)
 
   return (
-    <section className="card quick">
-      <h2 className="card__title">빠른 제어</h2>
+    <section className={embedded ? 'quick quick--embedded' : 'card quick'}>
+      {!embedded && <h2 className="card__title">빠른 제어</h2>}
 
       {/* 꺼져 있다는 사실을 가장 먼저 보여준다. 이것이 이 패널의 존재 이유다. */}
       {active.length > 0 && (
@@ -259,10 +275,6 @@ export default function QuickControls({ camIds }: { camIds: number[] }) {
         >
           방송 송출
         </button>
-        <p className="card__note">
-          일시중지 중에도 나간다 — 사람이 지금 누른 방송이므로 정비 중이라도 그 사람이
-          의도한 것이다.
-        </p>
       </div>
 
       <div className="quick__group">
@@ -294,11 +306,6 @@ export default function QuickControls({ camIds }: { camIds: number[] }) {
             즉시 해제
           </button>
         </div>
-        <p className="card__note">
-          기한 없는 중지는 만들 수 없다 — 「기본」은 정책값(<code>mute_default_duration_s</code>)
-          을 서버가 붙인다. 멈춘 동안 확정된 이벤트는 <b>시정률에서 제외</b>되고
-          「방송 없이 확정」으로 따로 집계된다(§4.8).
-        </p>
       </div>
 
       {message && <p className="quick__ok">{message}</p>}
