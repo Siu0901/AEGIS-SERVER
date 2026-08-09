@@ -338,7 +338,6 @@ export default function LivePage() {
               policies={policies}
               zones={zones.filter((zone) => zone.cam_id === camera.cam_id)}
               debug={debug}
-              camIds={cameras.map((item) => item.cam_id)}
             />
           ))}
         </div>

@@ -62,9 +62,12 @@ const SOUND_CHOICES: { label: string; sound: string | null }[] = [
 ]
 
 type Props = {
-  camIds: number[]
-  /** 처음 선택돼 있을 대상. 카메라 타일에 붙을 때 그 타일의 채널을 넘긴다. */
-  defaultTarget?: number | null
+  /**
+   * 이 패널이 조작하는 카메라. **고를 수 없다** — 패널이 카메라 타일마다 하나씩
+   * 붙으므로 대상은 그 타일의 채널로 이미 정해져 있다. 선택란을 두면 「보고 있는
+   * 채널」과 「선택된 대상」이 어긋날 수 있고, 방송은 잘못 나가면 되돌릴 수 없다.
+   */
+  camId: number
   /**
    * 카메라 타일 안에 들어가는가.
    *
@@ -75,11 +78,9 @@ type Props = {
   embedded?: boolean
 }
 
-export default function QuickControls({ camIds, defaultTarget, embedded = false }: Props) {
+export default function QuickControls({ camId, embedded = false }: Props) {
   const cameraName = useCameraName()
-  const [target, setTarget] = useState<number | null>(
-    defaultTarget !== undefined ? defaultTarget : (camIds[0] ?? null),
-  )
+  const target = camId
   const [sound, setSound] = useState<string | null>(null)
   const [level, setLevel] = useState<AlertLevel>(2)
   const [notifyDevice, setNotifyDevice] = useState(true)
@@ -90,16 +91,17 @@ export default function QuickControls({ camIds, defaultTarget, embedded = false 
   const [error, setError] = useState<string | null>(null)
   const [now, setNow] = useState(() => Date.now())
 
-  // 카메라별 창과 **전체 대상 창**을 따로 읽는다. 전체 중지가 걸려 있으면 카메라별
+  // 이 카메라의 창과 **전체 대상 창**을 따로 읽는다. 전체 중지가 걸려 있으면 카메라별
   // 창이 없어도 조용하므로, 하나만 보면 "이 카메라는 안 멈췄다"고 잘못 표시한다.
+  // (전체 중지는 이 화면에서 걸 수 없지만 다른 경로로 걸려 있을 수 있다.)
   const refresh = useCallback(
     (signal?: AbortSignal) => {
-      const targets: (number | null)[] = [null, ...camIds]
-      void Promise.all(targets.map((camId) => fetchMuteState(camId, signal)))
+      const targets: (number | null)[] = [null, camId]
+      void Promise.all(targets.map((scope) => fetchMuteState(scope, signal)))
         .then((states) => {
           const next: Record<string, MuteAlertResponse> = {}
-          targets.forEach((camId, index) => {
-            next[key(camId)] = states[index]
+          targets.forEach((scope, index) => {
+            next[key(scope)] = states[index]
           })
           setMutes(next)
         })
@@ -108,7 +110,7 @@ export default function QuickControls({ camIds, defaultTarget, embedded = false 
           setError(cause instanceof Error ? cause.message : String(cause))
         })
     },
-    [camIds],
+    [camId],
   )
 
   useEffect(() => {
@@ -156,7 +158,6 @@ export default function QuickControls({ camIds, defaultTarget, embedded = false 
   }, [anyMuted])
 
   const broadcast = () => {
-    if (target === null) return
     setMessage(null)
     setError(null)
     void postManualAlert({ cam_id: target, sound, level, notify_device: notifyDevice })
@@ -213,23 +214,6 @@ export default function QuickControls({ camIds, defaultTarget, embedded = false 
         </ul>
       )}
 
-      <label className="quick__field">
-        <span>대상</span>
-        <select
-          value={target === null ? 'all' : String(target)}
-          onChange={(event) =>
-            setTarget(event.target.value === 'all' ? null : Number(event.target.value))
-          }
-        >
-          {camIds.map((camId) => (
-            <option key={camId} value={String(camId)}>
-              {cameraName(camId)}
-            </option>
-          ))}
-          <option value="all">전체 카메라</option>
-        </select>
-      </label>
-
       <div className="quick__group">
         <h3 className="quick__head">수동 방송 송출</h3>
         <label className="quick__field">
@@ -267,12 +251,7 @@ export default function QuickControls({ camIds, defaultTarget, embedded = false 
           {/* §4.5 `notify_device` — 끄면 스피커만 울린다. */}
           <span>경광등도 함께 (level 로 MQTT 발행)</span>
         </label>
-        <button
-          type="button"
-          className="btn btn--primary"
-          disabled={target === null}
-          onClick={broadcast}
-        >
+        <button type="button" className="btn btn--primary" onClick={broadcast}>
           방송 송출
         </button>
       </div>

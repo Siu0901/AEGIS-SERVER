@@ -625,6 +625,14 @@
   /* 끝에 닿아도 우측 패널로 스크롤이 넘어가지 않게 한다. */
   overscroll-behavior: contain;
   padding-right: 4px;
+  /* ★ **위아래로 끌어 높이를 바꾼다.** 시연에서 이벤트를 더 보고 싶을 때가 있고,
+     반대로 챗봇에 자리를 더 주고 싶을 때가 있다. 브라우저 기본 손잡이를 쓰므로
+     JS 가 필요 없다 — `overflow` 가 `visible` 이 아니어야 동작한다.
+     상·하한을 둔다: 두 줄 아래로 줄이면 목록이 목록이 아니고, 열두 줄을 넘으면
+     챗봇이 사라진다. */
+  resize: vertical;
+  min-height: calc(var(--active-row-h) * 2);
+  max-height: calc(var(--active-row-h) * 12);
 }
 
 .active__scroll::-webkit-scrollbar {

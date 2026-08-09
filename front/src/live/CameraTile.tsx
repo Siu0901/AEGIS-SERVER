@@ -54,11 +54,6 @@ type Props = {
   zones: Zone[]
   /** 개발용 정합 진단 표시 (FN-UI-02). 꺼져 있으면 계산도 하지 않는다. */
   debug: boolean
-  /**
-   * 빠른 제어의 대상 선택지. 이 타일의 카메라만 넘기지 않는 이유는 「전체 카메라」
-   * 일시중지가 있어서다 — 한 대만 알면 그 선택지를 만들 수 없다(§4.5).
-   */
-  camIds: number[]
 }
 
 export default function CameraTile({
@@ -69,7 +64,6 @@ export default function CameraTile({
   policies,
   zones,
   debug,
-  camIds,
 }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [kind, setKind] = useState<PlaybackKind>('none')
@@ -261,7 +255,7 @@ export default function CameraTile({
           빠른 제어
         </summary>
         <div className="tile__controls-body">
-          <QuickControls camIds={camIds} defaultTarget={camera.cam_id} embedded />
+          <QuickControls camId={camera.cam_id} embedded />
         </div>
       </details>
     </figure>
