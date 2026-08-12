@@ -281,13 +281,22 @@ def prepared_path(stream: Stream, source: str | None) -> Path:
     return PREPARED_DIR / f"{safe}_{stream.kind}_{stream.size}_{FPS}fps.mp4"
 
 
-def require_no_b_frames(clip: Path, stream: Stream) -> None:
-    """준비된 클립에 B-프레임이 없는지 확인한다. 있으면 **송출하지 않고 오류를 낸다.**
+def require_usable_clip(clip: Path, stream: Stream) -> None:
+    """준비된 클립이 **그대로 송출 가능한지** 확인한다. 아니면 지우고 오류를 낸다.
 
-    WebRTC 는 B-프레임 H264 를 받지 못한다 — mediamtx 가 세션을 열자마자
+    두 가지를 본다.
+
+    **B-프레임.** WebRTC 는 B-프레임 H264 를 받지 못한다 — mediamtx 가 세션을 열자마자
     `WebRTC doesn't support H264 streams with B-frames` 로 닫아버리고, 화면에는
     검은 타일만 남는다. 그 실패는 **브라우저 콘솔에도 서버 로그에도 안 보여서**
     mediamtx 컨테이너 로그를 뒤져야 원인을 안다(실제로 그렇게 찾았다).
+
+    **코덱 파라미터(profile · pix_fmt).** 파일이 반쯤 쓰였거나 두 프로세스가 같은 경로에
+    겹쳐 쓰면 avcC(SPS/PPS)가 깨진다. 그러면 크기·프레임수는 멀쩡해 보이는데
+    `profile=unknown` `pix_fmt=unknown` 이 되고, `-c copy` 송출은 SDP 를 만들지 못해
+    **RTP 를 한 장도 보내지 않는다.** mediamtx 는 10초 뒤 `i/o timeout` 으로 퍼블리셔를
+    끊고, 그 시점에야 fake_cams 가 죽는다 — 원인에서 멀리 떨어진 곳에서 터진다.
+    크기와 has_b_frames 만 보던 검사가 이것을 통과시켰다.
 
     조용히 송출하고 화면이 검은 것보다, 여기서 멈추고 이유를 말하는 편이 낫다
     (CLAUDE.md 절대규칙 9).
@@ -297,20 +306,34 @@ def require_no_b_frames(clip: Path, stream: Stream) -> None:
         raise CamsError("ffprobe 를 찾을 수 없다 — 준비된 클립을 검사할 수 없다")
     result = subprocess.run(
         [ffprobe, "-v", "error", "-select_streams", "v:0",
-         "-show_entries", "stream=has_b_frames",
-         "-of", "default=noprint_wrappers=1:nokey=1", str(clip)],
+         "-show_entries", "stream=has_b_frames,profile,pix_fmt",
+         "-of", "default=noprint_wrappers=1", str(clip)],
         capture_output=True,
         check=False,
     )  # fmt: skip
     text = result.stdout.decode("utf-8", "replace").strip()
     if result.returncode != 0 or not text:
         raise CamsError(f"{stream.label} 준비된 클립을 읽을 수 없다: {clip}")
-    if text != "0":
+    fields = dict(line.split("=", 1) for line in text.splitlines() if "=" in line)
+    if fields.get("has_b_frames") != "0":
         clip.unlink(missing_ok=True)
         raise CamsError(
-            f"{stream.label} 준비된 클립에 B-프레임이 있다 (has_b_frames={text}).\n"
+            f"{stream.label} 준비된 클립에 B-프레임이 있다 "
+            f"(has_b_frames={fields.get('has_b_frames')}).\n"
             "  WebRTC 가 이 스트림을 받지 못해 화면이 검게 남는다.\n"
             "  낡은 캐시를 지웠으니 다시 실행하면 -bf 0 으로 새로 인코딩한다."
+        )
+    broken = [
+        f"{key}={fields.get(key)}"
+        for key in ("profile", "pix_fmt")
+        if fields.get(key) in (None, "", "unknown")
+    ]
+    if broken:
+        clip.unlink(missing_ok=True)
+        raise CamsError(
+            f"{stream.label} 준비된 클립의 코덱 파라미터가 깨졌다 ({', '.join(broken)}).\n"
+            "  avcC(SPS/PPS)를 읽지 못하는 파일이라 `-c copy` 송출이 SDP 를 만들지 못한다.\n"
+            "  깨진 캐시를 지웠으니 다시 실행하면 새로 인코딩한다."
         )
 
 
@@ -337,12 +360,25 @@ def prepare_clip(ffmpeg: str, stream: Stream, source: str | None, font: str) -> 
     if destination.exists() and destination.stat().st_size > 0:
         # **캐시도 검사한다.** 규격이 바뀌기 전에 만든 클립이 남아 있으면 그것을 그대로
         # 송출하게 되고, 화면이 검은 채로 이유가 드러나지 않는다.
-        require_no_b_frames(destination, stream)
+        require_usable_clip(destination, stream)
         say(f"      {stream.label:<11} 준비된 클립 재사용  {destination.name}")
         return destination
 
     destination.parent.mkdir(parents=True, exist_ok=True)
-    say(f"      {stream.label:<11} 클립 인코딩 중… ({PREPARED_SECONDS}초 · 1회만)")
+    # 소스가 있으면 `-t` 는 상한일 뿐 파일 전체가 그대로 담긴다 — 길이를 단정하지 않는다.
+    # `30초`라고 적어두고 54초 영상을 굽고 있으면 그 자체로 오해다.
+    length = "소스 길이 그대로" if source else f"{PREPARED_SECONDS}초"
+    say(f"      {stream.label:<11} 클립 인코딩 중… ({length} · 1회만)")
+    # ★ **최종 경로에 직접 쓰지 않는다.** 캐시 키(`prepared_path`)에는 카메라 번호가
+    #   없다 — 규격이 같으면 cam1 과 cam2 가 같은 파일을 쓰는 것이 맞다. 그런데
+    #   `tasks.py dev` 는 cam1·cam2 를 **별도 프로세스**로 띄우므로, 캐시가 비어 있으면
+    #   두 ffmpeg 이 같은 경로에 동시에 쓴다. 결과 파일은 크기도 프레임 수도 그럴듯한데
+    #   avcC 가 깨져 `-c copy` 송출이 RTP 를 한 장도 못 보내고, 10초 뒤 mediamtx 가
+    #   퍼블리셔를 끊어 스택 전체가 내려간다. PID 를 붙인 임시 파일에 굽고 검사까지
+    #   끝낸 뒤 원자적으로 옮기면 누가 이기든 온전한 파일만 남는다.
+    #   확장자는 `.mp4` 로 남긴다 — ffmpeg 은 출력 파일명의 확장자로 muxer 를 고르므로
+    #   `.part` 로 끝나면 `Unable to choose an output format` 으로 굽기도 전에 죽는다.
+    staging = destination.with_name(f"{destination.stem}.{os.getpid()}.part.mp4")
     argv = [
         ffmpeg,
         "-hide_banner",
@@ -384,16 +420,19 @@ def prepare_clip(ffmpeg: str, stream: Stream, source: str | None, font: str) -> 
         "-keyint_min", str(GOP),
         "-sc_threshold", "0",
         "-movflags", "+faststart",
-        str(destination),
+        str(staging),
     ]  # fmt: skip
     del font  # 타임코드를 굽지 않으므로 폰트가 필요 없다.
     result = subprocess.run(argv, capture_output=True, check=False)
-    if result.returncode != 0 or not destination.exists():
-        destination.unlink(missing_ok=True)
+    if result.returncode != 0 or not staging.exists():
+        staging.unlink(missing_ok=True)
         detail = result.stderr.decode("utf-8", "replace").strip().splitlines()[-6:]
         raise CamsError(
             f"{stream.label} 클립 준비 실패 (종료코드 {result.returncode})\n" + "\n".join(detail)
         )
+    # 방금 구운 것도 검사한다 — 캐시만 검사하면 첫 실행에서 깨진 파일이 그대로 나간다.
+    require_usable_clip(staging, stream)
+    staging.replace(destination)
     return destination
 
 
