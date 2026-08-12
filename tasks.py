@@ -159,40 +159,82 @@ def listeners_on(port: int) -> list[tuple[int, str]]:
     `psutil` 을 새로 넣지 않고 표준 라이브러리와 OS 도구만 쓴다. 실패하면 조용히 빈
     목록을 돌려주지 않고 예외를 올린다 — "확인할 수 없었다"를 "비어 있다"로 바꾸면
     이 가드가 있으나 마나가 된다(절대규칙 9).
+
+    ★ **OS 를 묻지 않고 있는 도구를 쓴다.** `ss` 는 리눅스(iproute2)에만 있고 macOS 에는
+    `lsof` 가 있다. `sys.platform` 으로 가르면 타입 검사기가 그것을 상수로 좁혀 반대편
+    분기를 도달 불가로 지운다 — 세 OS(윈도우 개발기 · macOS 개발기 · 젯슨)에서 같은
+    명령이 돌아야 하는 파일이라 그 방식을 쓸 수 없다.
     """
-    argv = ["netstat", "-ano", "-p", "TCP"] if _IS_WINDOWS else ["ss", "-ltnp"]
+    if _IS_WINDOWS:
+        return _listeners_netstat(port)
+    if shutil.which("ss") is not None:
+        return _listeners_ss(port)
+    if shutil.which("lsof") is not None:
+        return _listeners_lsof(port)
+    raise TaskError(
+        "포트 점유를 확인할 도구가 없다: ss · lsof 둘 다 없다\n"
+        "  이 확인은 건너뛰지 않는다. 옛 프로세스가 포트를 쥔 채로 dev 를 띄우면\n"
+        "  새 코드를 확인한 줄 알고 옛 코드를 보게 된다."
+    )
+
+
+def _probe(argv: Sequence[str], *, allow_empty_failure: bool = False) -> str:
+    """도구를 돌려 표준출력을 돌려준다. 없거나 실패하면 예외다."""
     exe = shutil.which(argv[0])
     if exe is None:
-        raise TaskError(
-            f"포트 점유를 확인할 도구가 없다: {argv[0]}\n"
-            "  이 확인은 건너뛰지 않는다. 옛 프로세스가 포트를 쥔 채로 dev 를 띄우면\n"
-            "  새 코드를 확인한 줄 알고 옛 코드를 보게 된다."
-        )
+        raise TaskError(f"포트 점유를 확인할 도구가 없다: {argv[0]}")
     proc = subprocess.run(
         [exe, *argv[1:]], capture_output=True, text=True, encoding="utf-8",
         errors="replace", check=False,
     )  # fmt: skip
-    if proc.returncode != 0:
+    # `lsof` 는 **찾은 것이 없으면 1** 로 끝난다. 그것은 실패가 아니라 「아무도 안 듣는다」다.
+    if proc.returncode != 0 and not (allow_empty_failure and not proc.stdout.strip()):
         raise TaskError(f"포트 점유 확인 실패 ({argv[0]}): {proc.stderr.strip()}")
+    return proc.stdout
 
+
+def _named(pids: set[int]) -> list[tuple[int, str]]:
+    return sorted((pid, process_name(pid)) for pid in pids)
+
+
+def _listeners_netstat(port: int) -> list[tuple[int, str]]:
+    """윈도우. `netstat -ano` 의 `PROTO LOCAL FOREIGN STATE PID`."""
     pids: set[int] = set()
-    for line in proc.stdout.splitlines():
+    for line in _probe(["netstat", "-ano", "-p", "TCP"]).splitlines():
         if f":{port}" not in line:
             continue
-        if _IS_WINDOWS:
-            parts = line.split()
-            # PROTO  LOCAL  FOREIGN  STATE  PID  — LISTENING 만 본다. 나가는 연결이
-            # 우연히 같은 번호를 원격 포트로 쓰면 여기 걸리는데, 그건 선점이 아니다.
-            if len(parts) < 5 or parts[3] != "LISTENING":
-                continue
-            if not parts[1].endswith(f":{port}"):
-                continue
-            pids.add(int(parts[4]))
-        else:
-            for token in line.split():
-                if token.startswith("users:"):
-                    pids.update(int(value) for value in _PID_RE.findall(token))
-    return sorted((pid, process_name(pid)) for pid in pids)
+        parts = line.split()
+        # LISTENING 만 본다. 나가는 연결이 우연히 같은 번호를 원격 포트로 쓰면 여기
+        # 걸리는데, 그건 선점이 아니다.
+        if len(parts) < 5 or parts[3] != "LISTENING":
+            continue
+        if not parts[1].endswith(f":{port}"):
+            continue
+        pids.add(int(parts[4]))
+    return _named(pids)
+
+
+def _listeners_ss(port: int) -> list[tuple[int, str]]:
+    """리눅스·젯슨. `ss -ltnp` 의 `users:(("uvicorn",pid=1234,fd=7))`."""
+    pids: set[int] = set()
+    for line in _probe(["ss", "-ltnp"]).splitlines():
+        if f":{port}" not in line:
+            continue
+        for token in line.split():
+            if token.startswith("users:"):
+                pids.update(int(value) for value in _PID_RE.findall(token))
+    return _named(pids)
+
+
+def _listeners_lsof(port: int) -> list[tuple[int, str]]:
+    """macOS. `-t` 로 PID 만 받으므로 파싱이 없다 — 형식이 바뀌어 깨질 여지도 없다.
+
+    `-sTCP:LISTEN` 이 듣는 소켓만 고르고 `-nP` 가 이름 해석을 끈다(느려지고, 포트가
+    서비스 이름으로 바뀌어 대조가 어긋난다).
+    """
+    argv = ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"]
+    output = _probe(argv, allow_empty_failure=True)
+    return _named({int(line) for line in output.split() if line.isdigit()})
 
 
 #: `ss -ltnp` 의 `users:(("uvicorn",pid=1234,fd=7))` 에서 PID 만 뽑는다.

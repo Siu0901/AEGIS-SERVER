@@ -151,3 +151,44 @@ def test_listeners_on_reports_a_real_listener() -> None:
     import os
 
     assert [pid for pid, _ in found] == [os.getpid()], f"{port} 를 연 것은 이 프로세스다: {found}"
+
+
+def test_listeners_lsof_parses_pid_only_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    """macOS 경로(`lsof -t`)의 파싱. **다른 OS 에서도 검사된다.**
+
+    `lsof` 는 윈도우·리눅스 개발기에 없을 수 있어서 실제 실행으로는 이 경로가 영영
+    검사되지 않는다. 그러면 macOS 에서 처음 돌릴 때 깨지고, 그때는 가드가 조용히
+    0건을 돌려주는 모습으로 나타난다(절대규칙 9).
+    """
+    monkeypatch.setattr("tasks._probe", lambda argv, **kwargs: "4321\n4322\n")
+    monkeypatch.setattr("tasks.process_name", lambda pid: f"proc{pid}")
+    assert tasks._listeners_lsof(8000) == [(4321, "proc4321"), (4322, "proc4322")]
+
+
+def test_listeners_lsof_treats_no_match_as_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`lsof` 는 찾은 것이 없으면 **1로 끝난다** — 그것을 실패로 올리면 안 된다.
+
+    올리면 포트가 비어 있을 때마다 `dev` 가 못 뜬다.
+    """
+    calls: list[dict[str, object]] = []
+
+    def fake_probe(argv: object, **kwargs: object) -> str:
+        calls.append(kwargs)
+        return ""
+
+    monkeypatch.setattr("tasks._probe", fake_probe)
+    assert tasks._listeners_lsof(8000) == []
+    assert calls == [{"allow_empty_failure": True}], "빈 결과를 허용하고 물어야 한다"
+
+
+def test_probe_raises_when_tool_fails_with_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    """빈 출력이 아니면서 실패한 것은 **진짜 실패다** — 삼키지 않는다."""
+    import subprocess as sp
+
+    monkeypatch.setattr("tasks.shutil.which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        "tasks.subprocess.run",
+        lambda *args, **kwargs: sp.CompletedProcess(args, 1, "무언가", "권한 없음"),
+    )
+    with pytest.raises(tasks.TaskError, match="포트 점유 확인 실패"):
+        tasks._probe(["lsof", "-t"], allow_empty_failure=True)
