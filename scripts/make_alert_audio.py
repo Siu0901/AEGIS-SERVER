@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -91,10 +92,17 @@ def synthesize(text: str, target: Path) -> None:
 
     스크립트를 임시 파일로 넘긴다 — 명령줄에 한글을 실으면 콘솔 코드페이지에서 깨진다.
     """
-    if sys.platform != "win32":
+    # ★ **`sys.platform` 으로 가르지 않는다.** 어느 쪽으로 쓰든 반대편 플랫폼에서 한
+    #   분기가 도달 불가가 되어 `warn_unreachable` 이 잡는다(실측: darwin·win32 양쪽에서
+    #   번갈아 걸렸다). 필요한 것은 「윈도우인가」가 아니라 **PowerShell 이 있는가**이므로
+    #   그것을 직접 확인한다 — 검사가 실제 의존성과 같아지고, mypy 가 정적으로 판정할 수
+    #   없으니 죽은 분기도 생기지 않는다.
+    powershell = shutil.which("powershell")
+    if powershell is None:
         msg = (
-            "이 스크립트는 Windows SAPI 를 쓴다. 다른 OS 에서는 음원을 직접 녹음하거나 "
-            "가진 TTS 로 만들어 assets/audio 에 넣어라 (16kHz · 16bit · 모노 wav)."
+            "PowerShell 을 찾지 못했다 — 이 스크립트는 Windows SAPI 를 쓴다. "
+            "다른 OS 에서는 음원을 직접 녹음하거나 가진 TTS 로 만들어 "
+            "assets/audio 에 넣어라 (16kHz · 16bit · 모노 wav)."
         )
         raise SystemExit(msg)
 
@@ -125,7 +133,7 @@ $s.Dispose()
         script_path = Path(handle.name)
     try:
         result = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-File", str(script_path)],
+            [powershell, "-NoProfile", "-NonInteractive", "-File", str(script_path)],
             capture_output=True,
             text=True,
             encoding="utf-8",

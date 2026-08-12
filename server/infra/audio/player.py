@@ -68,15 +68,23 @@ class WinsoundPlayer:
     name = "winsound"
 
     def play(self, path: Path) -> None:
+        # ★ **`getattr` 로 꺼낸다.** `winsound` 스텁은 윈도우에서만 속성을 갖는다. 점으로
+        #   직접 쓰면 macOS·리눅스에서 mypy 가 `PlaySound`·`SND_*` 를 못 찾고, 그렇다고
+        #   `sys.platform` 으로 감싸면 반대편 플랫폼에서 그 블록이 도달 불가가 되어
+        #   `warn_unreachable` 이 잡는다(실측). 어느 쪽에서도 조용하지 않은 방법은 이것뿐이다.
+        #   플랫폼 판단은 `resolve_player` 가 이미 한다.
         import winsound
 
         # SND_FILENAME: 인자를 파일 경로로 읽는다 / SND_ASYNC: 기다리지 않는다
         # SND_NODEFAULT: 파일을 못 읽어도 기본 삑 소리로 대신하지 않는다 —
         # 그 대체음이 나면 "경고가 나갔다"로 착각하게 된다.
-        winsound.PlaySound(
-            str(path),
-            winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT,
+        play_sound = getattr(winsound, "PlaySound")  # noqa: B009
+        flags = (
+            getattr(winsound, "SND_FILENAME")  # noqa: B009
+            | getattr(winsound, "SND_ASYNC")  # noqa: B009
+            | getattr(winsound, "SND_NODEFAULT")  # noqa: B009
         )
+        play_sound(str(path), flags)
 
 
 class CommandPlayer:

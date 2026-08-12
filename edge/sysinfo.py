@@ -77,7 +77,10 @@ def _windows_rss_mb() -> int:
     info.restype = wintypes.BOOL
 
     if not info(get_current(), ctypes.byref(counters), counters.cb):
-        msg = f"GetProcessMemoryInfo 실패 (GetLastError={ctypes.get_last_error()})"
+        # `get_last_error` 도 윈도우 스텁에만 있다 — `windll` 과 같은 이유로 `getattr` 다.
+        last_error = getattr(ctypes, "get_last_error", None)
+        code = last_error() if last_error is not None else "?"
+        msg = f"GetProcessMemoryInfo 실패 (GetLastError={code})"
         raise OSError(msg)
     return int(counters.WorkingSetSize) // _BYTES_PER_MB
 

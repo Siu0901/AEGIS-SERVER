@@ -241,14 +241,21 @@ def _yield_cpu() -> None:
 
 
 def _yield_windows() -> bool:
+    # `ctypes.windll` 은 **윈도우 스텁에만 있다.** 직접 쓰면 macOS·리눅스에서 mypy 가
+    # `Module has no attribute "windll"` 로 잡는다 — 같은 코드가 세 플랫폼에서 검사되므로
+    # `getattr` 로 꺼낸다(`edge/sysinfo.py` 와 같은 처리).
+    windll = getattr(ctypes, "windll", None)
+    if windll is None:  # pragma: no cover - 윈도우에서는 도달하지 않는다
+        return False
+
     # **양쪽 함수의 형을 다 지정해야 한다.** `GetCurrentProcess` 의 반환형만 넓히면
     # 그 값(0xFFFF…FFFF)이 `SetPriorityClass` 의 기본 인자형 `c_int` 에 들어가지 못해
     # `OverflowError: int too long to convert` 로 죽는다.
     below_normal = 0x00004000
-    get_current = ctypes.windll.kernel32.GetCurrentProcess
+    get_current = windll.kernel32.GetCurrentProcess
     get_current.restype = ctypes.c_void_p
     get_current.argtypes = []
-    set_priority = ctypes.windll.kernel32.SetPriorityClass
+    set_priority = windll.kernel32.SetPriorityClass
     set_priority.argtypes = [ctypes.c_void_p, ctypes.c_uint]
     set_priority.restype = ctypes.c_int
     return bool(set_priority(get_current(), below_normal))
