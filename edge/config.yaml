@@ -18,6 +18,7 @@ runtime:
 
   # CPU 전용이다. 노트북에 CUDA 가 없고, 있어도 이 단계에서 쓰지 않는다.
   providers:
+    - CoreMLExecutionProvider
     - CPUExecutionProvider
 
   # 0 이면 onnxruntime 기본값(논리 코어 수)에 맡긴다.
