@@ -143,4 +143,23 @@ testpaths = [
     "scripts/tests",
 ]
 addopts = "-q --strict-markers --strict-config"
-filterwarnings = ["error"]
+# 경고는 실패다. 조용히 쌓이는 DeprecationWarning 이 나중에 동작 변경으로 터지는 것을
+# 막는다(절대규칙 9). 예외는 **한 건씩, 이유와 해제 조건을 적어서** 추가한다 —
+# 카테고리 통째로 끄면 그 순간 이 가드는 없는 것과 같다.
+filterwarnings = [
+    "error",
+    # google-genai 2.16.0 이 Python 3.14 에서 import 되는 것만으로 낸다.
+    #
+    #   google/genai/types.py:42
+    #     VersionedUnionType = Union[builtin_types.UnionType, _UnionGenericAlias]
+    #   → typing.py 가 `_UnionGenericAlias` deprecated 경고를 낸다.
+    #
+    # `server/app/main.py` 가 기동 시 `create_cloud()` 를 거쳐 이 모듈을 물기 때문에
+    # 서버를 임포트하는 테스트 10건이 전부 수집 단계에서 죽는다. 우리 코드가 고칠 수
+    # 있는 것이 아니고, 우회하려면 클라우드 어댑터를 지연 임포트로 바꿔야 하는데
+    # 그건 경고 하나 때문에 기동 경로를 비트는 일이다.
+    #
+    # **해제 조건**: google-genai 가 `_UnionGenericAlias` 사용을 걷어내면 이 줄을
+    # 지운다. 지운 뒤 pytest 가 통과하면 그때가 됐다는 뜻이다.
+    "ignore:'_UnionGenericAlias' is deprecated:DeprecationWarning",
+]
