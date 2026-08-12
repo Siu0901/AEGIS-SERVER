@@ -471,23 +471,34 @@ def task_migrate() -> int:
 
 # 카메라를 1·2 로 나눠 띄우는 이유: 한 대만 껐다 켜서 재연결을 확인하려면 프로세스가
 # 나뉘어 있어야 한다. 하나로 묶으면 cam2 를 끄는 순간 cam1 까지 같이 내려간다.
-def dev_services() -> tuple[tuple[str, list[str]], ...]:
+def dev_services(
+    sources: Sequence[str] = (),
+    *,
+    rec: bool = True,
+) -> tuple[tuple[str, list[str]], ...]:
     """`dev` 가 한 터미널에서 함께 띄우는 것들.
 
     상수가 아니라 함수인 이유: 카메라 명령이 `cams_argv`(기본 `--copy`)에서 나오므로
     그 함수보다 먼저 평가될 수 없다. 여기서 한 번 더 적으면 `cams` 와 `dev` 의 기본
     동작이 갈릴 수 있고, 그러면 "cams 로는 가벼운데 dev 로는 무겁다"가 된다.
+
+    `sources` 는 `cams --source` 와 같은 값이다 — `dev` 로 띄울 때도 테스트 패턴 대신
+    실제 영상을 보려면 필요하다. `rec=False` 는 녹화 컴포넌트를 빼고 띄운다.
     """
-    return (
-    ("cam1", cams_argv(cams="1")),
-    ("cam2", cams_argv(cams="2")),
-    ("rec", ["uv", "run", "python", "-m", "recorder.main"]),
+    services = [
+    ("cam1", cams_argv(sources, cams="1")),
+    ("cam2", cams_argv(sources, cams="2")),
+    ]  # fmt: skip
+    if rec:
+        services.append(("rec", ["uv", "run", "python", "-m", "recorder.main"]))
+    services += [
     ("server", [*uv("uvicorn", "server.app.main:app"), "--host", "127.0.0.1", "--port", "8000"]),
     ("front", ["npm", "--prefix", str(FRONT), "run", "dev"]),
-    )  # fmt: skip
+    ]  # fmt: skip
+    return tuple(services)
 
 
-def task_dev() -> int:
+def task_dev(sources: Sequence[str] = (), *, rec: bool = True) -> int:
     """개발 스택 전체를 한 터미널에서 띄운다. Ctrl+C 로 전부 내린다.
 
     따로따로 띄우면 터미널이 다섯 개 필요하고, 그중 하나가 조용히 죽어도 알아채기
@@ -507,9 +518,14 @@ def task_dev() -> int:
 
     say()
     say("[dev] 프로세스 기동")
+    if not rec:
+        # 조용히 빠지면 안 된다 — 녹화가 없으면 7일 링버퍼도, 이벤트 클립 추출(FN-REC-03)도
+        # 없다. 화면은 정상으로 보이는데 클립만 안 나오는 상태를 만들지 않는다.
+        say("      rec     --no-rec: 녹화 컴포넌트를 띄우지 않는다")
+        say("              7일 녹화와 이벤트 클립 추출이 동작하지 않는다")
     processes: list[tuple[str, subprocess.Popen[bytes]]] = []
     try:
-        for name, argv in dev_services():
+        for name, argv in dev_services(sources, rec=rec):
             exe = executable(argv[0])
             say(f"      {name:<7} {shell_repr(argv)}")
             processes.append((name, subprocess.Popen([exe, *argv[1:]], cwd=str(ROOT))))
@@ -771,7 +787,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("verify", help="lint + typecheck + pytest + 마이그레이션 + 스모크 + 프론트 빌드")
     sub.add_parser("fmt", help="포매팅과 자동 수정")
-    sub.add_parser("dev", help="docker-compose + 마이그레이션 + 실행 안내")
+    dev = sub.add_parser("dev", help="docker-compose + 마이그레이션 + 실행 안내")
+    dev.add_argument(
+        "--source",
+        action="append",
+        default=[],
+        metavar="영상파일",
+        help="카메라에 쓸 영상 파일 (cams --source 와 같다). 두 번 주면 카메라별로 다르게 쓴다",
+    )
+    dev.add_argument(
+        "--no-rec",
+        dest="rec",
+        action="store_false",
+        help="녹화 컴포넌트(REC)를 빼고 띄운다. 7일 녹화와 이벤트 클립 추출이 없어진다",
+    )
     sub.add_parser("migrate", help="alembic upgrade head + policies 시드")
     types = sub.add_parser("types", help="contracts -> front TypeScript 타입 생성")
     types.add_argument(
@@ -859,7 +888,7 @@ def dispatch(args: argparse.Namespace) -> int:
         case "fmt":
             return task_fmt()
         case "dev":
-            return task_dev()
+            return task_dev(args.source, rec=args.rec)
         case "migrate":
             return task_migrate()
         case "types":
