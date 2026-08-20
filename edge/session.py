@@ -25,7 +25,7 @@ import ast
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 import numpy as np
 import numpy.typing as npt
@@ -174,6 +174,34 @@ class _OnnxBackend:
         return None if value is None else str(value)
 
 
+def _load_cudart() -> Any:
+    """`cudart` 바인딩. **패키지 위치가 버전에 따라 다르다.**
+
+    `cuda-python` 12.6 부터 바인딩이 `cuda.bindings.*` 로 옮겨졌고, 13.x 에서는
+    옛 경로(`cuda.cudart`)가 사라졌다. 그런데 JetPack 이 싣는 버전과 `pip` 로
+    까는 버전이 다를 수 있어서, **둘 다 시도한다.**
+
+    ★ **조용히 넘어가지 않는다.** 어느 쪽도 없으면 어떻게 고치는지 적어서 죽인다 —
+      여기서 None 을 돌려주면 추론이 안 되는 이유가 한참 뒤에 드러난다(절대규칙 9).
+    """
+    try:
+        from cuda import cudart  # cuda-python < 12.6
+    except ImportError:
+        try:
+            from cuda.bindings import cudart  # cuda-python >= 12.6
+        except ImportError as exc:
+            msg = (
+                "cudart 바인딩을 찾지 못했다 — TensorRT 백엔드를 쓸 수 없다.\n"
+                "  `cuda.cudart`(12.6 미만)도 `cuda.bindings.cudart`(12.6 이상)도 없다.\n"
+                "  젯슨에서는 JetPack 이 싣는 것을 쓰는 것이 안전하다:\n"
+                '    python -c "import cuda.bindings.cudart"  로 확인\n'
+                "    없으면  pip install cuda-python\n"
+                "  TensorRT 없이 돌려보려면 edge/config.yaml 의 runtime.backend 를 onnx 로 둔다."
+            )
+            raise ImportError(msg) from exc
+    return cudart
+
+
 class _TensorRTBackend:
     """TensorRT. 젯슨(GPU)에서 쓴다.
 
@@ -186,7 +214,8 @@ class _TensorRTBackend:
 
     def __init__(self, path: Path) -> None:
         import tensorrt as trt
-        from cuda import cudart
+
+        cudart = _load_cudart()
 
         self._trt = trt
         self._cudart = cudart
