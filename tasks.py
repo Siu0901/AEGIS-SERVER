@@ -455,8 +455,15 @@ def task_migrate() -> int:
     # 캘리브레이션 없이는 화면에 그릴 수도 없다.
     say("[migrate] cameras 개발용 캘리브레이션 시드")
     run(uv("python", "-m", "scripts.seed_cameras"))
-    say("[migrate] zones 개발용 기본값 시드")
-    run(uv("python", "-m", "scripts.seed_zones"))
+    # ★ **구역은 시드하지 않는다.** 금지구역은 사람이 설정 화면에서 그리는 것이고
+    #   (FN-CFG-02), 여기서 자동으로 넣으면 지워도 다음 기동에 되살아난다 — 실제로
+    #   `forklift_lane` 이 매번 다시 생겼다. 「내가 그린 것만 있어야 한다」가 맞다.
+    #
+    #   시드가 필요한 경우는 하나뿐이다: `sim/edge_sim` 시나리오를 돌릴 때. 그 메시지의
+    #   `in_zone: forklift_lane` 이 가리킬 행이 없으면 화면에 정체불명의 문자열만 남는다.
+    #   그때는 아래 명령을 직접 부른다.
+    say("[migrate] zones 시드는 건너뛴다 — 금지구역은 설정 화면에서 그린다")
+    say("           시뮬레이터 시나리오를 쓸 때만: uv run python -m scripts.seed_zones")
     # FN-ALM-01 · FN-CFG-03 — 음원 매핑은 코드가 아니라 DB 에서 읽는다. 파일이 없으면
     # 무음 wav 를 깔아 경로를 맞춘다(실제 녹음은 사람이 나중에 덮어쓴다).
     say("[migrate] alert_sounds 시드 + 무음 wav 확인")
@@ -475,6 +482,8 @@ def dev_services(
     sources: Sequence[str] = (),
     *,
     rec: bool = True,
+    cams: bool = True,
+    host: str = "127.0.0.1",
 ) -> tuple[tuple[str, list[str]], ...]:
     """`dev` 가 한 터미널에서 함께 띄우는 것들.
 
@@ -485,20 +494,28 @@ def dev_services(
     `sources` 는 `cams --source` 와 같은 값이다 — `dev` 로 띄울 때도 테스트 패턴 대신
     실제 영상을 보려면 필요하다. `rec=False` 는 녹화 컴포넌트를 빼고 띄운다.
     """
-    services = [
+    services: list[tuple[str, list[str]]] = []
+    if cams:
+        services += [
     ("cam1", cams_argv(sources, cams="1")),
     ("cam2", cams_argv(sources, cams="2")),
-    ]  # fmt: skip
+        ]  # fmt: skip
     if rec:
         services.append(("rec", ["uv", "run", "python", "-m", "recorder.main"]))
     services += [
-    ("server", [*uv("uvicorn", "server.app.main:app"), "--host", "127.0.0.1", "--port", "8000"]),
+    ("server", [*uv("uvicorn", "server.app.main:app"), "--host", host, "--port", "8000"]),
     ("front", ["npm", "--prefix", str(FRONT), "run", "dev"]),
     ]  # fmt: skip
     return tuple(services)
 
 
-def task_dev(sources: Sequence[str] = (), *, rec: bool = True) -> int:
+def task_dev(
+    sources: Sequence[str] = (),
+    *,
+    rec: bool = True,
+    cams: bool = True,
+    host: str = "127.0.0.1",
+) -> int:
     """개발 스택 전체를 한 터미널에서 띄운다. Ctrl+C 로 전부 내린다.
 
     따로따로 띄우면 터미널이 다섯 개 필요하고, 그중 하나가 조용히 죽어도 알아채기
@@ -518,6 +535,12 @@ def task_dev(sources: Sequence[str] = (), *, rec: bool = True) -> int:
 
     say()
     say("[dev] 프로세스 기동")
+    if not cams:
+        # 실물 카메라를 쓸 때다. mediamtx 가 카메라에서 직접 당겨오므로 송출할 것이
+        # 없다 — 그 사실을 적어 둔다. 가짜 카메라가 안 떴는데 화면이 검으면 원인을
+        # 여기서 찾을 수 있어야 한다.
+        say("      cam     --no-cams: 가짜 RTSP 를 송출하지 않는다")
+        say("              deploy/mediamtx.yml 의 source 가 실물 카메라를 가리켜야 한다")
     if not rec:
         # 조용히 빠지면 안 된다 — 녹화가 없으면 7일 링버퍼도, 이벤트 클립 추출(FN-REC-03)도
         # 없다. 화면은 정상으로 보이는데 클립만 안 나오는 상태를 만들지 않는다.
@@ -525,7 +548,7 @@ def task_dev(sources: Sequence[str] = (), *, rec: bool = True) -> int:
         say("              7일 녹화와 이벤트 클립 추출이 동작하지 않는다")
     processes: list[tuple[str, subprocess.Popen[bytes]]] = []
     try:
-        for name, argv in dev_services(sources, rec=rec):
+        for name, argv in dev_services(sources, rec=rec, cams=cams, host=host):
             exe = executable(argv[0])
             say(f"      {name:<7} {shell_repr(argv)}")
             processes.append((name, subprocess.Popen([exe, *argv[1:]], cwd=str(ROOT))))
@@ -534,6 +557,10 @@ def task_dev(sources: Sequence[str] = (), *, rec: bool = True) -> int:
         raise
 
     say()
+    if host != "127.0.0.1":
+        # 루프백 밖으로 나가는 것은 조용히 넘길 일이 아니다 — 같은 네트워크의 누구나
+        # API 와 영상에 닿는다. 젯슨을 붙이려면 필요하지만, 그 사실은 보이게 적는다.
+        say(f"[dev] 서버가 {host}:8000 에 열려 있다 — 같은 네트워크에서 접근 가능하다")
     say("[dev] 실시간 관제  http://127.0.0.1:5173/live")
     say("      API 문서     http://127.0.0.1:8000/docs")
     say("      Ctrl+C 로 전부 내린다.")
@@ -638,6 +665,217 @@ def task_rec(extra: Sequence[str]) -> int:
     say("[rec] 녹화 컴포넌트 — 메인 스트림 세그먼트 녹화 + 구간 추출")
     run(uv("python", "-m", "recorder.main", *extra))
     return 0
+
+
+# ---------------------------------------------------------------------------
+# relay — 실물 카메라를 mediamtx 로 밀어넣는다
+# ---------------------------------------------------------------------------
+
+
+def env_values() -> dict[str, str]:
+    """`.env` 를 읽는다. **새 의존성을 넣지 않으려고 직접 판다.**
+
+    compose · 서버 · REC 이 이미 이 파일 하나를 보므로 태스크도 같은 것을 본다
+    (`.env.example` 머리말). 값을 두 곳에 적어 어긋나는 일이 없어야 한다.
+    """
+    path = ROOT / ".env"
+    if not path.is_file():
+        return {}
+    values: dict[str, str] = {}
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        # 값 뒤 주석(`REDIS_PORT=6380   # ...`)을 잘라낸다. 주소에는 `#` 이 없다.
+        values[key.strip()] = value.split("#")[0].strip().strip('"').strip("'")
+    return values
+
+
+#: 규격 변환에 쓸 인코더 후보. 앞에 있는 것부터 쓴다.
+#:
+#: `h264_videotoolbox` 는 애플 실리콘의 하드웨어 인코더다 — 1440p30 을 1080p15 로 줄이는
+#: 일을 CPU 거의 없이 해낸다. 없는 기계(젯슨·윈도우)에서는 libx264 로 떨어진다.
+_RELAY_ENCODERS: tuple[str, ...] = ("h264_videotoolbox", "libx264")
+
+
+def relay_encoder(ffmpeg: str) -> str:
+    """이 기계에서 쓸 수 있는 인코더. 없으면 오류다 — 조용히 원본을 흘리지 않는다."""
+    listed = subprocess.run(
+        [ffmpeg, "-hide_banner", "-encoders"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+    )  # fmt: skip
+    for name in _RELAY_ENCODERS:
+        if name in listed.stdout:
+            return name
+    raise TaskError(
+        "H.264 인코더를 찾을 수 없다 (h264_videotoolbox · libx264)\n"
+        "  --no-transcode 로 원본을 그대로 흘릴 수는 있지만, 카메라가 baseline 이 아니면\n"
+        "  브라우저 WebRTC 가 그림을 만들지 못해 화면이 검게 남는다."
+    )
+
+
+def relay_argv(
+    ffmpeg: str,
+    source: str,
+    cam_id: int,
+    base: str,
+    *,
+    encoder: str | None = None,
+) -> list[str]:
+    """카메라 한 대를 `{base}/cam{N}/main` 으로 재송출한다.
+
+    ★ **재인코딩하지 않는다**(`-c:v copy`). 카메라가 이미 H.264 를 뱉으므로 다시 굽는
+      것은 낭비이고, 노트북에서는 그 비용이 송출을 굶겨 프레임을 떨어뜨린다
+      (`cams_argv` 주석의 실측 405% 참고).
+
+    ★ **오디오를 버린다**(`-an`). 이 시스템은 소리를 쓰지 않고(경고 방송은 서버가
+      로컬 wav 로 낸다), 녹화 용량만 늘린다.
+
+    ★ **입력도 출력도 TCP 다.** UDP 는 프레임이 조용히 깨져 들어와 원인 추적이
+      어렵다 — 실물 카메라에서 특히 그렇다.
+    """
+    # ★ **지연을 만드는 것은 대부분 버퍼다.** ffmpeg 의 기본값은 처리량을 위해 입력을
+    #   모아 두는데, 관제 화면은 지금 무슨 일이 일어나는지를 보는 것이므로 반대가 맞다.
+    #
+    #     nobuffer          입력을 모으지 않는다
+    #     low_delay         디코더가 프레임을 쥐고 있지 않는다
+    #     reorder_queue_size 0   RTSP 재정렬 버퍼(기본 500패킷)를 끈다. TCP 라 순서가
+    #                            보장되므로 재정렬할 이유가 없다
+    #     max_delay 0       디먹서 지연 상한
+    #     muxdelay/muxpreload 0  출력 쪽도 모으지 않는다
+    #
+    #   오버레이 정합(`overlay_buffer_webrtc_ms`)은 **이 지연에 맞춰 잡는 값**이다.
+    #   영상이 늦어지는데 버퍼를 그대로 두면 박스가 영상보다 먼저 그려진다(§5.4).
+    head = [
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel", "warning",
+        "-nostdin",
+        "-fflags", "nobuffer",
+        "-flags", "low_delay",
+        "-max_delay", "0",
+        "-reorder_queue_size", "0",
+        "-rtsp_transport", "tcp",
+        "-i", source,
+        "-an",
+    ]  # fmt: skip
+    tail = [
+        "-muxdelay", "0",
+        "-muxpreload", "0",
+        "-f", "rtsp",
+        "-rtsp_transport", "tcp",
+        f"{base}/cam{cam_id}/main",
+    ]  # fmt: skip
+    if encoder is None:
+        return [*head, "-c:v", "copy", *tail]
+    # ★ **baseline 이 협상 가능한 유일한 프로파일이다.** 브라우저 WebRTC 는 보통
+    #   Constrained Baseline(`42e01f`) 하나만 협상한다. High 로 보내면 세션은 열리고
+    #   RTP 도 흐르는데 디코더가 그림을 만들지 못해 화면이 검게 남고, 콘솔에는
+    #   「프레임 미도착」만 찍힌다 — mediamtx 로그에도 오류가 없어 원인을 찾기 어렵다
+    #   (`deploy/fake_cams.py` 가 같은 이유로 baseline 으로 굽는다).
+    return [
+        *head,
+        "-vf", f"scale={MAIN_W}:{MAIN_H},fps={MAIN_FPS}",
+        "-c:v", encoder,
+        "-profile:v", "baseline",
+        # VideoToolbox 의 실시간 모드. 인코더가 프레임을 모아 두지 않는다.
+        # libx264 로 떨어졌을 때는 무시되므로 그쪽에는 zerolatency 를 따로 준다.
+        *(["-realtime", "1"] if encoder == "h264_videotoolbox" else
+          ["-tune", "zerolatency", "-preset", "veryfast"]),
+        "-b:v", MAIN_BITRATE,
+        "-maxrate", MAIN_BITRATE,
+        "-bufsize", "5000k",
+        # GOP 2초 — 클립·키프레임 추출 정밀도가 여기 걸려 있다(FN-REC-03).
+        "-g", str(MAIN_FPS * 2),
+        "-keyint_min", str(MAIN_FPS * 2),
+        *tail,
+    ]  # fmt: skip
+
+
+#: 메인 스트림 규격(API명세서 §1.2). 카메라가 다른 값을 뱉으면 relay 가 여기 맞춘다.
+MAIN_W, MAIN_H, MAIN_FPS = 1920, 1080, 15
+MAIN_BITRATE = "2500k"
+
+
+def task_relay(cams: str | None, *, transcode: bool = True) -> int:
+    """실물 IP 카메라 → mediamtx (FN-DET-01 · API명세서 §1.2).
+
+    **왜 mediamtx 가 직접 당겨오지 않는가.** 맥의 도커 컨테이너는 별도 VM 안에서 돌고
+    바깥 통신이 호스트의 기본 경로로 나간다. 카메라가 기본 경로가 아닌 인터페이스
+    (USB 랜)에만 있으면 컨테이너는 닿지 못한다 — 실측으로
+    `dial tcp 192.168.0.60:554: connect: connection refused` 였다. 호스트에서 읽어
+    밀어넣으면 그 문제가 사라진다.
+
+    **주소는 `.env` 의 `CAM{N}_RTSP_MAIN` 에서 읽는다.** 계정·비밀번호가 들어가므로
+    커밋되는 파일에 두지 않는다.
+    """
+    ffmpeg = executable("ffmpeg")
+    encoder = relay_encoder(ffmpeg) if transcode else None
+    env = env_values()
+    base = env.get("RTSP_BASE", "rtsp://127.0.0.1:8554")
+    wanted = [int(item) for item in cams.split(",")] if cams else [1, 2]
+
+    targets: list[tuple[int, str]] = []
+    for cam_id in wanted:
+        source = env.get(f"CAM{cam_id}_RTSP_MAIN", "")
+        if source:
+            targets.append((cam_id, source))
+        else:
+            # 조용히 넘어가지 않는다 — 카메라가 안 뜬 이유가 설정에 있다는 것을 알려야
+            # 한다. 화면이 검은 채로 원인을 찾게 두지 않는다(절대규칙 9).
+            say(f"      cam{cam_id}    .env 의 CAM{cam_id}_RTSP_MAIN 이 비어 있다 - 건너뛴다")
+    if not targets:
+        raise TaskError(
+            ".env 에 CAM1_RTSP_MAIN 이 비어 있다 - 재송출할 카메라가 없다\n"
+            "  실물 카메라 주소를 넣거나, 가짜 카메라를 쓰려면 uv run tasks.py cams 를 쓴다."
+        )
+
+    if encoder is None:
+        say("[relay] 실물 카메라 -> mediamtx (원본 그대로)")
+        say("      --no-transcode: 카메라가 baseline 이 아니면 화면이 검게 남는다")
+    else:
+        say(f"[relay] 실물 카메라 -> mediamtx ({MAIN_W}x{MAIN_H}@{MAIN_FPS} baseline · {encoder})")
+    for cam_id, source in targets:
+        say(f"      cam{cam_id}    {_hide_secret(source)}  ->  {base}/cam{cam_id}/main")
+
+    procs: list[tuple[int, subprocess.Popen[bytes]]] = []
+    for cam_id, source in targets:
+        argv = relay_argv(ffmpeg, source, cam_id, base, encoder=encoder)
+        procs.append((cam_id, subprocess.Popen([argv[0], *argv[1:]], cwd=str(ROOT))))
+    say("      송출 중. Ctrl+C 로 종료한다.")
+
+    # 카메라는 끊긴다 — 전원·네트워크·동시접속 제한. 끊긴 채로 두면 화면만 검어지므로
+    # 다시 붙인다. 끊겼다는 사실은 매번 로그로 남긴다.
+    try:
+        while True:
+            for index, (cam_id, proc) in enumerate(procs):
+                if proc.poll() is None:
+                    continue
+                say(f"[relay] cam{cam_id} 송출이 끊겼다 (코드 {proc.returncode}) - 3초 뒤 재시도")
+                time.sleep(3.0)
+                argv = relay_argv(ffmpeg, dict(targets)[cam_id], cam_id, base, encoder=encoder)
+                procs[index] = (cam_id, subprocess.Popen([argv[0], *argv[1:]], cwd=str(ROOT)))
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        say()
+        say("[relay] 종료 중...")
+    finally:
+        for _, proc in procs:
+            if proc.poll() is None:
+                proc.terminate()
+        for cam_id, proc in procs:
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                say(f"      cam{cam_id} 응답 없음 - 강제 종료")
+                proc.kill()
+    return 0
+
+
+def _hide_secret(url: str) -> str:
+    """로그에 비밀번호를 찍지 않는다. `rtsp://user:pw@host` 의 pw 만 가린다."""
+    return re.sub(r"://([^:/@]+):([^@]+)@", r"://\1:****@", url)
 
 
 def task_cams_stop(cams: str | None = None) -> int:
@@ -796,6 +1034,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="카메라에 쓸 영상 파일 (cams --source 와 같다). 두 번 주면 카메라별로 다르게 쓴다",
     )
     dev.add_argument(
+        "--host",
+        default="127.0.0.1",
+        metavar="주소",
+        help="서버 바인드 주소. 젯슨 등 다른 기계에서 붙으려면 0.0.0.0 (기본: 루프백만)",
+    )
+    dev.add_argument(
+        "--no-cams",
+        dest="cams",
+        action="store_false",
+        help="가짜 RTSP 송출을 빼고 띄운다. 실물 카메라를 mediamtx 에 연결했을 때 쓴다",
+    )
+    dev.add_argument(
         "--no-rec",
         dest="rec",
         action="store_false",
@@ -844,6 +1094,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="이 카메라만 종료 (예: --cams 2). 없으면 전부 종료",
     )
 
+    relay = sub.add_parser("relay", help="실물 IP 카메라 -> mediamtx 재송출 (재인코딩 없음)")
+    relay.add_argument(
+        "--cams",
+        default=None,
+        metavar="번호목록",
+        help="재송출할 카메라 (기본 1,2). 주소는 .env 의 CAM{N}_RTSP_MAIN 에서 읽는다",
+    )
+    relay.add_argument(
+        "--no-transcode",
+        dest="transcode",
+        action="store_false",
+        help="원본을 그대로 흘린다. 카메라가 이미 1920x1080@15 baseline 일 때만 쓴다",
+    )
+
     rec = sub.add_parser("rec", help="REC — 녹화 컴포넌트 (API명세서 §4.7)")
     rec.add_argument("extra", nargs=argparse.REMAINDER, help="recorder 에 그대로 넘길 인자")
 
@@ -888,7 +1152,7 @@ def dispatch(args: argparse.Namespace) -> int:
         case "fmt":
             return task_fmt()
         case "dev":
-            return task_dev(args.source, rec=args.rec)
+            return task_dev(args.source, rec=args.rec, cams=args.cams, host=args.host)
         case "migrate":
             return task_migrate()
         case "types":
@@ -897,6 +1161,8 @@ def dispatch(args: argparse.Namespace) -> int:
             return task_cams(args.source, args.cams, args.marker, args.timecode)
         case "cams-stop":
             return task_cams_stop(args.cams)
+        case "relay":
+            return task_relay(args.cams, transcode=args.transcode)
         case "rec":
             return task_rec(args.extra)
         case "cases":
