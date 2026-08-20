@@ -67,6 +67,12 @@ const CHIPS: Chip[] = [
   { key: 'cam1', label: '카메라 1', kind: 'cam', value: 1 },
   { key: 'cam2', label: '카메라 2', kind: 'cam', value: 2 },
   { key: 'alerted', label: '미해소', kind: 'status', value: 'alerted' },
+  // ★ `dropped` 는 **기본 목록에서 뺀다**(아래 `visible`). 확정에 도달하지 못한 후보라
+  //   클립도 키프레임도 없고 시정률·판정 불가율 어느 쪽에도 들어가지 않는다(기능 §4.2).
+  //   그런데도 건수는 확정보다 많아서, 그대로 두면 관리자가 볼 이벤트를 덮어버린다.
+  //   **지우지는 않는다** — `dropped/(dropped+확정)` 비율이 `confirm_duration_s` 가
+  //   적절한지 보는 진단값이라 명세가 보존하도록 정했다. 그래서 칩으로 남긴다.
+  { key: 'dropped', label: '확정 전 소멸', kind: 'status', value: 'dropped' },
   { key: 'today', label: '오늘', kind: 'today' },
 ]
 
@@ -120,6 +126,16 @@ export default function EventsPage() {
     })
   }, [mergedList])
 
+  // 기본 목록에서 `dropped` 를 숨긴다. 「확정 전 소멸」 칩을 고르면 그것만 보인다.
+  // 서버 질의를 건드리지 않고 화면에서만 거른다 — `dropped` 는 계속 기록되고,
+  // 지표(시정률·판정 불가율)는 애초에 이 상태를 세지 않으므로 숫자가 달라지지 않는다.
+  const showsDropped = chip.kind === 'status' && chip.value === 'dropped'
+  const visible = useMemo(
+    () => (showsDropped ? items : items.filter((event) => event.status !== 'dropped')),
+    [items, showsDropped],
+  )
+  const hidden = items.length - visible.length
+
   const select = (eventId: string | null) => {
     const next = new URLSearchParams(searchParams)
     if (eventId === null) next.delete('event')
@@ -166,11 +182,17 @@ export default function EventsPage() {
           {listError && (
             <p className="card__note events__error">목록을 읽지 못했다 — {listError}</p>
           )}
-          {!listError && items.length === 0 && (
+          {!listError && visible.length === 0 && (
             <p className="card__note">{loading ? '불러오는 중…' : '해당하는 이벤트가 없다.'}</p>
           )}
+          {!listError && hidden > 0 && (
+            <p className="card__note">
+              확정에 도달하지 못한 후보 {hidden}건은 숨겼다. 클립이 없어 확인할 수 없고
+              시정률에도 들어가지 않는다 — 「확정 전 소멸」 칩으로 볼 수 있다.
+            </p>
+          )}
           <ul className="rows">
-            {items.map((event) => (
+            {visible.map((event) => (
               <li key={event.event_id}>
                 <button
                   type="button"
