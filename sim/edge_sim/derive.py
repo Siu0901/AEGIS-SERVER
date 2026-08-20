@@ -152,6 +152,8 @@ def derive_entries(
     entries: list[tuple[float, dict[str, Any]]],
     homography_for: Any,
     default_cam: int,
+    *,
+    send_contour: bool = False,
 ) -> None:
     """시각 순서로 훑으며 파생 필드를 채운다. **입력을 제자리에서 고친다.**
 
@@ -166,7 +168,9 @@ def derive_entries(
         kind = str(payload.get("type"))
         cam_id = int(payload.get("cam_id", default_cam))
         if kind == "frame":
-            frames[cam_id] = _derive_frame(at_s, payload, homography_for(cam_id), tracks, cam_id)
+            frames[cam_id] = _derive_frame(
+                at_s, payload, homography_for(cam_id), tracks, cam_id, send_contour
+            )
         elif kind == "candidate" and payload.get("nearby") == "auto":
             cache = caches.setdefault(
                 cam_id,
@@ -186,6 +190,7 @@ def _derive_frame(
     homography: Homography,
     tracks: dict[tuple[int, int], _Track],
     cam_id: int,
+    send_contour: bool = False,
 ) -> DerivedState:
     """`frame` 한 장의 사람 게이지를 계산하고, 후보가 볼 상태를 남긴다."""
     persons: dict[int, dict[str, Any]] = {}
@@ -214,6 +219,14 @@ def _derive_frame(
                     _bbox(obj["bbox"]), fork_ratio=float(spec.get("fork", 0.0))
                 )
         obj.pop("mask", None)
+        # 진단용 윤곽(API명세서 §2.1). 실물 엣지와 같은 규격으로 싣는다 —
+        # 시뮬레이터도 `packages/contracts` 스키마를 그대로 쓴다(절대규칙 5).
+        # 실물은 정책 `overlay_mask` 로 켜지지만 시뮬레이터에는 그 통로가 없으므로
+        # `--mask` 로 켠다. 기본은 꺼짐이라 기존 시나리오 기대값이 바뀌지 않는다.
+        if send_contour:
+            drawn = contours.get((str(obj.get("class")), track_id))
+            if drawn:
+                obj["contour"] = _contour_for_send(drawn)
 
     # `nearby` 는 지게차를 전부 훑은 **뒤에** 채운다. 사람이 목록 앞에 있어도 같은
     # 프레임의 지게차를 보아야 하기 때문이다(§2.1).
@@ -444,3 +457,17 @@ def _bbox(value: Any) -> Bbox:
 
 def _point(value: Any) -> PointPx:
     return (float(value[0]), float(value[1]))
+
+
+#: 전송용 윤곽 점 수. `edge/pipeline.py` 의 `_CONTOUR_SEND_POINTS` 와 같아야 한다 —
+#: 시뮬레이터가 실물보다 촘촘하면 화면에서 둘이 달라 보인다.
+_CONTOUR_SEND_POINTS = 24
+
+
+def _contour_for_send(contour: list[PointPx]) -> list[list[float]]:
+    """균등 솎기 후 소수점 3자리. 실물 엣지와 같은 방식이다."""
+    points = list(contour)
+    if len(points) > _CONTOUR_SEND_POINTS:
+        step = len(points) / _CONTOUR_SEND_POINTS
+        points = [points[int(index * step)] for index in range(_CONTOUR_SEND_POINTS)]
+    return [[round(float(x), 3), round(float(y), 3)] for x, y in points]

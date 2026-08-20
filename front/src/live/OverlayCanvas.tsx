@@ -441,6 +441,8 @@ function drawPerson(
   haloStroke(context, color, view.unit * (confirmed ? LINE.personConfirmed : LINE.person))
   context.setLineDash([])
 
+  drawContour(context, view, person.contour, color)
+
   // 접지점 — 거리·구역 판정의 기준점이다(§6.1). 어디를 기준으로 판정했는지 보여준다.
   const foot = point(view, person.foot_point)
   context.beginPath()
@@ -452,6 +454,40 @@ function drawPerson(
   context.stroke()
 
   label(context, view, rect.x, rect.y, color, personLabel(person, zones, pending))
+  context.restore()
+}
+
+/**
+ * 진단용 마스크 윤곽 (API명세서 §2.1 · 정책 `overlay_mask`).
+ *
+ * **박스를 대신하지 않는다.** 박스 위에 겹쳐 그린다 — 윤곽은 정책이 켜졌을 때만 오고,
+ * 그것이 없다고 화면 구성이 달라지면 「지금 무엇을 보고 있는가」가 흔들린다.
+ *
+ * 채움을 옅게 두는 이유: 마스크가 사람을 덮으면 안전모 착용 여부를 눈으로 확인할 수
+ * 없다. 이 표시의 목적은 **감지가 형태를 제대로 잡았는지** 보는 것이지 사람을 가리는
+ * 것이 아니다.
+ */
+function drawContour(
+  context: CanvasRenderingContext2D,
+  view: View,
+  contour: [number, number][] | null,
+  color: string,
+): void {
+  if (!contour || contour.length < 3) return
+  context.save()
+  context.beginPath()
+  contour.forEach(([x, y], index) => {
+    const p = point(view, [x, y])
+    if (index === 0) context.moveTo(p.x, p.y)
+    else context.lineTo(p.x, p.y)
+  })
+  context.closePath()
+  context.fillStyle = `${color}22`
+  context.fill()
+  context.strokeStyle = color
+  context.lineWidth = view.unit * 1.2
+  context.setLineDash([])
+  context.stroke()
   context.restore()
 }
 
@@ -480,6 +516,8 @@ function drawVehicle(
   context.beginPath()
   context.rect(rect.x, rect.y, rect.w, rect.h)
   haloStroke(context, COLOR.vehicle, view.unit * LINE.vehicle)
+
+  drawContour(context, view, vehicle.contour, COLOR.vehicle)
 
   // 접지점은 **서버가 준 `anchor`** 다(§2.1). 마스크 하단에서 산출한 값이라
   // 박스 아래변 중앙과 다르다 — 포크가 뻗었거나 적재물이 있으면 어긋난다.

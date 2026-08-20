@@ -190,6 +190,10 @@ def _person(
     # `null` 로 채우면 "분류했는데 값이 없다"가 되어 규약이 뒤집힌다.
     if obj.helmet is not None:
         body["helmet"] = obj.helmet
+    # 진단용 윤곽은 **읽지 않고 통과시킨다**(§5.1). 판정에 쓰지 않으므로 서버가 해석할
+    # 것이 없고, 엣지가 싣지 않았으면 여기서도 없다.
+    if obj.contour is not None:
+        body["contour"] = obj.contour
     return OverlayPerson.model_validate(body)
 
 
@@ -207,6 +211,7 @@ def _vehicle(obj: DetectedVehicle, state: TrackState | None) -> OverlayVehicle:
             "event_ids": [],
             "alert_state": None,
             "nearby": [],
+            **({"contour": obj.contour} if obj.contour is not None else {}),
         }
     )
 

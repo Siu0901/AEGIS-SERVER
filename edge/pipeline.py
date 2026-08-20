@@ -249,6 +249,12 @@ class CameraPipeline:
                     "anchor_m": _round_point(anchor_m),
                     "moving": self._moving(track_id, anchor_m, at_s),
                     "danger_radius_m": self._danger_radius_m,
+                    # 진단용. 정책이 꺼져 있으면 **키 자체를 넣지 않는다**(§2.1).
+                    **(
+                        {"contour": _contour_for_send(detection.contour)}
+                        if self._policies.overlay_mask
+                        else {}
+                    ),
                 }
             )
         return built
@@ -339,6 +345,10 @@ class CameraPipeline:
                     for reading in readings
                 ],
             }
+            if self._policies.overlay_mask:
+                # 진단용 윤곽(§2.1). 정책이 꺼져 있으면 **키 자체를 넣지 않는다** —
+                # `null` 을 실으면 "마스크를 못 만들었다"로 읽히는데 그건 다른 뜻이다.
+                body["contour"] = _contour_for_send(detection.contour)
             if helmet is not None:
                 # 셋은 한 묶음이다(§2.1). 게이트를 통과하지 못하면 **셋 다 싣지 않는다** —
                 # `exclude_unset` 이 그 생략을 그대로 전선에 반영한다.
@@ -666,3 +676,29 @@ def _round_bbox(bbox: Bbox) -> Bbox:
 
 def _round_point(point: PointPx | PointM) -> tuple[float, float]:
     return (round(point[0], 4), round(point[1], 4))
+
+
+#: 진단용으로 내보낼 윤곽 점 수 (API명세서 §2.1).
+#:
+#: 내부 계산은 48점(`edge/detect._MAX_CONTOUR_POINTS`)을 쓰지만 화면에 그릴 때는 그 절반이면
+#: 형태가 충분히 드러난다. **점 하나가 좌표 두 개**라 매 프레임·매 객체마다 나가는 양이고,
+#: 이 값을 그대로 두면 오버레이 메시지가 몇 배가 된다.
+#:
+#: ★ **내부 계산에 쓰는 윤곽을 줄이지 않는다.** 여기서 솎는 것은 전송용 사본뿐이다 —
+#:   `nearest_pair_m`·PCA 주축은 48점 그대로 본다.
+_CONTOUR_SEND_POINTS = 24
+
+
+def _contour_for_send(contour: tuple[PointPx, ...]) -> list[list[float]] | None:
+    """전송용 윤곽. 균등 솎기로 24점까지 줄이고 소수점 3자리로 자른다.
+
+    `approxPolyDP` 로 꼭짓점만 남기지 않는 이유는 `edge/detect.py` 와 같다 — 꼭짓점만
+    남기면 형태가 각져 사람으로 보이지 않는다. 균등 간격이 화면에서도 자연스럽다.
+    """
+    if not contour:
+        return None
+    points = list(contour)
+    if len(points) > _CONTOUR_SEND_POINTS:
+        step = len(points) / _CONTOUR_SEND_POINTS
+        points = [points[int(index * step)] for index in range(_CONTOUR_SEND_POINTS)]
+    return [[round(float(x), 3), round(float(y), 3)] for x, y in points]

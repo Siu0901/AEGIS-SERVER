@@ -129,7 +129,9 @@ def resolve_case_path(case: str) -> Path:
     return candidate
 
 
-def load_case(case: str, start: datetime, speed: float = 1.0) -> list[ScheduledMessage]:
+def load_case(
+    case: str, start: datetime, speed: float = 1.0, *, send_contour: bool = False
+) -> list[ScheduledMessage]:
     """시나리오를 읽어 시각 순으로 정렬된 메시지 목록을 만든다.
 
     Args:
@@ -179,7 +181,7 @@ def load_case(case: str, start: datetime, speed: float = 1.0) -> list[ScheduledM
     # 보간이 끝난 **뒤에** 게이지를 계산한다. 정지 지속(FN-DET-10 ③)은 프레임 사이의
     # 차이이므로 8fps 로 채워진 뒤라야 실물과 같은 밀도로 쌓인다 — 키프레임만 보고
     # 계산하면 1~6초씩 건너뛴 값이 나와 3조건 중 하나가 사실상 무력해진다.
-    derive_entries(entries, _homography, default_cam)
+    derive_entries(entries, _homography, default_cam, send_contour=send_contour)
     scheduled: list[ScheduledMessage] = []
     for at_s, payload in entries:
         played_at = at_s / speed

@@ -43,7 +43,9 @@ if isinstance(sys.stdout, io.TextIOWrapper):
 DEFAULT_URL = "ws://127.0.0.1:8000/ws/edge"
 
 
-def _build_timeline(mode: str, case: str, speed: float, clock: Clock) -> list[ScheduledMessage]:
+def _build_timeline(
+    mode: str, case: str, speed: float, clock: Clock, *, send_contour: bool = False
+) -> list[ScheduledMessage]:
     """파싱·검증까지만 한다. **`ts` 는 재생 직전에 `retime` 이 다시 찍는다.**
 
     여기서 쓰는 시각은 자리표시자이며, 이 함수가 얼마나 걸리든 정합에 영향을 주지
@@ -51,7 +53,7 @@ def _build_timeline(mode: str, case: str, speed: float, clock: Clock) -> list[Sc
     """
     start = clock.now()
     if mode == "scripted":
-        return load_case(case, start, speed)
+        return load_case(case, start, speed, send_contour=send_contour)
     if mode == "marker":
         return marker.build(start)
     return load_log(case, start)
@@ -64,8 +66,9 @@ async def run(
     case: str,
     speed: float,
     clock: Clock,
+    send_contour: bool = False,
 ) -> None:
-    timeline = _build_timeline(mode, case, speed, clock)
+    timeline = _build_timeline(mode, case, speed, clock, send_contour=send_contour)
     print(f"[edge_sim] {mode}:{case} — 메시지 {len(timeline)}건, 배속 {speed}x → {url}")
 
     async with websockets.connect(url) as socket:
@@ -118,6 +121,11 @@ def main(argv: list[str] | None = None) -> int:
         help="시나리오 이름 또는 파일 경로 (--mode marker 에서는 쓰이지 않는다)",
     )
     parser.add_argument("--speed", type=float, default=1.0, help="재생 배속 (기본 1.0)")
+    parser.add_argument(
+        "--mask",
+        action="store_true",
+        help="진단용 마스크 윤곽을 함께 보낸다 (실물 엣지의 정책 overlay_mask 에 해당)",
+    )
     args = parser.parse_args(argv)
 
     if args.speed <= 0:
@@ -131,6 +139,7 @@ def main(argv: list[str] | None = None) -> int:
                 case=args.case,
                 speed=args.speed,
                 clock=RealClock(),
+                send_contour=args.mask,
             )
         )
     except KeyboardInterrupt:
