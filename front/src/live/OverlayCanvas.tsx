@@ -8,7 +8,7 @@
  * | 정상 사람 | 청록 | `작업자 #7 · 정상` |
  * | 위반 사람 | 적색 | `작업자 #3 · 안전모 미착용` |
  * | 쓰러진 사람 | 적색(점멸) | `작업자 #5 · 쓰러짐 감지` |
- * | 지게차 | 앰버 | `지게차 #1 · 이동 중` |
+ * | 트럭 | 앰버 | `트럭 #1 · 이동 중` |
  * | 근접 거리선 | 적색 점선 + 거리 라벨 | `3.2 m` |
  * | 금지구역 | 보라 점선 + 옅은 채움 | `금지구역 · 지게차 통행로` |
  *
@@ -94,7 +94,8 @@ function haloStroke(context: CanvasRenderingContext2D, color: string, width: num
 const VIOLATION_LABEL: Record<string, string> = {
   no_helmet: '안전모 미착용',
   zone_intrusion: '금지구역 침입',
-  proximity: '지게차 근접',
+  // 명세서 용어는 「지게차 근접」이고 화면 표기만 「트럭 근접」이다(`types/labels.ts`).
+  proximity: '트럭 근접',
   fall: '쓰러짐 감지',
 }
 
@@ -497,7 +498,7 @@ function drawVehicle(
     rect.x,
     rect.y,
     COLOR.vehicle,
-    `지게차 #${vehicle.track_id} · ${vehicle.moving ? '이동 중' : '정지'}`,
+    `트럭 #${vehicle.track_id} · ${vehicle.moving ? '이동 중' : '정지'}`,
   )
 }
 

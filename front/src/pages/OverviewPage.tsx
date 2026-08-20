@@ -2,7 +2,8 @@
  * 개요 (FN-UI-01 · 기능명세서 §4.6).
  *
  * 레이아웃은 `docs/AEGIS_front_design.pdf` 1페이지를 따르고, 용어는 명세서를 따른다
- * (부록 B — 「중장비 근접」이 아니라 「지게차 근접」).
+ * (부록 B — 「중장비 근접」이 아니라 「지게차 근접」. 단 화면 표기는 시연용으로
+ * 「트럭 근접」이다 — `types/labels.ts` 참조).
  *
  * 이 화면에서 절대 틀리면 안 되는 것 셋:
  *
@@ -247,8 +248,9 @@ export default function OverviewPage() {
             <ul className="dist">
               {distribution.map((bucket) => (
                 <li key={bucket.key} className="dist__row">
-                  {/* 서버가 라벨을 함께 내려주지만(§4.2) 부록 B 용어를 쓰는 표는 화면
-                      쪽에 있다 — 시안의 「중장비 근접」이 아니라 「지게차 근접」이다. */}
+                  {/* 서버가 라벨을 함께 내려주지만(§4.2) 용어 표는 화면 쪽에 있다
+                      (`types/labels.ts`). 시안의 「중장비 근접」이 아니고, 명세서의
+                      「지게차 근접」을 시연용으로 「트럭 근접」으로 띄운다. */}
                   <span className="dist__label">{violationLabel(bucket.key)}</span>
                   <span className="dist__bar">
                     <span

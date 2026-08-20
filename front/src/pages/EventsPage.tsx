@@ -60,8 +60,9 @@ const CHIPS: Chip[] = [
   { key: 'all', label: '전체', kind: 'all' },
   { key: 'no_helmet', label: '안전모', kind: 'type', value: 'no_helmet' },
   { key: 'zone_intrusion', label: '금지구역', kind: 'type', value: 'zone_intrusion' },
-  // ★ 시안은 「중장비 근접」이지만 명세서 용어는 「지게차 근접」이다(부록 B).
-  { key: 'proximity', label: '지게차 근접', kind: 'type', value: 'proximity' },
+  // ★ 시안은 「중장비 근접」·명세서는 「지게차 근접」이지만, 시연 미니어처가 트럭이라
+  //   화면에만 「트럭 근접」으로 띄운다(labels.ts 참조). `violation_type` 값은 그대로다.
+  { key: 'proximity', label: '트럭 근접', kind: 'type', value: 'proximity' },
   { key: 'fall', label: '쓰러짐', kind: 'type', value: 'fall' },
   { key: 'cam1', label: '카메라 1', kind: 'cam', value: 1 },
   { key: 'cam2', label: '카메라 2', kind: 'cam', value: 2 },
