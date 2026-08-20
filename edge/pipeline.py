@@ -40,6 +40,7 @@ from aegis_vision import (
     FallThresholds,
     Homography,
     NearbyReading,
+    OccupancyTracker,
     PointM,
     PointPx,
     ProximityRadii,
@@ -141,6 +142,11 @@ class CameraPipeline:
             ttl_s=self._policies.depth_cache_ms / 1000.0,
             move_invalidate_m=_DEPTH_MOVE_INVALIDATE_M,
         )
+        self._occupancy = OccupancyTracker(
+            confirm_s=self._policies.occupancy_confirm_s,
+            release_s=self._policies.occupancy_release_s,
+            overlap_min=self._policies.occupancy_overlap_min,
+        )
 
     # -- 서버 설정 ---------------------------------------------------------
 
@@ -153,6 +159,11 @@ class CameraPipeline:
             ttl_s=setup.policies.depth_cache_ms / 1000.0,
             move_invalidate_m=_DEPTH_MOVE_INVALIDATE_M,
         )
+        # 임계만 바꾸고 **탑승 상태는 유지한다** — 새로 만들면 관리자가 값을 만질 때마다
+        # 운전자가 잠깐 하차한 것으로 보여 근접 위반이 튄다.
+        self._occupancy.confirm_s = setup.policies.occupancy_confirm_s
+        self._occupancy.release_s = setup.policies.occupancy_release_s
+        self._occupancy.overlap_min = setup.policies.occupancy_overlap_min
 
     @property
     def ready(self) -> bool:
@@ -303,6 +314,17 @@ class CameraPipeline:
             if foot_m is None:
                 continue
 
+            # 탑승 판별(FN-DET-13)은 **화면 좌표**로 한다. 탑승자는 발이 지면에 없어
+            # 호모그래피가 내는 값이 실제 위치가 아니기 때문이다 — 여기서 묻는 것은
+            # 「화면에서 차량 몸통 안에 있는가」다.
+            riding_track_id = self._occupancy.update(
+                person_track_id=track_id,
+                person_mask=detection.contour,
+                person_foot=foot.point,
+                vehicles={item: raw.contour for item, raw in vehicles.items()},
+                at_s=at_s,
+            )
+
             posture, ratio, angle, stillness_s = self._posture(
                 detection, state, foot.point, homography, at_s
             )
@@ -334,6 +356,9 @@ class CameraPipeline:
                 "axis_angle_deg": angle,
                 "stillness_s": stillness_s,
                 "in_zone": zone_id,
+                # 탑승 중이 아니면 `null` 이다 — 필드는 항상 싣는다(§2.1). 화면이
+                # 「운전 중」을 표시하고 그 차량과의 거리선을 그리지 않는 근거다.
+                "riding_track_id": riding_track_id,
                 "nearby": [
                     {
                         "class": "vehicle",
@@ -367,6 +392,7 @@ class CameraPipeline:
                     helmet=helmet.helmet if helmet else state.helmet,
                     zone_id=zone_id,
                     posture=posture,
+                    riding_track_id=riding_track_id,
                     foot_m=foot_m,
                     foot_conf=foot.conf,
                     ts=ts,
@@ -552,6 +578,7 @@ class CameraPipeline:
         helmet: HelmetState | None,
         zone_id: str | None,
         posture: Posture,
+        riding_track_id: int | None,
         foot_m: PointM,
         foot_conf: float,
         ts: datetime,
@@ -562,13 +589,26 @@ class CameraPipeline:
         **한 메시지에 유형 하나다**(§2.2). 유형마다 조건 충족 시작 시각이 달라
         `observed_ms` 가 각각의 값을 가져야 하므로 묶지 않는다.
         """
-        nearest = proximity_candidate(readings, self._radii())
+        # ★ **탑승자는 자기가 탄 차량과의 근접을 제외한다**(FN-DET-13). 다른 차량과의
+        #   근접은 그대로 유효하다 — 지게차 두 대가 스쳐 지나가는 것은 실제 위험이다.
+        usable = [item for item in readings if item.track_id != riding_track_id]
+        nearest = proximity_candidate(usable, self._radii())
+        riding = riding_track_id is not None
         matched: dict[str, bool] = {
+            # 운전자도 안전모 착용 대상이다. **여기만 제외하지 않는다**(§4.1 표).
             ViolationType.NO_HELMET: helmet == "off",
-            ViolationType.ZONE_INTRUSION: zone_id is not None,
+            # 차량 통행은 정상 운용이다.
+            ViolationType.ZONE_INTRUSION: zone_id is not None and not riding,
             ViolationType.PROXIMITY: nearest is not None,
-            ViolationType.FALL: posture == "fallen",
+            # 앉은 자세는 height_ratio 가 낮고 정차하면 stillness 도 차서 오탐이 된다.
+            ViolationType.FALL: posture == "fallen" and not riding,
         }
+        if riding:
+            # 억제 비율이 과도하면 판별 임계가 잘못된 것이다(§4.1 「집계」).
+            suppressed = (zone_id is not None) + (posture == "fallen")
+            suppressed += len(readings) - len(usable)
+            if suppressed:
+                self._occupancy.count_suppressed(suppressed)
 
         messages: list[CandidateMsg] = []
         for violation, active in matched.items():
@@ -652,6 +692,7 @@ class CameraPipeline:
         for track_id in ids:
             self._persons.pop(track_id, None)
             self._vehicle_history.pop(track_id, None)
+            self._occupancy.forget(track_id)
         for key in [key for key in self._observed_since if key[0] in ids]:
             self._observed_since.pop(key, None)
 

@@ -59,6 +59,7 @@ from .homography import (
     PointM,
     PointPx,
 )
+from .occupancy import OccupancyTracker, mask_overlap_ratio, point_in_mask
 from .posture import (
     FallThresholds,
     MaskShape,
@@ -94,6 +95,7 @@ __all__ = [
     "MaskShape",
     "Matrix3",
     "NearbyReading",
+    "OccupancyTracker",
     "PointM",
     "PointPx",
     "PostureReading",
@@ -114,9 +116,11 @@ __all__ = [
     "ground_distance_m",
     "height_ratio",
     "mask_foot_point",
+    "mask_overlap_ratio",
     "mask_shape",
     "nearest_pair_m",
     "perspective_scale",
+    "point_in_mask",
     "point_in_polygon",
     "posture_of",
     "project_to_ground",

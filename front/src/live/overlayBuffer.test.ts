@@ -24,6 +24,7 @@ function person(trackId: number, x: number): OverlayPerson {
     posture: 'standing',
     in_zone: 'forklift_lane',
     helmet: 'off',
+  riding_track_id: null,
     violations: ['no_helmet'],
     event_ids: ['EV-20260814-0231'],
     alert_state: 'alerted',

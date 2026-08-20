@@ -127,6 +127,22 @@ class Policies(SpecModel):
     꺼둔 것을 잊는 순간 감시가 조용히 멎는 상태를 만들지 않기 위해서다.
     """
 
+    # --- 차량 탑승자 판별 (FN-DET-13) ---
+    occupancy_overlap_min: float = 0.35
+    """사람 마스크가 차량 마스크와 겹치는 최소 비율(API명세서 §4.5).
+
+    분모는 **사람 넓이**다. 차량이 훨씬 크므로 합집합으로 나누면 탑승 중이어도 값이
+    0 에 가깝다.
+    """
+
+    occupancy_confirm_s: float = 1.5
+    """탑승 확정까지의 지속 시간."""
+
+    occupancy_release_s: float = 3.0
+    """하차 확정까지의 지속 시간. **확정보다 길다** — 히스테리시스가 없으면 운전자가
+    몸을 기울일 때마다 탑승·하차가 반복되고 그때마다 근접 위반이 생겼다 사라진다.
+    """
+
     # --- 진단 표시 ---
     overlay_mask: bool = False
     """마스크 윤곽(`contour`)을 `frame`·`overlay` 에 싣는다(API명세서 §2.1 · §4.5).
@@ -264,6 +280,9 @@ class PolicyPatch(SpecModel):
     clip_extract_margin_s: float | None = None
     alert_duration_s: int | None = None
     mute_default_duration_s: float | None = None
+    occupancy_overlap_min: float | None = None
+    occupancy_confirm_s: float | None = None
+    occupancy_release_s: float | None = None
     overlay_mask: bool | None = None
     overlay_buffer_webrtc_ms: float | None = None
     overlay_buffer_hls_ms: float | None = None

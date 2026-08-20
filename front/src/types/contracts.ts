@@ -341,6 +341,7 @@ export interface DetectedPerson {
   stillness_s: number
   in_zone: string | null
   nearby: FrameNearby[]
+  riding_track_id: number | null
   contour: ([number, number])[] | null
 }
 
@@ -802,6 +803,7 @@ export interface OverlayPerson {
   event_ids: string[]
   alert_state: 'candidate' | 'active' | 'alerted' | 're_alerted' | 'lost' | null
   nearby: OverlayNearby[]
+  riding_track_id: number | null
   contour: ([number, number])[] | null
 }
 
@@ -849,6 +851,9 @@ export interface Policies {
   clip_extract_margin_s: number
   alert_duration_s: number
   mute_default_duration_s: number
+  occupancy_overlap_min: number
+  occupancy_confirm_s: number
+  occupancy_release_s: number
   overlay_mask: boolean
   overlay_buffer_webrtc_ms: number
   overlay_buffer_hls_ms: number
@@ -895,6 +900,9 @@ export interface PolicyPatch {
   clip_extract_margin_s: number | null
   alert_duration_s: number | null
   mute_default_duration_s: number | null
+  occupancy_overlap_min: number | null
+  occupancy_confirm_s: number | null
+  occupancy_release_s: number | null
   overlay_mask: boolean | null
   overlay_buffer_webrtc_ms: number | null
   overlay_buffer_hls_ms: number | null

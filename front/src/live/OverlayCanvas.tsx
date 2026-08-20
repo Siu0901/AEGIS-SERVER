@@ -9,6 +9,7 @@
  * | 위반 사람 | 적색 | `작업자 #3 · 안전모 미착용` |
  * | 쓰러진 사람 | 적색(점멸) | `작업자 #5 · 쓰러짐 감지` |
  * | 트럭 | 앰버 | `트럭 #1 · 이동 중` |
+ * | 탑승자 | 청록 | `작업자 #3 · 운전 중 (트럭 #1)` — 거리선 없음 |
  * | 근접 거리선 | 적색 점선 + 거리 라벨 | `3.2 m` |
  * | 금지구역 | 보라 점선 + 옅은 채움 | `금지구역 · 지게차 통행로` |
  *
@@ -493,6 +494,13 @@ function drawContour(
 
 function personLabel(person: OverlayPerson, zones: Zone[], pending: boolean): string {
   const who = `작업자 #${person.track_id}`
+  // 탑승 중이면 그 사실을 먼저 말한다(FN-DET-13). 구역 안에 있어도 침입이 아니고
+  // 자기 차량과의 근접도 위반이 아니라서, 이유를 모르면 「왜 안 잡히지」가 된다.
+  if (person.riding_track_id !== null) {
+    const kinds = person.violations.map((v) => VIOLATION_LABEL[v] ?? v).join(' · ')
+    const driving = `${who} · 운전 중 (트럭 #${person.riding_track_id})`
+    return kinds ? `${driving} · ${kinds}` : driving
+  }
   if (person.violations.length === 0) {
     // 구역 안에 있는 것 자체는 위반이 아니다(통행이 허용된 구역도 있다). 위치만 덧붙인다.
     const zone = zones.find((item) => item.zone_id === person.in_zone)
@@ -568,6 +576,9 @@ function drawNearby(
   const color = violating ? COLOR.violation : COLOR.vehicle
 
   for (const other of person.nearby) {
+    // 자기가 탄 차량과는 거리선을 그리지 않는다(FN-DET-13). 거리가 사실상 0이라
+    // 선이 박스 안에서 뭉치고, 위반이 아닌 것을 위반처럼 보이게 한다.
+    if (other.track_id === person.riding_track_id) continue
     const to = point(view, other.anchor)
     context.save()
     context.setLineDash([view.unit * 4, view.unit * 3])

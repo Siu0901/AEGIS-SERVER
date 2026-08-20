@@ -98,6 +98,13 @@ class OverlayPerson(SpecModel):
     """경고 단계. 없으면 `null`. 필드 자체는 항상 실린다."""
     nearby: list[OverlayNearby]
 
+    riding_track_id: int | None = None
+    """탑승 중인 차량의 `track_id`. 탑승 중이 아니면 `null` (FN-DET-13 · §2.1).
+
+    ★ **탑승자는 일부 판정에서 제외된다** — 자신이 탄 차량과의 `proximity`,
+      `zone_intrusion`, `fall`. `no_helmet` 은 **제외하지 않는다**(운전자도 착용 대상).
+    """
+
     contour: Contour | None = None
     """진단용 마스크 윤곽 (API명세서 §2.1). 정책 `overlay_mask` 가 켜졌을 때만 채운다.
 

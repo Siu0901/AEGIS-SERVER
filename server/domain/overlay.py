@@ -181,6 +181,9 @@ def _person(
         "foot_point": obj.foot_point,
         "posture": obj.posture,
         "in_zone": obj.in_zone,
+        # 탑승 여부는 **엣지가 판정한다**(FN-DET-13). 서버는 그대로 통과시킨다 —
+        # 화면이 「운전 중」을 표시하고 그 차량과의 거리선을 빼는 데 쓴다(§5.1).
+        "riding_track_id": obj.riding_track_id,
         "violations": state.violations if state else [],
         "event_ids": state.event_ids if state else [],
         "alert_state": state.alert_state if state else None,
