@@ -31,3 +31,7 @@ front/node_modules
 # vite 가 설정을 번들할 때 남기는 임시 파일. 실행마다 이름이 달라 그대로 두면
 # 커밋 후보에 계속 올라온다.
 front/vite.config.ts.timestamp-*.mjs
+
+# mediamtx 실사용 설정 — 카메라 RTSP 주소에 계정·비밀번호가 들어간다.
+# 견본은 deploy/mediamtx.example.yml 로 커밋한다 (.env / .env.example 과 같은 방식).
+deploy/mediamtx.yml
