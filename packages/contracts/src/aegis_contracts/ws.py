@@ -13,7 +13,7 @@ from typing import Annotated, Literal, Self
 
 from pydantic import AwareDatetime, Field, model_validator
 
-from ._base import Bbox, PointM, PointPx, SpecModel
+from ._base import Bbox, Contour, PointM, PointPx, SpecModel
 from .enums import (
     AlertLevel,
     AlertState,
@@ -98,6 +98,12 @@ class OverlayPerson(SpecModel):
     """경고 단계. 없으면 `null`. 필드 자체는 항상 실린다."""
     nearby: list[OverlayNearby]
 
+    contour: Contour | None = None
+    """진단용 마스크 윤곽 (API명세서 §2.1). 정책 `overlay_mask` 가 켜졌을 때만 채운다.
+
+    ★ **판정에 쓰지 않는다.** 없으면 필드를 생략한다 — `null` 을 싣지 않는다.
+    """
+
 
 class OverlayVehicle(SpecModel):
     """`overlay.objects[]` 의 vehicle(지게차). API명세서 §5.1"""
@@ -114,6 +120,12 @@ class OverlayVehicle(SpecModel):
     event_ids: list[str]
     alert_state: AlertState | None
     nearby: list[OverlayNearby]
+
+    contour: Contour | None = None
+    """진단용 마스크 윤곽 (API명세서 §2.1). 정책 `overlay_mask` 가 켜졌을 때만 채운다.
+
+    ★ **판정에 쓰지 않는다.** 없으면 필드를 생략한다 — `null` 을 싣지 않는다.
+    """
 
 
 #: `overlay.objects[]` 원소. `class` 값으로 구분되는 판별 유니온.

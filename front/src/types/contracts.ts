@@ -341,6 +341,7 @@ export interface DetectedPerson {
   stillness_s: number
   in_zone: string | null
   nearby: FrameNearby[]
+  contour: ([number, number])[] | null
 }
 
 /**
@@ -355,6 +356,7 @@ export interface DetectedVehicle {
   anchor_m: [number, number]
   moving: boolean
   danger_radius_m: number
+  contour: ([number, number])[] | null
 }
 
 /**
@@ -800,6 +802,7 @@ export interface OverlayPerson {
   event_ids: string[]
   alert_state: 'candidate' | 'active' | 'alerted' | 're_alerted' | 'lost' | null
   nearby: OverlayNearby[]
+  contour: ([number, number])[] | null
 }
 
 /**
@@ -816,6 +819,7 @@ export interface OverlayVehicle {
   event_ids: string[]
   alert_state: 'candidate' | 'active' | 'alerted' | 're_alerted' | 'lost' | null
   nearby: OverlayNearby[]
+  contour: ([number, number])[] | null
 }
 
 /**
@@ -845,6 +849,7 @@ export interface Policies {
   clip_extract_margin_s: number
   alert_duration_s: number
   mute_default_duration_s: number
+  overlay_mask: boolean
   overlay_buffer_webrtc_ms: number
   overlay_buffer_hls_ms: number
   overlay_stale_ms: number
@@ -890,6 +895,7 @@ export interface PolicyPatch {
   clip_extract_margin_s: number | null
   alert_duration_s: number | null
   mute_default_duration_s: number | null
+  overlay_mask: boolean | null
   overlay_buffer_webrtc_ms: number | null
   overlay_buffer_hls_ms: number | null
   overlay_stale_ms: number | null

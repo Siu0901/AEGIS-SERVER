@@ -127,6 +127,17 @@ class Policies(SpecModel):
     꺼둔 것을 잊는 순간 감시가 조용히 멎는 상태를 만들지 않기 위해서다.
     """
 
+    # --- 진단 표시 ---
+    overlay_mask: bool = False
+    """마스크 윤곽(`contour`)을 `frame`·`overlay` 에 싣는다(API명세서 §2.1 · §4.5).
+
+    ★ **기본은 꺼짐이다.** 켜면 객체마다 좌표 24쌍이 매 프레임 더 나간다 — 카메라 2대에
+      객체 5개면 초당 수천 개다. 감지가 형태를 제대로 잡는지 눈으로 볼 때만 켠다.
+
+    ★ **판정에는 쓰이지 않는다.** 이 값이 켜지든 꺼지든 확정·해소·거리 판정은 동일하다.
+      엣지가 정책을 주기적으로 읽으므로 **엣지를 재시작하지 않고** 토글된다.
+    """
+
     # --- 오버레이 시간 정합 (FN-UI-02) ---
     # 버퍼는 **재생 경로별로 나뉜다.** 라이브 영상 지연이 경로에 따라 한 자릿수 배
     # 차이가 나므로(M1 실측: WebRTC 0.27~0.34초 · LL-HLS 약 2.5초) 단일 값으로는
@@ -253,6 +264,7 @@ class PolicyPatch(SpecModel):
     clip_extract_margin_s: float | None = None
     alert_duration_s: int | None = None
     mute_default_duration_s: float | None = None
+    overlay_mask: bool | None = None
     overlay_buffer_webrtc_ms: float | None = None
     overlay_buffer_hls_ms: float | None = None
     overlay_stale_ms: float | None = None

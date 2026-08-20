@@ -21,7 +21,7 @@ from typing import Annotated, Literal
 
 from pydantic import AwareDatetime, Field
 
-from ._base import Bbox, PointM, PointPx, SpecModel
+from ._base import Bbox, Contour, PointM, PointPx, SpecModel
 from .enums import (
     DistanceMethod,
     HelmetState,
@@ -112,6 +112,12 @@ class DetectedPerson(SpecModel):
     같아 보이면 안 되는 자리다.
     """
 
+    contour: Contour | None = None
+    """진단용 마스크 윤곽 (API명세서 §2.1). 정책 `overlay_mask` 가 켜졌을 때만 채운다.
+
+    ★ **판정에 쓰지 않는다.** 없으면 필드를 생략한다 — `null` 을 싣지 않는다.
+    """
+
 
 class DetectedVehicle(SpecModel):
     """`frame` 메시지의 vehicle(지게차) 객체. API명세서 §2.1
@@ -137,6 +143,12 @@ class DetectedVehicle(SpecModel):
 
     moving: bool
     danger_radius_m: float
+
+    contour: Contour | None = None
+    """진단용 마스크 윤곽 (API명세서 §2.1). 정책 `overlay_mask` 가 켜졌을 때만 채운다.
+
+    ★ **판정에 쓰지 않는다.** 없으면 필드를 생략한다 — `null` 을 싣지 않는다.
+    """
 
 
 #: `frame.objects[]` 원소. `class` 값으로 구분되는 판별 유니온.

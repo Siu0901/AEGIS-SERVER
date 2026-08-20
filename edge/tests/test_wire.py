@@ -51,12 +51,25 @@ def _frame(person: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def test_frame_carries_no_mask() -> None:
-    frame = FrameMsg.model_validate({"type": "frame", "cam_id": 1, "ts": TS, "objects": [PERSON]})
-    text = frame.model_dump_json(by_alias=True)
-    assert "mask" not in text
-    assert "contour" not in text
-    assert "polygon" not in text
+def test_frame_carries_no_mask_by_default() -> None:
+    """마스크는 **기본적으로 전선에 나가지 않는다**(API명세서 §2.1).
+
+    형상은 엣지 내부 계산(접지점·최근접 거리·자세)에만 쓰고 결과값만 싣는다.
+    `contour` 는 정책 `overlay_mask` 를 켰을 때만 채우는 진단용 예외이며, 켜지 않으면
+    **필드 자체가 생략된다** — `null` 을 싣지 않는다(`exclude_unset`).
+    """
+    obj = _first_object(_frame(PERSON)["objects"])
+    assert "mask" not in obj
+    assert "contour" not in obj
+    assert "polygon" not in obj
+
+
+def test_contour_travels_only_when_asked() -> None:
+    """정책이 켜졌을 때만 윤곽이 실린다. 켜면 **정규화 좌표 그대로** 나간다(§2.1)."""
+    body = dict(PERSON)
+    body["contour"] = [[0.20, 0.36], [0.27, 0.36], [0.27, 0.76], [0.20, 0.76]]
+    obj = _first_object(_frame(body)["objects"])
+    assert obj["contour"] == [[0.20, 0.36], [0.27, 0.36], [0.27, 0.76], [0.20, 0.76]]
 
 
 def test_person_fields_are_exactly_the_contract() -> None:

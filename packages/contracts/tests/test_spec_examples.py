@@ -885,6 +885,7 @@ POLICIES_EXAMPLE: dict[str, Any] = {
     "cls_min_conf": 0.60,
     "clip_pre_roll_s": 10,
     "clip_post_roll_s": 10,
+    "overlay_mask": False,
     "overlay_buffer_webrtc_ms": 300,
     "overlay_buffer_hls_ms": 2800,
     "overlay_stale_ms": 1000,

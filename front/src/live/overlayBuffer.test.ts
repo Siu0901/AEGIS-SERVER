@@ -28,6 +28,7 @@ function person(trackId: number, x: number): OverlayPerson {
     event_ids: ['EV-20260814-0231'],
     alert_state: 'alerted',
     nearby: [],
+    contour: null,
   }
 }
 
@@ -43,6 +44,7 @@ function vehicle(trackId: number, x: number): OverlayVehicle {
     event_ids: [],
     alert_state: null,
     nearby: [],
+    contour: null,
   }
 }
 
