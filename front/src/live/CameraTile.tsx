@@ -68,6 +68,10 @@ export default function CameraTile({
   const videoRef = useRef<HTMLVideoElement>(null)
   const [kind, setKind] = useState<PlaybackKind>('none')
   const [error, setError] = useState<string | null>(null)
+  // 끊겨서 다시 붙는 중인가. **화면에 반드시 드러낸다** — 재연결 중에는 직전
+  // 프레임이 그대로 남아 있어서, 표시하지 않으면 멈춘 그림이 살아 있는 영상으로
+  // 보인다. 관제자는 그것을 「위반이 없다」로 읽는다.
+  const [retrying, setRetrying] = useState(false)
   const [displayAt, setDisplayAt] = useState<string>('—')
   const [size, setSize] = useState<string>('—')
   const [probe, setProbe] = useState<OverlayDebug | null>(null)
@@ -85,6 +89,7 @@ export default function CameraTile({
     // 오류로 가득 차서 진짜 문제가 묻힌다. 살아나면 이 effect 가 다시 돈다.
     if (!live) {
       setKind('none')
+      setRetrying(false)
       setDisplayAt('—')
       return
     }
@@ -95,6 +100,7 @@ export default function CameraTile({
       (state) => {
         setKind(state.kind)
         setError(state.error)
+        setRetrying(state.retrying)
       },
       preferenceFromLocation(window.location.search),
     )
@@ -210,6 +216,16 @@ export default function CameraTile({
           {live ? KIND_LABEL[kind] : STATE_LABEL[camera.main_state]}
           {live && bufferKey && policies && ` +${Math.round(policies[bufferKey])}ms`}
         </span>
+        {/* 재연결은 몇 초 만에 끝나기도 하지만, 끝나지 않을 수도 있다. 어느 쪽이든
+            지금 화면이 실시간이 아니라는 사실은 그 동안 계속 보여야 한다. */}
+        {live && retrying && (
+          <span
+            className="tile__meta tile__meta--warn"
+            title="영상이 끊겨 다시 붙는 중이다. 지금 보이는 그림은 마지막으로 도착한 프레임이며 실시간이 아니다."
+          >
+            재연결 중
+          </span>
+        )}
         {/* 정책값을 못 읽으면 오버레이를 안 그린다. 조용히 비어 있으면 "위반이 없다"로
             읽히는데, 그 오해가 이 화면에서 가장 위험하다. */}
         {live && !policies && (
