@@ -34,6 +34,11 @@ export default defineConfig(({ mode }) => {
       proxy: {
         '/api': { target: 'http://127.0.0.1:8000', changeOrigin: true },
         '/ws': { target: 'ws://127.0.0.1:8000', ws: true },
+        // 키프레임·클립. **없으면 조용히 깨진다** — vite 의 SPA 폴백이 `/media/...`
+        // 요청에 `index.html` 을 돌려주므로 `<img>` 는 깨진 그림, `<video>` 는 재생
+        // 불가가 된다. 404 가 아니라 200(text/html)이라 콘솔에도 오류가 안 남는다.
+        // 서버에서는 정상이라 「검색 결과에 그림만 안 나오는」 증상으로만 보인다.
+        '/media': { target: 'http://127.0.0.1:8000', changeOrigin: true },
       },
     },
     /**
