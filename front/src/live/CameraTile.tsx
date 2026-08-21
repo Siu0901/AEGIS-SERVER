@@ -138,7 +138,7 @@ export default function CameraTile({
       // 그 프레임이 화면에 나가는 **벽시계 시각**이 된다. 영상에 소성된 카메라
       // 타임코드와 이 값의 차이가 곧 영상 경로 지연이다.
       const wall = performance.timeOrigin + metadata.expectedDisplayTime
-      setDisplayAt(formatUtc(wall))
+      setDisplayAt(formatClock(wall))
       handle = video.requestVideoFrameCallback(onFrame)
     }
 
@@ -191,7 +191,7 @@ export default function CameraTile({
         )}
 
         {live && (
-          <div className="tile__clock" title="현재 재생 중인 프레임의 표시 시각 (UTC)">
+          <div className="tile__clock" title="현재 재생 중인 프레임의 표시 시각 (현지 시간). 카메라에 소성된 타임코드와의 차이가 영상 경로 지연이다.">
             표시 {displayAt}
           </div>
         )}
@@ -307,11 +307,11 @@ function DebugPanel({
     <div className="tile__debug">
       <div>
         <span>표시 프레임</span>
-        <b>{formatUtc(probe.displayAt)}</b>
+        <b>{formatClock(probe.displayAt)}</b>
       </div>
       <div>
         <span>그린 좌표 ts</span>
-        <b>{probe.overlayTs === null ? '없음' : formatUtc(probe.overlayTs)}</b>
+        <b>{probe.overlayTs === null ? '없음' : formatClock(probe.overlayTs)}</b>
       </div>
       <div className={matched ? '' : 'tile__debug--bad'}>
         <span>차이</span>
@@ -344,7 +344,7 @@ function DebugPanel({
       <div>
         <span>촬영 시각(rVFC)</span>
         <b>
-          {probe.captureTimeMs === null ? '없음 — 고정 버퍼 사용' : formatUtc(probe.captureTimeMs)}
+          {probe.captureTimeMs === null ? '없음 — 고정 버퍼 사용' : formatClock(probe.captureTimeMs)}
         </b>
       </div>
       {probe.captureLagMs !== null && (
@@ -374,11 +374,22 @@ function DebugPanel({
   )
 }
 
-function formatUtc(epochMs: number): string {
+/**
+ * 시:분:초.밀리 — **현지 시간대**로 찍는다.
+ *
+ * 이 값을 읽는 사람은 현장에 서서 「지금」과 비교한다. UTC 로 찍으면 9시간을 암산해야
+ * 하고, 그러면 지연을 눈으로 재라고 만든 표시가 오히려 방해가 된다.
+ *
+ * **밀리초는 남긴다.** 이 표시의 용도는 시계가 아니라 영상 경로 지연 측정이고
+ * (FN-UI-02 정합 오차 목표 ±100ms), 초 단위로 자르면 잴 수가 없다.
+ *
+ * 서버 로그와 API 는 UTC 그대로다 — 대조할 때는 시간대 차이를 감안해야 한다.
+ */
+function formatClock(epochMs: number): string {
   const at = new Date(epochMs)
   const pad = (value: number, width = 2) => String(value).padStart(width, '0')
   return (
-    `${pad(at.getUTCHours())}:${pad(at.getUTCMinutes())}:${pad(at.getUTCSeconds())}` +
-    `.${pad(at.getUTCMilliseconds(), 3)}`
+    `${pad(at.getHours())}:${pad(at.getMinutes())}:${pad(at.getSeconds())}` +
+    `.${pad(at.getMilliseconds(), 3)}`
   )
 }
