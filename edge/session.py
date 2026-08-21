@@ -22,6 +22,7 @@ TensorRT 엔진은 그것을 물고 가지 않으므로 엔진 옆 사이드카 
 from __future__ import annotations
 
 import ast
+import importlib
 import json
 import logging
 from pathlib import Path
@@ -175,31 +176,49 @@ class _OnnxBackend:
 
 
 def _load_cudart() -> Any:
-    """`cudart` 바인딩. **패키지 위치가 버전에 따라 다르다.**
+    """`cudart` 바인딩. **모듈 위치가 버전마다 다르다.**
 
-    `cuda-python` 12.6 부터 바인딩이 `cuda.bindings.*` 로 옮겨졌고, 13.x 에서는
-    옛 경로(`cuda.cudart`)가 사라졌다. 그런데 JetPack 이 싣는 버전과 `pip` 로
-    까는 버전이 다를 수 있어서, **둘 다 시도한다.**
+    `cuda-python` 이 두 번 옮겼다.
 
-    ★ **조용히 넘어가지 않는다.** 어느 쪽도 없으면 어떻게 고치는지 적어서 죽인다 —
-      여기서 None 을 돌려주면 추론이 안 되는 이유가 한참 뒤에 드러난다(절대규칙 9).
+    | 버전 | 경로 |
+    |---|---|
+    | 13.x | `cuda.bindings.runtime` (`cudart` → `runtime` 으로 개명) |
+    | 12.6+ | `cuda.bindings.cudart` |
+    | 12.6 미만 | `cuda.cudart` |
+
+    함수 이름(`cudaMalloc` · `cudaMemcpyAsync` · `cudaStreamCreate`)은 셋 다 같으므로
+    어느 것을 잡든 아래 코드가 그대로 돈다. 젯슨은 JetPack 이 싣는 버전과 `pip` 로
+    까는 버전이 다를 수 있어 **전부 시도한다.**
+
+    ★ **모듈이 있다고 통과시키지 않는다.** 13.x 의 `cuda.bindings` 는 임포트는 되는데
+      `cudart` 가 없는 껍데기다. `cudaMalloc` 이 실제로 있는지까지 확인해야 한다.
+
+    ★ **못 찾으면 조용히 넘어가지 않고 죽는다**(절대규칙 9). 여기서 `None` 을 돌려주면
+      추론이 안 되는 이유가 한참 뒤에 드러난다.
     """
-    try:
-        from cuda import cudart  # cuda-python < 12.6
-    except ImportError:
+    tried: list[str] = []
+    for name in ("cuda.bindings.runtime", "cuda.bindings.cudart", "cuda.cudart"):
         try:
-            from cuda.bindings import cudart  # cuda-python >= 12.6
-        except ImportError as exc:
-            msg = (
-                "cudart 바인딩을 찾지 못했다 — TensorRT 백엔드를 쓸 수 없다.\n"
-                "  `cuda.cudart`(12.6 미만)도 `cuda.bindings.cudart`(12.6 이상)도 없다.\n"
-                "  젯슨에서는 JetPack 이 싣는 것을 쓰는 것이 안전하다:\n"
-                '    python -c "import cuda.bindings.cudart"  로 확인\n'
-                "    없으면  pip install cuda-python\n"
-                "  TensorRT 없이 돌려보려면 edge/config.yaml 의 runtime.backend 를 onnx 로 둔다."
-            )
-            raise ImportError(msg) from exc
-    return cudart
+            module = importlib.import_module(name)
+        except ImportError:
+            tried.append(f"{name} (없음)")
+            continue
+        if not hasattr(module, "cudaMalloc"):
+            tried.append(f"{name} (cudaMalloc 없음)")
+            continue
+        log.info("cudart 바인딩 — %s", name)
+        return module
+
+    msg = (
+        "cudart 바인딩을 찾지 못했다 — TensorRT 백엔드를 쓸 수 없다.\n"
+        "  시도한 것: " + " · ".join(tried) + "\n"
+        "  젯슨(JetPack 6)은 CUDA 12 라 **cuda-python 도 12 계열**이어야 한다:\n"
+        "    pip install 'cuda-python<13'\n"
+        "  그래도 안 되면 JetPack 이 시스템 파이썬에 깔아둔 것을 쓴다 —\n"
+        "    python3 -m venv --system-site-packages .venv  로 venv 를 다시 만든다.\n"
+        "  TensorRT 없이 돌려보려면 edge/config.yaml 의 runtime.backend 를 onnx 로 둔다."
+    )
+    raise ImportError(msg)
 
 
 class _TensorRTBackend:
