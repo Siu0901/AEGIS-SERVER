@@ -43,6 +43,7 @@ from fastapi.staticfiles import StaticFiles
 from aegis_contracts import ComponentSystemMsg, Policies
 from aegis_contracts.enums import ComponentState, StreamState
 from aegis_vision.clock import Clock, RealClock
+from server.ai.agent import MINIATURE_CONTEXT
 from server.ai.gemini import create_cloud
 from server.ai.guard import CloudGuard
 from server.ai.service import AiService
@@ -269,6 +270,9 @@ def create_app(
         # §6 `normal_pool.embedding_model` — 벡터가 **어느 공간에 사는지**를 행에 함께
         # 적는다. 없으면 모델을 바꾼 순간 옛 벡터와 새 벡터가 한 풀에서 비교된다.
         embedding_model=resolved.gemini_embed_model,
+        # 이 현장이 무엇인지 알려준다. 모르면 모델이 스스로 전제를 세우고, 그 전제가
+        # 틀리면 규칙을 다 지켜도 답이 뒤집힌다(`SITE_MINIATURE`).
+        site_context=MINIATURE_CONTEXT if resolved.site_miniature else "",
     )
     # ★ 확정 시 분석을 건다. **`EventService` 는 기다리지 않는다** — `on_confirmed` 가
     #   하는 일은 배경 태스크 하나를 띄우는 것뿐이고, 그 시그니처는 클립 예약과 같다.

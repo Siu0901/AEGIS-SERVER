@@ -194,6 +194,7 @@ class AiService:
         cam_ids: Sequence[int] = (),
         report_stats: ReportStats | None = None,
         embedding_model: str = "",
+        site_context: str = "",
     ) -> None:
         self._clock = clock
         self._guard = guard
@@ -209,6 +210,9 @@ class AiService:
         # 이 벡터가 **어느 공간에 사는지**를 행에 함께 적기 위한 이름(§6). 어댑터가
         # 없으면 빈 문자열이고, 그때는 임베딩 자체가 없으므로 풀에 쓸 일도 없다.
         self._embedding_model = embedding_model or getattr(embedder, "embed_model", "") or "unknown"
+        # 이 현장이 무엇인지. 프롬프트 **세 곳**(챗봇·브리핑·심층분석)이 같이 쓴다 —
+        # 한 곳만 넣으면 나머지 경로에서 같은 오해가 그대로 남는다.
+        self._site_context = site_context
         self._pruned = False
         self._incidents = IncidentMatcher(embedder)
         self._policies = Policies()
@@ -351,7 +355,9 @@ class AiService:
     async def _generate(self, prompt: str, images: list[bytes]) -> str | None:
         if self._llm is None:
             return None
-        return await self._guard.call("분석문 생성", self._llm.generate(prompt, images=images))
+        return await self._guard.call(
+            "분석문 생성", self._llm.generate(self._site_context + prompt, images=images)
+        )
 
     # -- FN-AI-02 · 장면 검색 --------------------------------------------
 
@@ -447,6 +453,7 @@ class AiService:
                 box.tools,
                 specs_of(box.tools),
                 history=_history_block(history),
+                site_context=self._site_context,
             ),
         )
         if result is None:
@@ -727,13 +734,13 @@ class AiService:
             )
 
         prompt = (
-            "너는 제조현장 안전관제 화면을 보는 관리자다. 아래 CCTV 프레임"
+            self._site_context + "너는 제조현장 안전관제 화면을 보는 관리자다. 아래 CCTV 프레임"
             f"({', '.join(f'{cam_id}번 카메라' for cam_id, _ in frames)})을 보고 "
             "지금 상황을 2~3문장의 한국어로 요약해라.\n"
             "\n"
             "★ 규칙 (어기면 이 보고는 쓸모가 없다)\n"
             "1. **화면에 실제로 보이는 것만** 쓴다. 제조현장이라는 맥락에서 있을 법한\n"
-            "   것을 채워 넣지 마라 — 사람이 안 보이면 사람을 쓰지 않는다.\n"
+            "   것을 채워 넣지 마라 — 인물이 안 보이면 작업자를 쓰지 않는다.\n"
             "2. 화면이 **컬러바·테스트 패턴·정지 화면·검은 화면**이면 그 사실을 그대로\n"
             "   적고 끝낸다. 현장 장면인 척 묘사하지 마라.\n"
             "3. 사람·지게차가 보이면 위치와 눈에 띄는 위험 요인을 우선 적는다.\n"

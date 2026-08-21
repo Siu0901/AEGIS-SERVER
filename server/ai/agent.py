@@ -32,7 +32,7 @@ from langchain_core.tools import BaseTool
 
 from server.ai.ports import CloudError, Llm, LlmTurn, ToolExchange, ToolResult, ToolSpec
 
-__all__ = ["MAX_STEPS", "SYSTEM_PROMPT", "AgentResult", "run_agent"]
+__all__ = ["MAX_STEPS", "MINIATURE_CONTEXT", "SYSTEM_PROMPT", "AgentResult", "run_agent"]
 
 log = logging.getLogger("server.ai.agent")
 
@@ -41,6 +41,34 @@ log = logging.getLogger("server.ai.agent")
 #: 넉넉하면 모델이 도구를 탐색하듯 부르며 응답이 길어진다. 실측으로 대부분의 질문이
 #: 1~2 바퀴에 끝난다.
 MAX_STEPS = 4
+
+#: 이 현장이 미니어처 모형이라는 사실. **모델이 이것을 모르면 답이 뒤집힌다.**
+#:
+#: 실측(2026-08-21) — 「지금 1번 카메라에 뭐가 보여?」에 모델이
+#: 「레고 모형 피규어가 서 있다. **실제 작업자는 식별되지 않는다**」고 답했다.
+#: 사람이 읽으면 「위험 없음」이다. 그런데 같은 프레임에서 감지 파이프라인은 그 인물들을
+#: `person` 으로 잡아 위반을 확정하고 경고 방송까지 내보내고 있었다. 화면과 챗봇이
+#: 정반대를 말하는 상태이고, 둘 중 사람이 믿는 쪽은 문장이다.
+#:
+#: **모형인지 여부는 이 시스템의 관심사가 아니다.** 감지·확정·경고·시정 판정이 전부
+#: 모형을 대상으로 성립하도록 만들어져 있다(기능명세서 §4.7 축척 환산). 모델만
+#: 혼자 다른 전제를 쓰면 그 답은 틀린 정도가 아니라 반대다.
+MINIATURE_CONTEXT = """이 현장은 **미니어처 모형으로 구성된 시연 환경**이다(기능명세서 §4.7).
+
+- 화면의 레고 인물은 **작업자**이고, 장난감 트럭·지게차는 **지게차**다. 감지 모델도
+  그렇게 판정한다(`toy_person` → `person`, `toy_truck` → `vehicle`). 네가 보는 모형은
+  이 시스템이 실제로 감시하고 경고를 내보내는 대상 그 자체다.
+- 축척은 42.5배다. 모형 인물 4cm 가 작업자 신장 1.7m 에 해당하고, 모형 1cm 가 현장
+  0.425m 다. 거리 임계값도 같은 축척으로 환산해 심어 두었으므로, 도구가 돌려준 거리
+  수치는 그대로 쓰면 된다.
+- **「모형이라 실제 위험은 없다」·「실제 작업자는 식별되지 않는다」고 쓰지 마라.**
+  관리자가 알고 싶은 것은 모형인지 여부가 아니라 위반이 일어났는지다. 그 한 문장이
+  감지·경고·시정 판정을 전부 부정하는 것으로 읽힌다.
+- 장면을 묘사할 때도 모형 용어가 아니라 **현장 용어**로 쓴다 — 「레고 피규어 3개」가
+  아니라 「작업자 3명」이고, 「장난감 트럭」이 아니라 「지게차」다.
+- 다만 **없는 것을 지어내는 것과는 다르다.** 화면에 인물 모형이 없으면 작업자가 없는
+  것이고, 컬러바·검은 화면이면 그 사실을 그대로 적는다.
+"""
 
 #: 시스템 지시. **여기서 막는 것이 곧 이 프로젝트의 규칙이다.**
 SYSTEM_PROMPT = """너는 중소 제조현장 안전관제 시스템의 어시스턴트다.
@@ -90,6 +118,7 @@ async def run_agent(
     *,
     history: str = "",
     max_steps: int = MAX_STEPS,
+    site_context: str = "",
 ) -> AgentResult:
     """질문 하나를 도구 호출 루프로 답한다.
 
@@ -97,7 +126,9 @@ async def run_agent(
     독립 질의로 처리되어 무엇을 가리키는지 알 수 없다.
     """
     by_name = {item.name: item for item in tools}
-    prompt = f"{SYSTEM_PROMPT}\n{history}\n관리자 질문: {question}\n"
+    # 현장 맥락을 **규칙보다 먼저** 놓는다. 무엇을 보고 있는지 모른 채 규칙만 읽으면
+    # 모델이 스스로 전제를 세우고, 그 전제가 틀리면 규칙을 다 지켜도 답이 뒤집힌다.
+    prompt = f"{site_context}{SYSTEM_PROMPT}\n{history}\n관리자 질문: {question}\n"
 
     exchanges: list[ToolExchange] = []
     last = ""
