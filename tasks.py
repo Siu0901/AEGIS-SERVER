@@ -718,12 +718,17 @@ def relay_encoder(ffmpeg: str) -> str:
 def relay_argv(
     ffmpeg: str,
     source: str,
-    cam_id: int,
+    path: str,
     base: str,
     *,
     encoder: str | None = None,
 ) -> list[str]:
-    """카메라 한 대를 `{base}/cam{N}/main` 으로 재송출한다.
+    """카메라 스트림 하나를 `{base}/{path}` 로 재송출한다.
+
+    ★ **`path` 를 받는 이유는 서브도 밀어야 하기 때문이다.** 엣지는 서브(640×360)만
+      받아 추론하는데(`edge/config.yaml` 의 `rtsp_sub`), 서브가 없으면 감지가 통째로
+      돌지 않는다. 메인만 밀던 시절에는 라이브 화면이 멀쩡해서 그 사실이 화면에
+      드러나지 않았다 — 카메라는 잘 보이는데 박스만 안 그려진다.
 
     ★ **재인코딩하지 않는다**(`-c:v copy`). 카메라가 이미 H.264 를 뱉으므로 다시 굽는
       것은 낭비이고, 노트북에서는 그 비용이 송출을 굶겨 프레임을 떨어뜨린다
@@ -765,7 +770,7 @@ def relay_argv(
         "-muxpreload", "0",
         "-f", "rtsp",
         "-rtsp_transport", "tcp",
-        f"{base}/cam{cam_id}/main",
+        f"{base}/{path}",
     ]  # fmt: skip
     if encoder is None:
         return [*head, "-c:v", "copy", *tail]
@@ -816,15 +821,30 @@ def task_relay(cams: str | None, *, transcode: bool = True) -> int:
     base = env.get("RTSP_BASE", "rtsp://127.0.0.1:8554")
     wanted = [int(item) for item in cams.split(",")] if cams else [1, 2]
 
-    targets: list[tuple[int, str]] = []
+    # ★ **메인과 서브를 둘 다 민다.** 메인(1920×1080)은 서버가 라이브·녹화·클립에
+    #   쓰고, 서브(640×360)는 엣지가 추론에 쓴다(`edge/config.yaml` 의 `rtsp_sub`).
+    #   서브를 빠뜨리면 라이브 화면은 멀쩡한데 감지만 통째로 안 돈다.
+    #
+    #   서브는 **재인코딩하지 않는다**(`encoder=None`). baseline 으로 굽는 것은 브라우저
+    #   WebRTC 협상 때문인데 서브를 보는 것은 엣지의 ffmpeg 디코더뿐이라 프로파일을
+    #   가리지 않는다. 굽지 않으면 노트북 CPU 도 그만큼 덜 쓴다.
+    targets: list[tuple[str, str, str | None]] = []
     for cam_id in wanted:
-        source = env.get(f"CAM{cam_id}_RTSP_MAIN", "")
-        if source:
-            targets.append((cam_id, source))
+        main = env.get(f"CAM{cam_id}_RTSP_MAIN", "")
+        if main:
+            targets.append((f"cam{cam_id}/main", main, encoder))
         else:
             # 조용히 넘어가지 않는다 — 카메라가 안 뜬 이유가 설정에 있다는 것을 알려야
             # 한다. 화면이 검은 채로 원인을 찾게 두지 않는다(절대규칙 9).
             say(f"      cam{cam_id}    .env 의 CAM{cam_id}_RTSP_MAIN 이 비어 있다 - 건너뛴다")
+        sub = env.get(f"CAM{cam_id}_RTSP_SUB", "")
+        if sub:
+            targets.append((f"cam{cam_id}/sub", sub, None))
+        else:
+            # 서브가 없으면 **감지가 통째로 없다.** 라이브 화면은 정상으로 보이므로
+            # 여기서 말하지 않으면 「왜 박스가 안 그려지지」로 한참 헤매게 된다.
+            say(f"      cam{cam_id}    .env 의 CAM{cam_id}_RTSP_SUB 가 비어 있다")
+            say("              서브가 없으면 엣지가 받을 영상이 없어 감지가 돌지 않는다")
     if not targets:
         raise TaskError(
             ".env 에 CAM1_RTSP_MAIN 이 비어 있다 - 재송출할 카메라가 없다\n"
@@ -836,26 +856,29 @@ def task_relay(cams: str | None, *, transcode: bool = True) -> int:
         say("      --no-transcode: 카메라가 baseline 이 아니면 화면이 검게 남는다")
     else:
         say(f"[relay] 실물 카메라 -> mediamtx ({MAIN_W}x{MAIN_H}@{MAIN_FPS} baseline · {encoder})")
-    for cam_id, source in targets:
-        say(f"      cam{cam_id}    {_hide_secret(source)}  ->  {base}/cam{cam_id}/main")
+    for path, source, enc in targets:
+        note = "원본 그대로" if enc is None else f"{MAIN_W}x{MAIN_H}@{MAIN_FPS} baseline"
+        say(f"      {path:<10} {_hide_secret(source)}  ->  {base}/{path}  ({note})")
 
-    procs: list[tuple[int, subprocess.Popen[bytes]]] = []
-    for cam_id, source in targets:
-        argv = relay_argv(ffmpeg, source, cam_id, base, encoder=encoder)
-        procs.append((cam_id, subprocess.Popen([argv[0], *argv[1:]], cwd=str(ROOT))))
+    procs: list[tuple[str, subprocess.Popen[bytes]]] = []
+    for path, source, enc in targets:
+        argv = relay_argv(ffmpeg, source, path, base, encoder=enc)
+        procs.append((path, subprocess.Popen([argv[0], *argv[1:]], cwd=str(ROOT))))
     say("      송출 중. Ctrl+C 로 종료한다.")
 
     # 카메라는 끊긴다 — 전원·네트워크·동시접속 제한. 끊긴 채로 두면 화면만 검어지므로
     # 다시 붙인다. 끊겼다는 사실은 매번 로그로 남긴다.
     try:
         while True:
-            for index, (cam_id, proc) in enumerate(procs):
+            sources = {path: (source, enc) for path, source, enc in targets}
+            for index, (path, proc) in enumerate(procs):
                 if proc.poll() is None:
                     continue
-                say(f"[relay] cam{cam_id} 송출이 끊겼다 (코드 {proc.returncode}) - 3초 뒤 재시도")
+                say(f"[relay] {path} 송출이 끊겼다 (코드 {proc.returncode}) - 3초 뒤 재시도")
                 time.sleep(3.0)
-                argv = relay_argv(ffmpeg, dict(targets)[cam_id], cam_id, base, encoder=encoder)
-                procs[index] = (cam_id, subprocess.Popen([argv[0], *argv[1:]], cwd=str(ROOT)))
+                source, enc = sources[path]
+                argv = relay_argv(ffmpeg, source, path, base, encoder=enc)
+                procs[index] = (path, subprocess.Popen([argv[0], *argv[1:]], cwd=str(ROOT)))
             time.sleep(0.5)
     except KeyboardInterrupt:
         say()
@@ -864,11 +887,11 @@ def task_relay(cams: str | None, *, transcode: bool = True) -> int:
         for _, proc in procs:
             if proc.poll() is None:
                 proc.terminate()
-        for cam_id, proc in procs:
+        for path, proc in procs:
             try:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                say(f"      cam{cam_id} 응답 없음 - 강제 종료")
+                say(f"      {path} 응답 없음 - 강제 종료")
                 proc.kill()
     return 0
 
