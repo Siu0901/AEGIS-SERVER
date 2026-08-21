@@ -28,6 +28,8 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -817,6 +819,38 @@ MAIN_BITRATE = "2500k"
 #: VBV 버퍼 = 비트레이트 × 0.5초. 지연과 직결되므로 비트레이트와 함께 움직인다.
 MAIN_BUFSIZE = "1250k"
 
+#: 경로 수신 여부를 확인하는 주기(초).
+_RELAY_CHECK_INTERVAL_S = 5.0
+#: 이만큼 계속 받지 못하면 프로세스가 살아 있어도 다시 띄운다.
+#:
+#: 기동·재연결에 몇 초가 걸리므로 짧게 잡으면 붙는 중인 것을 끊어버린다. 반대로 길게
+#: 잡으면 그동안 라이브도 녹화도 없다. 20초면 정상 재연결은 통과하고, 사람이
+#: 「화면이 안 나오는데」 하고 알아채기 전에 복구가 시작된다.
+_RELAY_STALL_AFTER_S = 20.0
+
+
+def mediamtx_ready(api_base: str) -> dict[str, bool] | None:
+    """경로명 → 수신 중인가. 제어 API 에 닿지 못하면 `None`.
+
+    **`None` 과 「전부 False」를 구분한다.** 제어 API 가 죽은 것은 송출이 끊긴 것과
+    다른 사건인데, 뭉뚱그리면 mediamtx 를 재시작하는 동안 relay 가 멀쩡한 ffmpeg 을
+    전부 죽여버린다.
+    """
+    url = f"{api_base.rstrip('/')}/v3/paths/list?page=0&itemsPerPage=100"
+    try:
+        with urllib.request.urlopen(url, timeout=2.0) as response:
+            payload = json.load(response)
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+        return None
+    items = payload.get("items")
+    if not isinstance(items, list):
+        return None
+    return {
+        item["name"]: bool(item.get("ready", False))
+        for item in items
+        if isinstance(item, dict) and isinstance(item.get("name"), str)
+    }
+
 
 def task_relay(cams: str | None, *, transcode: bool = True) -> int:
     """실물 IP 카메라 → mediamtx (FN-DET-01 · API명세서 §1.2).
@@ -834,6 +868,8 @@ def task_relay(cams: str | None, *, transcode: bool = True) -> int:
     encoder = relay_encoder(ffmpeg) if transcode else None
     env = env_values()
     base = env.get("RTSP_BASE", "rtsp://127.0.0.1:8554")
+    # 송출이 실제로 도착하는지 확인할 곳. 서버의 스트림 감시가 보는 것과 같은 API 다.
+    mediamtx_api = env.get("MEDIAMTX_API", "http://127.0.0.1:9997")
     wanted = [int(item) for item in cams.split(",")] if cams else [1, 2]
 
     # ★ **메인과 서브를 둘 다 민다.** 메인(1920×1080)은 서버가 라이브·녹화·클립에
@@ -883,17 +919,61 @@ def task_relay(cams: str | None, *, transcode: bool = True) -> int:
 
     # 카메라는 끊긴다 — 전원·네트워크·동시접속 제한. 끊긴 채로 두면 화면만 검어지므로
     # 다시 붙인다. 끊겼다는 사실은 매번 로그로 남긴다.
+    #
+    # ★ **살아 있는 것과 일하고 있는 것은 다르다.** `proc.poll()` 만 보면 ffmpeg 이
+    #   죽은 소켓에 매달린 채 영원히 살아 있는 경우를 놓친다. 실측(2026-08-21):
+    #   mediamtx 가 퍼블리셔 세션 4개를 `destroyed: not in use` 로 한꺼번에 끊었는데
+    #   ffmpeg 은 종료하지 않았고, 감시가 프로세스 생사만 보고 있어서 **2시간 5분 동안**
+    #   아무도 눈치채지 못했다. 그동안 라이브·녹화·클립이 전부 없었다.
+    #
+    #   그래서 프로세스 생사와 별개로 **mediamtx 가 그 경로를 실제로 받고 있는지**를
+    #   본다. 이것이 없으면 relay 는 "돌고 있다"고 말하면서 아무것도 하지 않는다
+    #   (절대규칙 9 — 가드가 조용히 꺼지지 않게 한다).
+    sources = {path: (source, enc) for path, source, enc in targets}
+
+    def restart(index: int, path: str, reason: str) -> None:
+        say(f"[relay] {path} {reason} - 3초 뒤 재시도")
+        stale = procs[index][1]
+        if stale.poll() is None:
+            stale.terminate()
+            try:
+                stale.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                stale.kill()
+        time.sleep(3.0)
+        source, enc = sources[path]
+        argv = relay_argv(ffmpeg, source, path, base, encoder=enc)
+        procs[index] = (path, subprocess.Popen([argv[0], *argv[1:]], cwd=str(ROOT)))
+        stalled_since.pop(path, None)
+
+    #: 경로별로 "받고 있지 않다"가 시작된 시각. 값이 없으면 정상이다.
+    stalled_since: dict[str, float] = {}
+    last_check = 0.0
     try:
         while True:
-            sources = {path: (source, enc) for path, source, enc in targets}
             for index, (path, proc) in enumerate(procs):
                 if proc.poll() is None:
                     continue
-                say(f"[relay] {path} 송출이 끊겼다 (코드 {proc.returncode}) - 3초 뒤 재시도")
-                time.sleep(3.0)
-                source, enc = sources[path]
-                argv = relay_argv(ffmpeg, source, path, base, encoder=enc)
-                procs[index] = (path, subprocess.Popen([argv[0], *argv[1:]], cwd=str(ROOT)))
+                restart(index, path, f"송출이 끊겼다 (코드 {proc.returncode})")
+
+            # 경로 상태 확인. 기동 직후에는 아직 안 붙었을 수 있으므로 유예를 둔다.
+            now = time.monotonic()
+            if now - last_check >= _RELAY_CHECK_INTERVAL_S:
+                last_check = now
+                ready = mediamtx_ready(mediamtx_api)
+                if ready is not None:  # 제어 API 에 못 닿으면 판단하지 않는다
+                    for index, (path, _proc) in enumerate(procs):
+                        if ready.get(path, False):
+                            stalled_since.pop(path, None)
+                            continue
+                        began = stalled_since.setdefault(path, now)
+                        if now - began >= _RELAY_STALL_AFTER_S:
+                            restart(
+                                index,
+                                path,
+                                f"프로세스는 살아 있는데 mediamtx 가 {now - began:.0f}초째 "
+                                f"받지 못하고 있다",
+                            )
             time.sleep(0.5)
     except KeyboardInterrupt:
         say()
