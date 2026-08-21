@@ -240,13 +240,27 @@ def create_app(
     # 정상 풀·이상 플래그 저장소. **라우터도 같은 것을 본다** — `GET /anomalies` 가
     # 다른 경로로 읽으면 감지기가 쓴 것과 화면이 보는 것이 갈릴 수 있다.
     ai_store = DbAiRepository(engine) if engine else None
+    # ★ **임베딩만 따로 끌 수 있다**(`GEMINI_EMBEDDINGS_ENABLED`). 생성은 사람이 물을
+    #   때만 나가지만 임베딩은 확정마다·주기마다 묻지 않아도 나가므로, 할당량을 아낄
+    #   때 잘라야 하는 쪽은 늘 이쪽이다. 어댑터를 통째로 떼면 챗봇까지 죽는다.
+    #
+    #   **꺼졌다는 사실을 반드시 남긴다.** 이상 탐지가 멎은 화면은 「이상 0건」과
+    #   생김새가 같아서, 로그에 없으면 아무도 모른 채 안전하다고 읽는다(절대규칙 9).
+    embedder = cloud_adapter if resolved.gemini_embeddings_enabled else None
+    if cloud_adapter is not None and embedder is None:
+        log.warning(
+            "GEMINI_EMBEDDINGS_ENABLED=false — 임베딩을 부르지 않는다. "
+            "이상 탐지(FN-AI-04)가 돌지 않아 이상 목록이 계속 비고, 유사 사고사례"
+            "(FN-AI-07)는 빈 목록이며, 장면 검색(FN-AI-02)은 SQL 조건 검색으로 내려간다. "
+            "챗봇·심층분석·브리핑·보고서는 그대로 동작한다."
+        )
     ai_service = AiService(
         clock=ticker,
         guard=CloudGuard(cloud, ticker, hub.broadcast),
         events=event_store,  # type: ignore[arg-type]
         store=ai_store,
         frames=storage if isinstance(storage, RecClient) else None,
-        embedder=cloud_adapter,
+        embedder=embedder,
         llm=cloud_adapter,
         publish=hub.broadcast,
         media_root=resolved.media_root,

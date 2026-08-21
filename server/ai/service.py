@@ -244,7 +244,12 @@ class AiService:
     async def start(self) -> None:
         """사례 벡터를 미리 만든다. **이벤트마다가 아니라 프로세스마다 한 번**이다."""
         if self._embedder is None:
-            log.info("클라우드 어댑터가 없다 — 규정 매핑과 SQL 통계만으로 동작한다")
+            # 임베더가 없는 경우는 둘이다 — 키가 아예 없거나, 임베딩만 꺼두었거나.
+            # 두 경우의 남는 기능이 다르므로 한 문장으로 뭉뚱그리지 않는다.
+            if self._llm is None:
+                log.info("클라우드 어댑터가 없다 — 규정 매핑과 SQL 통계만으로 동작한다")
+            else:
+                log.info("임베딩이 꺼져 있다 — 사례 벡터를 만들지 않는다 (챗봇·생성은 동작)")
             return
         made = await self._incidents.warm()
         log.info("사고사례 임베딩 %d건 준비", made)
