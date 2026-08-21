@@ -781,7 +781,15 @@ def relay_argv(
     #   (`deploy/fake_cams.py` 가 같은 이유로 baseline 으로 굽는다).
     return [
         *head,
-        "-vf", f"scale={MAIN_W}:{MAIN_H},fps={MAIN_FPS}",
+        # ★ **`fps` 를 `scale` 앞에 둔다.** 카메라가 30fps 를 뱉으므로 순서를 뒤집으면
+        #   swscale 이 초당 30장의 1080p 를 갈고, 그중 절반은 바로 버려진다. 앞에 두면
+        #   같은 결과를 절반의 일로 얻는다. 노트북에서는 이 여유가 곧 지연이다.
+        #
+        # ★ **`scale` 은 크기가 같아도 지울 수 없다.** 카메라가 `yuvj420p`(풀레인지)를
+        #   내놓는데 `h264_videotoolbox` 는 그걸 받지 못한다. 빼면 인코더가 첫 프레임에서
+        #   멈춘 채 아무것도 내보내지 않는다(실측). 크기 보정과 픽셀 포맷 변환을 함께
+        #   하는 자리다.
+        "-vf", f"fps={MAIN_FPS},scale={MAIN_W}:{MAIN_H}",
         "-c:v", encoder,
         "-profile:v", "baseline",
         # VideoToolbox 의 실시간 모드. 인코더가 프레임을 모아 두지 않는다.
@@ -790,7 +798,12 @@ def relay_argv(
           ["-tune", "zerolatency", "-preset", "veryfast"]),
         "-b:v", MAIN_BITRATE,
         "-maxrate", MAIN_BITRATE,
-        "-bufsize", "5000k",
+        # ★ **VBV 버퍼가 곧 지연이다.** 5000k 는 2500k 기준 **2초치**라, 인코더가 그만큼
+        #   출력을 쥐고 있어도 된다는 뜻이 된다. 관제 화면에서 2초는 치명적이다 —
+        #   경고 방송이 나간 뒤 화면에서 그 장면을 찾을 수 없게 된다.
+        #   0.5초로 줄인다. 움직임이 큰 장면에서 화질이 조금 출렁이지만, 이 화면의
+        #   목적은 감상이 아니라 지금 무슨 일이 일어나는지 보는 것이다.
+        "-bufsize", MAIN_BUFSIZE,
         # GOP 2초 — 클립·키프레임 추출 정밀도가 여기 걸려 있다(FN-REC-03).
         "-g", str(MAIN_FPS * 2),
         "-keyint_min", str(MAIN_FPS * 2),
@@ -801,6 +814,8 @@ def relay_argv(
 #: 메인 스트림 규격(API명세서 §1.2). 카메라가 다른 값을 뱉으면 relay 가 여기 맞춘다.
 MAIN_W, MAIN_H, MAIN_FPS = 1920, 1080, 15
 MAIN_BITRATE = "2500k"
+#: VBV 버퍼 = 비트레이트 × 0.5초. 지연과 직결되므로 비트레이트와 함께 움직인다.
+MAIN_BUFSIZE = "1250k"
 
 
 def task_relay(cams: str | None, *, transcode: bool = True) -> int:
