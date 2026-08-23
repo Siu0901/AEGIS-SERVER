@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo
 
 from aegis_contracts import (
     AnomalyMsg,
@@ -61,6 +62,7 @@ from server.ai.ports import Embedder, Llm
 from server.ai.search import ParsedQuery, parse_query
 from server.ai.tools import ToolBox, specs_of
 from server.ai.vectors import anomaly_score
+from server.app.event_service import day_start
 from server.domain.aggregates import distribution
 
 __all__ = ["AiService", "time_bucket"]
@@ -195,6 +197,7 @@ class AiService:
         report_stats: ReportStats | None = None,
         embedding_model: str = "",
         site_context: str = "",
+        timezone: ZoneInfo | None = None,
     ) -> None:
         self._clock = clock
         self._guard = guard
@@ -213,6 +216,8 @@ class AiService:
         # 이 현장이 무엇인지. 프롬프트 **세 곳**(챗봇·브리핑·심층분석)이 같이 쓴다 —
         # 한 곳만 넣으면 나머지 경로에서 같은 오해가 그대로 남는다.
         self._site_context = site_context
+        # 「최근 N일」의 날짜 경계를 정하는 시간대(`REPORT_TIMEZONE`).
+        self._tz = timezone or ZoneInfo("UTC")
         self._pruned = False
         self._incidents = IncidentMatcher(embedder)
         self._policies = Policies()
@@ -444,6 +449,7 @@ class AiService:
             anomalies=self._anomaly_rows,
             events=self._events,
             cam_ids=self._cam_ids,
+            timezone=self._tz,
         )
         result = await self._guard.call(
             "어시스턴트",
@@ -499,7 +505,7 @@ class AiService:
         rows = getattr(self._events, "repeat_ranking", None)
         if rows is None:
             return []
-        since = today_since(self._clock, max(1, days))
+        since = today_since(self._clock, max(1, days), self._tz)
         found = await rows(since, limit)
         return [
             {
@@ -516,7 +522,7 @@ class AiService:
         """`recent_anomalies` 도구가 쓰는 이상 목록."""
         if self._store is None:
             return []
-        since = today_since(self._clock, max(1, days))
+        since = today_since(self._clock, max(1, days), self._tz)
         rows = await self._store.list_anomalies(since, 50)
         return [
             {"이상번호": aid, "카메라": cam, "점수": score, "시각": at, "무엇이 달랐나": note}
@@ -1027,10 +1033,13 @@ def _title(summary: EventSummary) -> str:
     return f"{label} · 카메라 {summary.cam_id}{where}"
 
 
-def today_since(clock: Clock, days: int) -> datetime:
-    """지금부터 `days` 일 전 자정(UTC). 지표·이상 집계의 공통 기준이다."""
-    now = clock.now().astimezone(UTC)
-    return now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days)
+def today_since(clock: Clock, days: int, tz: ZoneInfo | None = None) -> datetime:
+    """`days` 일 전 **현지 자정**(UTC 로 환산). 지표·이상 집계의 공통 기준이다.
+
+    시간대는 설정(`REPORT_TIMEZONE`)에서 온다 — 서버 로케일을 따르면 같은 이벤트가
+    어느 날에 속하는지가 서버 위치에 따라 달라진다.
+    """
+    return day_start(clock.now(), tz or ZoneInfo("UTC"), days_ago=days)
 
 
 def _summary_sentence(summary: MetricsSummary, period: str | None = None) -> str:

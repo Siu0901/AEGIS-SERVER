@@ -34,6 +34,7 @@ import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Protocol
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -213,6 +214,17 @@ def create_app(
             media_root=resolved.media_root,
             publish=hub.broadcast,
         )
+    # 「오늘」·「최근 N일」의 날짜 경계를 정하는 시간대(`REPORT_TIMEZONE`).
+    # **서버 로케일을 따르지 않는다** — 서버를 어디에 두든 같은 이벤트가 같은 날에
+    # 속해야 지표를 비교할 수 있다.
+    try:
+        report_tz = ZoneInfo(resolved.report_timezone)
+    except ZoneInfoNotFoundError as exc:
+        # 조용히 UTC 로 떨어지지 않는다(절대규칙 9). 시간대가 틀리면 「오늘」이
+        # 통째로 어긋나는데, 그 어긋남은 화면에 정상처럼 보인다.
+        msg = f"REPORT_TIMEZONE={resolved.report_timezone!r} 을 찾을 수 없다"
+        raise RuntimeError(msg) from exc
+
     # 임계값은 기동 직후 DB 에서 덮어쓴다(`EventService.start`). 여기 있는 `Policies()`
     # 는 계약 기본값이며 DB 시드의 원천이기도 하다(절대규칙 6).
     event_service = EventService(
@@ -224,6 +236,7 @@ def create_app(
         policies=policy_reader,
         alerts=alert_service,
         clips=clip_service,
+        timezone=report_tz,
     )
     # FN-AI — 지능 기능. **안전 루프와 분리된 경로다**(FN-SYS-03).
     #
@@ -273,6 +286,7 @@ def create_app(
         # 이 현장이 무엇인지 알려준다. 모르면 모델이 스스로 전제를 세우고, 그 전제가
         # 틀리면 규칙을 다 지켜도 답이 뒤집힌다(`SITE_MINIATURE`).
         site_context=MINIATURE_CONTEXT if resolved.site_miniature else "",
+        timezone=report_tz,
     )
     # ★ 확정 시 분석을 건다. **`EventService` 는 기다리지 않는다** — `on_confirmed` 가
     #   하는 일은 배경 태스크 하나를 띄우는 것뿐이고, 그 시그니처는 클립 예약과 같다.

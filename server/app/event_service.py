@@ -24,8 +24,9 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo
 
 from aegis_contracts import (
     CandidateMsg,
@@ -55,6 +56,7 @@ __all__ = [
     "EventStore",
     "PolicyReader",
     "Publisher",
+    "day_start",
     "today_window",
 ]
 
@@ -116,13 +118,26 @@ class AnalysisScheduler(Protocol):
     async def anomaly_flags(self, since: datetime | None) -> int: ...
 
 
-def today_window(now: datetime) -> tuple[datetime, datetime]:
-    """`period = "today"` 의 구간. 저장이 UTC 이므로 **UTC 자정**으로 끊는다(§1.2).
+def day_start(now: datetime, tz: ZoneInfo, *, days_ago: int = 0) -> datetime:
+    """`days_ago` 일 전 **현지 자정**을 UTC 로 돌려준다.
 
-    화면 표시는 KST 지만, 집계 경계까지 로컬로 옮기면 같은 이벤트가 어느 날에
-    속하는지가 서버의 시간대 설정에 따라 달라진다.
+    저장은 UTC 지만(§1.2) 「오늘」은 **현장이 사는 날짜**여야 한다. UTC 자정으로
+    끊으면 한국에서 오전 9시 이전에 일어난 위반이 「오늘」에 잡히지 않는다 —
+    오전 8시에 사고가 나도 개요 화면이 0 을 보여준다.
+
+    ★ **시간대를 설정으로 못 박는다**(`REPORT_TIMEZONE`). 서버의 로케일을 따르면
+      같은 이벤트가 어느 날에 속하는지가 서버를 어디에 두느냐에 따라 달라지고,
+      그 차이는 지표에 조용히 섞인다. 원래 UTC 로 끊던 이유가 그것이었으므로,
+      로컬로 옮기면서 그 우려를 설정으로 없앤다.
     """
-    return now.replace(hour=0, minute=0, second=0, microsecond=0), now
+    local = now.astimezone(tz) - timedelta(days=max(0, days_ago))
+    midnight = local.replace(hour=0, minute=0, second=0, microsecond=0)
+    return midnight.astimezone(UTC)
+
+
+def today_window(now: datetime, tz: ZoneInfo) -> tuple[datetime, datetime]:
+    """`period = "today"` 의 구간. **현지 자정**부터 지금까지다."""
+    return day_start(now, tz), now
 
 
 class EventService:
@@ -139,6 +154,7 @@ class EventService:
         policies: PolicyReader | None = None,
         alerts: AlertSink | None = None,
         clips: ClipScheduler | None = None,
+        timezone: ZoneInfo | None = None,
     ) -> None:
         self._machine = machine
         self._tracks = tracks
@@ -148,6 +164,8 @@ class EventService:
         self._policies = policies
         self._alerts = alerts
         self._clips = clips
+        # 「오늘」의 경계를 정하는 시간대. 서버 로케일이 아니라 설정에서 온다.
+        self._tz = timezone or ZoneInfo("UTC")
         self._analysis: AnalysisScheduler | None = None
 
     def set_analysis(self, analysis: AnalysisScheduler | None) -> None:
@@ -321,7 +339,7 @@ class EventService:
         end: datetime | None = to
         period = "custom"
         if from_ is None and to is None:
-            start, end = today_window(self._clock.now())
+            start, end = today_window(self._clock.now(), self._tz)
             period = "today"
         rows = await self._store.metrics_rows(start, end)
         return summarize(

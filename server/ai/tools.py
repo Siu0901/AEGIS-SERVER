@@ -32,8 +32,9 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from langchain_core.tools import BaseTool, tool
 
@@ -48,6 +49,7 @@ from aegis_contracts import (
 from aegis_vision.clock import Clock
 from server.ai.ports import ToolSpec
 from server.ai.regulations import regulations_for
+from server.app.event_service import day_start
 
 __all__ = ["ToolBox", "specs_of"]
 
@@ -101,6 +103,7 @@ class ToolBox:
         anomalies: Any = None,
         events: Any = None,
         cam_ids: Sequence[int] = (),
+        timezone: ZoneInfo | None = None,
     ) -> None:
         self._clock = clock
         self._summary = summary
@@ -111,6 +114,7 @@ class ToolBox:
         self._anomalies = anomalies
         self._events = events
         self._cam_ids = tuple(cam_ids)
+        self._tz = timezone or ZoneInfo("UTC")
         self.attachments: list[ChatAttachment] = []
         self.used: list[str] = []
         self.tools: list[BaseTool] = self._build()
@@ -118,16 +122,16 @@ class ToolBox:
     # -- 기간 계산 ------------------------------------------------------
 
     def _window(self, days: int) -> tuple[datetime, datetime]:
-        """`days` 일 전 자정부터 지금까지(UTC).
+        """`days` 일 전 **현지 자정**부터 지금까지.
 
         **자정 기준이다.** 「이번 주」를 168시간 전으로 자르면 같은 질문을 오후에
         물었을 때와 오전에 물었을 때 모집단이 달라진다.
+
+        시간대는 설정(`REPORT_TIMEZONE`)에서 온다 — 챗봇이 말하는 「오늘」과 화면의
+        「오늘」이 다르면, 같은 시각에 두 숫자가 어긋나고 그 이유를 아무도 모른다.
         """
-        now = self._clock.now().astimezone(UTC)
-        start = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(
-            days=max(0, days - 1)
-        )
-        return start, now
+        now = self._clock.now()
+        return day_start(now, self._tz, days_ago=max(0, days - 1)), now
 
     # -- 도구 정의 ------------------------------------------------------
 

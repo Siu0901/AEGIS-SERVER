@@ -6,9 +6,13 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
+
 import pytest
 
 from aegis_contracts.enums import EventStatus, ViolationType
+from server.app.event_service import day_start, today_window
 from server.domain.metrics import MetricsRow, summarize
 
 WINDOW = 300.0
@@ -274,3 +278,52 @@ def test_a_false_positive_wins_over_suppression() -> None:
 
     assert summary.suppressed == 0
     assert summary.total_violations == 0
+
+
+# ---------------------------------------------------------------------------
+# 「오늘」의 경계 (FN-SYS-04 · `REPORT_TIMEZONE`)
+# ---------------------------------------------------------------------------
+#
+# 저장은 UTC 지만(§1.2) 집계의 「하루」는 **현장이 사는 날짜**여야 한다. UTC 자정으로
+# 끊던 시절에는 한국에서 **오전 9시 이전에 일어난 위반이 「오늘」에 잡히지 않았다** —
+# 오전 8시에 사고가 나도 개요 화면이 0 을 보여준다. 화면상 「평온한 아침」과
+# 구분되지 않으므로 아무도 알아채지 못한다.
+
+
+def test_today_starts_at_local_midnight_not_utc_midnight() -> None:
+    """시연 시각(11:20 KST)에 「오늘」은 자정부터여야 한다 — 오전 9시부터가 아니라."""
+    kst = ZoneInfo("Asia/Seoul")
+    now = datetime(2026, 8, 23, 2, 20, tzinfo=UTC)  # = 08-23 11:20 KST
+
+    start, end = today_window(now, kst)
+
+    assert start.astimezone(kst) == datetime(2026, 8, 23, 0, 0, tzinfo=kst)
+    assert end == now
+    # UTC 자정이었다면 09:00 KST 부터였다 — 아침 9시간이 통째로 빠진다.
+    assert start < now.replace(hour=0, minute=0)
+
+
+def test_day_start_is_stable_regardless_of_server_locale() -> None:
+    """같은 순간이면 서버를 어디에 두든 같은 날 경계가 나와야 한다.
+
+    원래 UTC 로 끊던 이유가 이것이었다. 로컬 시간대로 옮기되 **설정으로 못 박아**
+    그 우려를 없앤다 — 서버 로케일이 아니라 `REPORT_TIMEZONE` 이 정한다.
+    """
+    kst = ZoneInfo("Asia/Seoul")
+    same_moment = [
+        datetime(2026, 8, 23, 2, 20, tzinfo=UTC),
+        datetime(2026, 8, 23, 11, 20, tzinfo=kst),
+        datetime(2026, 8, 22, 22, 20, tzinfo=ZoneInfo("America/New_York")),
+    ]
+    bounds = {day_start(moment, kst) for moment in same_moment}
+    assert len(bounds) == 1
+
+
+def test_day_start_counts_back_whole_local_days() -> None:
+    """「최근 N일」도 같은 경계를 쓴다 — 챗봇과 화면이 다른 하루를 말하면 안 된다."""
+    kst = ZoneInfo("Asia/Seoul")
+    now = datetime(2026, 8, 23, 2, 20, tzinfo=UTC)
+
+    assert day_start(now, kst, days_ago=7).astimezone(kst) == datetime(
+        2026, 8, 16, 0, 0, tzinfo=kst
+    )

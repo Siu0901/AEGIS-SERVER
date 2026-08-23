@@ -544,15 +544,16 @@ function toQuery(chip: Chip): EventQuery {
     case 'cam':
       return { cam_id: chip.value }
     case 'today':
-      // 저장은 UTC 다(§1.2). 「오늘」의 경계를 로컬 자정으로 잡으면 지표 화면(UTC 기준)과
-      // 목록이 서로 다른 하루를 보게 되므로 여기서도 UTC 자정으로 끊는다.
-      return { from: utcMidnight() }
+      // 서버 지표도 현지 자정으로 끊는다(REPORT_TIMEZONE). 한쪽만 UTC 로 두면
+      // 목록과 지표 화면이 서로 다른 하루를 보게 된다.
+      return { from: localMidnight() }
     default:
       return {}
   }
 }
 
-function utcMidnight(): string {
+/** 오늘 **현지 자정**을 UTC 문자열로. 서버에 보내는 값은 늘 UTC 다(§1.2). */
+function localMidnight(): string {
   const now = new Date()
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString()
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString()
 }
