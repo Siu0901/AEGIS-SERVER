@@ -41,8 +41,11 @@ export default function DemoTile({ file, name }: Props) {
         <span className="dot dot--muted" />
         <span className="tile__name">{name}</span>
         <span className="tile__spacer" />
-        {/* 실시간 타일의 REC 자리에 아무것도 두지 않는다 — 녹화 중이 아니다. */}
-        <span className="tile__meta">녹화 재생</span>
+        {/* 실시간 타일의 REC 자리에 아무것도 두지 않는다 — 녹화 중이 아니다.
+            ★ `tile__meta` 를 쓰지 않는다. 전체 분할 보기는 칸이 좁아 부가 정보를
+              접는데, 이 표시는 **거기서 가장 필요하다** — 타일이 많을수록 실시간과
+              녹화가 섞여 보인다. 같이 접히면 안 되므로 클래스를 따로 둔다. */}
+        <span className="tile__demo-note">녹화 재생</span>
       </figcaption>
     </figure>
   )

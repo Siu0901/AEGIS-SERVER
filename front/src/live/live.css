@@ -394,11 +394,20 @@
 .tile__name {
   color: var(--text);
   font-weight: 600;
+  /* 타일이 좁아져도 이름은 한 줄로 둔다. 전체 분할 보기에서 6칸이 되면 기본
+     줄바꿈으로 「1번 카 / 메라 · / 조립 라 / 인」처럼 글자 단위로 쪼개진다. */
+  white-space: nowrap;
 }
 
 .tile__meta {
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  /* 자리가 모자라면 이름이 아니라 **부가 정보가 먼저 줄어든다.** 해상도·경로·버퍼는
+     없어도 화면을 읽는 데 지장이 없지만, 어느 카메라인지 모르면 아무 의미가 없다. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* 정책값을 못 읽어 오버레이를 그리지 못하는 상태. 조용히 비어 있으면
@@ -958,6 +967,12 @@
   border-style: dashed;
 }
 
+/* 「녹화 재생」 — 전체 분할 보기에서도 접히지 않는다. */
+.tile__demo-note {
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
 .tile__demo-badge {
   position: absolute;
   top: 8px;
@@ -976,4 +991,11 @@
    들어와야 「카메라를 여러 대 붙이면 이렇게 보인다」가 성립한다. */
 .live__grid--wall {
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+/* 전체 분할 보기는 칸이 좁다. 이름과 상태만 남기고 부가 정보(해상도 · 재생 경로 ·
+   지연 버퍼)는 접는다 — 시연에서 읽는 것은 「어느 카메라인가」와 「살아 있는가」다.
+   진단이 필요하면 분할 보기나 단독 확대에서 그대로 볼 수 있다. */
+.live__grid--wall .tile__meta {
+  display: none;
 }

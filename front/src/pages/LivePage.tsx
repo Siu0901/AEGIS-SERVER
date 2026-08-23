@@ -84,6 +84,7 @@ const DEMO_CLIPS: { file: string; name: string }[] = [
   { file: 'demo_result.mp4', name: '3번 카메라 · 포장 라인' },
   { file: 'demo_v2.mp4', name: '4번 카메라 · 입고장' },
   { file: 'result_combined.mp4', name: '5번 카메라 · 적재장' },
+  { file: '4000_381_50epoch.mp4', name: '6번 카메라 · 출하장' },
 ]
 
 export default function LivePage() {
