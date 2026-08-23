@@ -97,7 +97,7 @@ export default function AnalysisPage() {
           fetchDistribution({ by: 'hour_of_day', ...period }, signal),
           fetchDistribution({ by: 'zone', ...period }, signal),
           fetchRepeat({ days: range.days, limit: 10 }, signal),
-          fetchMetricsSummary(signal),
+          fetchMetricsSummary(period, signal),
           fetchAnomalies({ days: range.days, limit: ANOMALY_KEEP }, signal),
         ])
         setCorrection(rate.points)

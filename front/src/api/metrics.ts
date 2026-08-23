@@ -10,8 +10,19 @@
  */
 
 import type { MetricsSummary } from '../types/system'
-import { getJson } from './client'
+import { getJson, queryString } from './client'
 
-export async function fetchMetricsSummary(signal?: AbortSignal): Promise<MetricsSummary> {
-  return getJson<MetricsSummary>('/metrics/summary', signal)
+/**
+ * `period` 를 주지 않으면 서버가 **「오늘」**로 답한다(§4.2).
+ *
+ * ★ **기간을 고를 수 있는 화면은 반드시 넘겨야 한다.** 예전에는 이 함수가 기간을
+ *   아예 받지 못해서, 분석 화면에서 7일·30일을 골라도 요약 네 칸만 「오늘」을 보고
+ *   있었다. 추이 그래프와 유형 분포는 기간을 따라가는데 그 위의 시정률·모집단만
+ *   0 과 `–` 로 남아, 화면 하나가 서로 다른 두 기간을 동시에 말했다.
+ */
+export async function fetchMetricsSummary(
+  period: { from?: string; to?: string } = {},
+  signal?: AbortSignal,
+): Promise<MetricsSummary> {
+  return getJson<MetricsSummary>(`/metrics/summary${queryString({ ...period })}`, signal)
 }

@@ -87,7 +87,8 @@ export default function OverviewPage() {
       // 넷을 함께 읽는다. 한쪽만 갱신하면 "시정률 87%" 옆에 그 87%를 만든 이벤트가
       // 없는 화면이 된다.
       void Promise.all([
-        fetchMetricsSummary(signal),
+        // 개요는 **오늘**만 본다 — 기간을 넘기지 않는 것이 그 뜻이다.
+        fetchMetricsSummary({}, signal),
         fetchEvents({ limit: RECENT_FETCH }, signal),
         fetchTimeseries({ metric: 'violations', bucket: 'day', ...period }, signal),
         fetchDistribution({ by: 'violation_type', ...period }, signal),
