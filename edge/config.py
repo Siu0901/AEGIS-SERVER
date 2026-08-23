@@ -122,6 +122,12 @@ class ClassifyConfig:
     model_path: Path
     input_size: int
     batch: bool
+    crop_margin: float
+    """사람 박스 바깥으로 넓혀 자르는 비율. 학습 파이프라인과 같아야 한다.
+
+    감지 박스는 사람에 딱 맞게 나오므로 안전모가 박스 위 경계에 걸린다. 그대로 자르면
+    판정의 근거인 머리 윤곽이 잘려 나간다. 학습 때 쓴 값(0.05)과 맞춘다.
+    """
     class_map: Mapping[str, HelmetState]
     """모델 클래스명 → `on` / `off`. **`unknown` 은 없다**(판정 불가는 필드 생략)."""
 
@@ -339,6 +345,7 @@ def _classify(section: Mapping[str, Any], backend: str) -> ClassifyConfig:
         model_path=_model_path(section, backend, "classify"),
         input_size=int(_require(section, "input_size", "classify")),
         batch=bool(section.get("batch", True)),
+        crop_margin=float(section.get("crop_margin", 0.05)),
         class_map=cast(
             Mapping[str, HelmetState],
             _class_map(section, get_args(HelmetState), "classify"),

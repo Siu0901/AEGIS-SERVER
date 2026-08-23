@@ -28,7 +28,13 @@ from edge.detect import Detection
 SIZE = 224
 
 
-def crop_of(width: int, height: int) -> npt.NDArray[np.float32]:
+def crop_of(
+    width: int,
+    height: int,
+    *,
+    margin: float = 0.0,
+    bbox: tuple[float, float, float, float] = (0.0, 0.0, 1.0, 1.0),
+) -> npt.NDArray[np.float32]:
     """`width`x`height` 크롭 하나를 실제 `_crop()` 에 태워 모델 입력을 얻는다.
 
     세션을 만들지 않는다 — 여기서 보는 것은 전처리 기하뿐이고, 모델을 올리면
@@ -37,6 +43,7 @@ def crop_of(width: int, height: int) -> npt.NDArray[np.float32]:
     classifier = HelmetClassifier.__new__(HelmetClassifier)
     config = ClassifyConfig.__new__(ClassifyConfig)
     object.__setattr__(config, "input_size", SIZE)
+    object.__setattr__(config, "crop_margin", margin)
     classifier._config = config
     # 가로 위치를 알아볼 수 있게 좌→우 밝기 경사를 넣는다.
     frame = np.zeros((height, width, 3), dtype=np.uint8)
@@ -44,7 +51,7 @@ def crop_of(width: int, height: int) -> npt.NDArray[np.float32]:
     detection = Detection(
         object_class="person",
         conf=1.0,
-        bbox=(0.0, 0.0, 1.0, 1.0),
+        bbox=bbox,
         contour=(),
         box_height_px=float(height),
     )
@@ -103,3 +110,24 @@ def test_square_crop_passes_through_unchanged() -> None:
     row = crop_of(300, 300)[1][SIZE // 2]
     assert row[0] == pytest.approx(0.0, abs=0.02)
     assert row[-1] == pytest.approx(1.0, abs=0.02)
+
+
+def test_margin_widens_the_crop_beyond_the_box() -> None:
+    """★ **박스 바깥으로 넓혀 잘라야 한다** — 안전모가 위 경계에 걸리기 때문이다.
+
+    감지 박스는 사람에 딱 맞게 나온다. 그대로 자르면 판정의 근거인 머리 윤곽이 잘려
+    나가고, 모델은 학습 때 본 적 없는 형태를 받는다.
+
+    프레임 가운데의 작은 박스를 두 번 자른다. 여유를 준 쪽이 **더 넓은 범위**를
+    담으므로, 가로 경사에서 더 넓은 밝기 구간이 나온다.
+    """
+    box = (0.4, 0.4, 0.6, 0.6)
+    tight = crop_of(400, 400, margin=0.0, bbox=box)[1][SIZE // 2]
+    padded = crop_of(400, 400, margin=0.25, bbox=box)[1][SIZE // 2]
+    assert padded[0] < tight[0]
+    assert padded[-1] > tight[-1]
+
+
+def test_margin_is_clipped_at_the_frame_edge() -> None:
+    """가장자리에 선 사람은 여유가 한쪽만 붙는다 — 프레임 밖을 지어내지 않는다."""
+    assert crop_of(400, 400, margin=0.25, bbox=(0.0, 0.0, 0.3, 0.3)).shape == (3, SIZE, SIZE)

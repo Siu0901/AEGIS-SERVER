@@ -174,10 +174,17 @@ class HelmetClassifier:
         """
         height, width = frame_bgr.shape[:2]
         x1, y1, x2, y2 = detection.bbox
-        px1 = max(round(x1 * width), 0)
-        py1 = max(round(y1 * height), 0)
-        px2 = min(round(x2 * width), width)
-        py2 = min(round(y2 * height), height)
+        # ★ **박스 바깥으로 조금 넓혀 자른다**(`crop_margin`). 감지 박스는 사람에 딱
+        #   맞게 나오므로 안전모가 위 경계에 걸린다. 그대로 자르면 판정의 근거인 머리
+        #   윤곽이 잘려 나가고, 모델은 학습 때 본 적 없는 형태를 받는다.
+        #   프레임을 벗어나는 부분은 잘라낸다 — 가장자리에 선 사람은 여유가 한쪽만 붙는다.
+        margin = self._config.crop_margin
+        mx = (x2 - x1) * margin * width
+        my = (y2 - y1) * margin * height
+        px1 = max(round(x1 * width - mx), 0)
+        py1 = max(round(y1 * height - my), 0)
+        px2 = min(round(x2 * width + mx), width)
+        py2 = min(round(y2 * height + my), height)
         if px2 <= px1 or py2 <= py1:
             return None
 
