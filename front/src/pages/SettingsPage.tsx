@@ -820,8 +820,7 @@ function CameraPanel({
       {mode === 'zone' && (
         <div className="settings__form">
           <p className="card__note">
-            폴리곤을 그린 뒤 저장하면 <strong>서버가 호모그래피로 지면 좌표(m)로 변환해</strong>{' '}
-            저장한다(§4.5). 화면은 픽셀만 보내므로 변환 코드가 한 곳에만 있다.
+            폴리곤을 그린 뒤 저장하면 지면 좌표(m)로 변환되어 저장된다.
           </p>
           <div className="settings__row">
             <label>
@@ -936,8 +935,7 @@ function ReferenceFields({
       </div>
       {heightPx !== null && (reference.x === '' || reference.y === '') && (
         <p className="card__note">
-          위치를 넣지 않으면 <strong>기준 인물이 저장되지 않는다.</strong> 높이 하나만으로는
-          다른 거리의 기대 높이를 구할 수 없다(기능명세서 §6).
+          위치를 넣지 않으면 <strong>기준 인물이 저장되지 않는다.</strong>
         </p>
       )}
     </div>
@@ -1048,10 +1046,9 @@ function SoundPanel({
     <section className="card">
       <h2 className="card__title">경고 음원 매핑</h2>
       <p className="card__note">
-        위반 유형별 <strong>사전 녹음 wav</strong> 다(TTS 가 아니다 · FN-ALM-01). 등급은 §3{' '}
-        <code>AlertCommand.level</code> 과 §5.2 <code>severity</code> 의 원천이며,{' '}
-        <strong>쓰러짐은 3 미만으로 내릴 수 없다</strong> — 스스로 시정할 수 없는 유일한
-        유형이라 등급을 낮추면 긴급 상황에서 부저가 울리지 않는다.
+        위반 유형별 <strong>사전 녹음 음원</strong>이다.{' '}
+        <strong>쓰러짐은 등급을 3 미만으로 내릴 수 없다</strong> — 스스로 시정할 수 없는
+        유일한 유형이라 낮추면 긴급 상황에서 부저가 울리지 않는다.
       </p>
       <table className="settings__table">
         <thead>
@@ -1165,8 +1162,8 @@ function PolicyPanel({
     <section className="card">
       <h2 className="card__title">임계값 · 타이머</h2>
       <p className="card__note">
-        원본은 DB <code>policies</code> 하나이며 <strong>저장 즉시 상태머신에 반영된다</strong>
-        (재시작하지 않는다 · FN-CFG-04). 진행 중인 이벤트도 새 값으로 판정된다.
+        <strong>저장 즉시 반영된다</strong> — 재시작할 필요가 없고, 진행 중인 이벤트도
+        새 값으로 판정된다.
       </p>
       <div className="settings__grid">
         {POLICY_FIELDS.map(({ key, label, unit, hint }) => (
@@ -1217,8 +1214,8 @@ function VehiclePanel({
     <section className="card">
       <h2 className="card__title">위험 반경</h2>
       <p className="card__note">
-        지게차를 따라다니는 <strong>동적 위험 영역</strong>이다(기본 3.0m). 즉시 경고 기준인
-        근접 임계값(<code>proximity_threshold_m</code>)과 2단계로 동작한다 — 둘은 다른 값이다.
+        지게차를 따라다니는 <strong>동적 위험 영역</strong>이다(기본 3.0m). 즉시 경고를
+        내보내는 근접 임계값과는 다른 값이며, 두 단계로 동작한다.
       </p>
       <table className="settings__table">
         <thead>

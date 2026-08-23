@@ -174,7 +174,7 @@ export default function OverviewPage() {
           /* ★ §4.8 표기 규칙 — 시정률과 판정 불가율은 항상 병기한다. */
           foot={`판정 불가 ${formatRate(summary?.undetermined_rate ?? null)}`}
           tone={rateTone(summary?.correction_rate ?? null)}
-          hint="resolved / (resolved + resolved_late + unresolved) · 분모가 0이면 – 다"
+          hint="경고 방송이 나간 뒤 실제로 시정된 비율"
         />
         <Tile
           label="오늘 위반"
@@ -185,14 +185,14 @@ export default function OverviewPage() {
               ? `미해소 ${summary.unresolved}건 · 늦은 시정 ${summary.resolved_late}건`
               : '집계 없음'
           }
-          hint="네 버킷(해소·늦은 시정·미시정·판정 불가)의 합이다"
+          hint="오늘 확정된 위반 건수"
         />
         <Tile
           label="평균 시정 시간"
           value={summary ? String(summary.avg_resolution_sec) : UNMEASURED}
           unit="초"
           foot="경고 방송 → 시정 확인"
-          hint="alerted_at → resolved_at 평균. 해소된 건만 센다"
+          hint="경고 방송부터 시정 확인까지 걸린 평균 시간"
         />
         <Tile
           label="방송 없이 확정"
@@ -205,7 +205,7 @@ export default function OverviewPage() {
               : '일시중지 중 확정된 건 없음'
           }
           tone={summary && summary.suppressed > 0 ? 'warn' : 'muted'}
-          hint="alert_suppressed = true. 알린 적이 없으니 「방송 후」 시정률의 모집단이 아니다"
+          hint="경고 방송이 나가지 않은 건이라 시정률 계산에서 빠진다"
         />
       </div>
 
@@ -229,10 +229,7 @@ export default function OverviewPage() {
             <Sparkline points={trend} />
           )}
           <p className="card__note">
-            <code>GET /metrics/timeseries</code>(<code>metric=violations</code> ·{' '}
-            <code>bucket=day</code>)가 낸 최근 {TREND_DAYS}일이다.{' '}
-            <strong>이벤트 목록으로 세지 않는다</strong> — 목록은 페이지 크기만큼만 담기므로
-            표본이 잘린 줄 모르고 「추세」라고 부르게 된다. 자세한 추이는{' '}
+            최근 {TREND_DAYS}일이다. 자세한 추이는{' '}
             <Link to="/analysis">분석 화면</Link>에 있다.
           </p>
         </section>
@@ -387,8 +384,8 @@ export default function OverviewPage() {
             </ul>
           )}
           <p className="card__note">
-            <span className="overview__dim">{UNMEASURED}</span> 는 관측 주체가 없다는 뜻이며
-            0 과 다르다(§4.6).
+            <span className="overview__dim">{UNMEASURED}</span> 는 값을 읽지 못했다는 뜻이며
+            0 과 다르다.
           </p>
         </section>
       </div>

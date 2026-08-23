@@ -145,12 +145,6 @@ export default function AssistantChat({ compact = false }: { compact?: boolean }
       </div>
 
       <div className="chat__log">
-        {turns.length === 0 && !compact && (
-          <p className="card__note">
-            통계는 SQL 로, 장면 검색은 임베딩으로, 「지금 상황」은 현재 프레임으로
-            답한다(FN-AI-08). 어느 경로로 답했는지는 답변마다 표시된다.
-          </p>
-        )}
         {turns.map((turn, index) => (
           <div key={index} className="chat__turn">
             <p className="chat__ask">{turn.question}</p>
@@ -192,13 +186,6 @@ export default function AssistantChat({ compact = false }: { compact?: boolean }
         </button>
       </form>
 
-      {!compact && (
-        <p className="card__note">
-          세션 {sessionId.current} · 서버가 이 세션의 최근 대화를 기억하므로 「각각은?」
-          처럼 앞 질문에 이어 물을 수 있다. 화면을 떠나도 대화는 남고,{' '}
-          <strong>「대화 지우기」로만 비운다.</strong>
-        </p>
-      )}
     </section>
   )
 }

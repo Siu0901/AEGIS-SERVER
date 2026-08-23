@@ -215,10 +215,6 @@ export default function AnalysisPage() {
       <section className="card">
         <h2 className="card__title">시정률 추이</h2>
         <RateChart correction={correction} undetermined={undetermined} />
-        <p className="card__note">
-          ★ 판정 불가율을 함께 그린다(§6.7). 모집단이 빈 구간은 <strong>점이 없다</strong> —
-          0% 로 찍으면 이벤트가 없던 구간이 「아무도 시정하지 않았다」로 보인다.
-        </p>
       </section>
 
       <div className="analysis__row">
@@ -235,10 +231,6 @@ export default function AnalysisPage() {
       <section className="card">
         <h2 className="card__title">시간대 히트맵</h2>
         <Heatmap buckets={byHour} />
-        <p className="card__note">
-          `by=hour_of_day` 는 <code>&quot;00&quot;</code>~<code>&quot;23&quot;</code> 을 키로 쓴다.
-          UTC 기준으로 자르므로 서버를 어디에 두든 같은 칸에 떨어진다.
-        </p>
       </section>
 
       <section className="card">
@@ -269,19 +261,13 @@ export default function AnalysisPage() {
             </tbody>
           </table>
         )}
-        <p className="card__note">
-          ★ <strong>작업자 개인 단위 누적이 아니다</strong>(§4.2). 「추적」은 세션 안의
-          추적 번호일 뿐 신원이 아니며 카메라를 벗어나면 유효하지 않다.
-        </p>
       </section>
 
       <section className="card">
         <h2 className="card__title">이상 탐지 (최근 {range.days}일)</h2>
         {anomalies.length === 0 ? (
           <p className="card__note">
-            이 기간에 표시된 이상이 없다. 이상 탐지는 <strong>임베딩</strong>으로 돌기
-            때문에 클라우드가 꺼져 있으면 아예 판정하지 않는다 — 「이상 없음」과
-            「보지 않았다」는 다르다. 시스템 상태의 「클라우드」를 확인해라.
+            이 기간에 표시된 이상이 없다.
           </p>
         ) : (
           <table className="analysis__table">
@@ -329,11 +315,6 @@ export default function AnalysisPage() {
             </tbody>
           </table>
         )}
-        <p className="card__note">
-          ★ <strong>경고 방송을 발동하지 않는다</strong>(FN-AI-04). 조명·날씨로도 점수가
-          오르므로 사람이 한 번 확인할 것으로만 표시한다. 점수는 §6.8 — 같은 시간대
-          정상 풀과의 k-최근접 평균 코사인 거리다.
-        </p>
       </section>
 
       <section className="card">
@@ -360,10 +341,6 @@ export default function AnalysisPage() {
             못했을 때다 — 클라우드가 꺼져 있어도 집계 문장만으로는 나온다.
           </p>
         )}
-        <p className="card__note">
-          숫자는 SQL 집계가 만들고 LLM 은 그것을 문장으로 옮긴다. 클라우드가 꺼져 있으면
-          집계 문장만 나온다 — 비어 있는 것보다 낫다.
-        </p>
       </section>
     </div>
   )

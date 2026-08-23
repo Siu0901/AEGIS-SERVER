@@ -35,9 +35,9 @@ const MODE_LABEL: Record<SearchMode, string> = {
 }
 
 const MODE_NOTE: Record<SearchMode, string> = {
-  sql: '질의가 전부 조건(기간 · 카메라 · 유형)이라 SQL 만으로 답했다. 클라우드를 부르지 않았다.',
-  vector: '자유 문장을 임베딩해 키프레임과 비교했다.',
-  hybrid: '조건으로 먼저 좁힌 뒤 남은 문장으로 순위를 매겼다.',
+  sql: '기간 · 카메라 · 유형 조건으로 찾았다.',
+  vector: '문장과 닮은 장면 순으로 정렬했다.',
+  hybrid: '조건으로 좁힌 뒤 문장과 닮은 순으로 정렬했다.',
 }
 
 /** 무엇을 물어볼 수 있는지 보여주는 예시. 세 경로가 하나씩이다. */
@@ -127,16 +127,9 @@ export default function SearchPage() {
 
       <section className="card">
         <h2 className="card__title">결과 {items ? `${items.length}건` : ''}</h2>
-        {items === null && !error && (
-          <p className="card__note">
-            기간 · 카메라 · 위반 유형은 문장에서 자동으로 뽑혀 조건 검색으로 가고, 나머지
-            문장만 장면 유사도로 순위가 매겨진다(하이브리드 · FN-AI-02).
-          </p>
-        )}
         {items !== null && items.length === 0 && (
           <p className="card__note">
-            조건에 맞는 장면이 없다. 클라우드 분석이 꺼져 있으면 자유 문장 순위는 매겨지지
-            않고 조건 검색만 동작한다 — 시스템 상태의 「클라우드」를 확인해라.
+            조건에 맞는 장면이 없다.
           </p>
         )}
         <div className="search__grid">

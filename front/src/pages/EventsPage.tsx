@@ -187,8 +187,7 @@ export default function EventsPage() {
           )}
           {!listError && hidden > 0 && (
             <p className="card__note">
-              확정에 도달하지 못한 후보 {hidden}건은 숨겼다. 클립이 없어 확인할 수 없고
-              시정률에도 들어가지 않는다 — 「확정 전 소멸」 칩으로 볼 수 있다.
+              확정에 도달하지 못한 후보 {hidden}건은 숨겼다.
             </p>
           )}
           <ul className="rows">
@@ -442,8 +441,7 @@ function EventDetailPanel({
             /* ★ 비어 있는 것과 기능이 없는 것은 다르다. 클라우드가 죽어도 안전
                기능은 무영향이므로(FN-SYS-03) 이 칸만 비는 것이 정상 경로다. */
             <p className="pending__why">
-              아직 없다 — 확정 직후 배경에서 생성된다. 클라우드가 꺼져 있으면 비어 있고,
-              그래도 감지 → 경고 → 시정 판정은 정상 동작한다(FN-SYS-03).
+              아직 없다 — 확정 직후 배경에서 생성된다.
             </p>
           )}
         </section>
@@ -464,8 +462,7 @@ function EventDetailPanel({
             </ul>
           ) : (
             <p className="pending__why">
-              아직 없다 — 키프레임 임베딩으로 확정 시 1회 매칭한다(FN-AI-07). 임베딩이
-              없으면 <strong>유사도를 지어내지 않고 비워 둔다</strong>.
+              아직 없다.
             </p>
           )}
         </section>
@@ -483,8 +480,7 @@ function EventDetailPanel({
             </ul>
           ) : (
             <p className="pending__why">
-              아직 없다 — 위반 유형 → 조항은 <strong>사전 매핑 테이블</strong>로 연결되며
-              LLM 이 조항을 생성하지 않는다(FN-AI-06). 이 칸은 클라우드와 무관하다.
+              아직 없다.
             </p>
           )}
         </section>
@@ -530,8 +526,7 @@ function EventDetailPanel({
           </button>
         </div>
         <p className="card__note">
-          오탐으로 표시한 이벤트는 시정률에서 <b>전량 제외</b>된다(§4.8). 강제 종결은 시스템이
-          놓친 시정을 사람이 닫는 것이고, 쓰러짐은 이 절차로 종결하는 것이 기본이다.
+          오탐으로 표시한 이벤트는 시정률에서 <b>전량 제외</b>된다.
         </p>
       </div>
     </section>
