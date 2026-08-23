@@ -951,3 +951,29 @@
   color: var(--text-dim);
   line-height: 1.5;
 }
+
+/* ── 시연 영상 타일 (전체 분할 보기) ──────────────────────
+   실시간 타일과 생김새가 같아서, 무엇이 실측이 아닌지 화면에서 갈려야 한다. */
+.tile--demo {
+  border-style: dashed;
+}
+
+.tile__demo-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  background: rgb(0 0 0 / 62%);
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}
+
+/* 전체 분할 보기는 타일이 많아지므로 한 칸을 더 작게 잡는다. 5칸이 한 화면에
+   들어와야 「카메라를 여러 대 붙이면 이렇게 보인다」가 성립한다. */
+.live__grid--wall {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}

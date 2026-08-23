@@ -31,6 +31,7 @@ import { useSystemStatus } from '../api/useSystemStatus'
 import { applyZoneUpdate, fetchZones } from '../api/zones'
 import ActiveEvents from '../live/ActiveEvents'
 import CameraTile from '../live/CameraTile'
+import DemoTile from '../live/DemoTile'
 import AssistantChat from '../chat/AssistantChat'
 import { useCameraName } from '../api/cameraNames'
 import { violationLabel } from '../types/labels'
@@ -68,6 +69,22 @@ const SIDE_MIN_PX = 300
 const MAIN_MIN_PX = 420
 /** 끌어 놓은 폭을 기억한다. 시연 중 새로고침으로 되돌아가면 다시 맞춰야 한다. */
 const SIDE_WIDTH_KEY = 'aegis.live.sideWidth'
+
+/**
+ * 「전체 분할 보기」에 함께 띄우는 **녹화 영상**.
+ *
+ * 카메라를 여러 대 붙였을 때 관제 화면이 어떻게 보이는지를 시연에서 보여주기 위한
+ * 자리다. **감지 파이프라인과 무관하다** — 박스는 영상에 이미 구워져 있고 엣지·서버·
+ * 오버레이 어느 것도 거치지 않는다.
+ *
+ * 파일은 `media/` 에 둔다(git 에 올라가지 않는 런타임 저장소). 없으면 그 타일만
+ * 검게 남고 나머지는 그대로 돈다.
+ */
+const DEMO_CLIPS: { file: string; name: string }[] = [
+  { file: 'demo_result.mp4', name: '3번 카메라 · 포장 라인' },
+  { file: 'demo_v2.mp4', name: '4번 카메라 · 입고장' },
+  { file: 'result_combined.mp4', name: '5번 카메라 · 적재장' },
+]
 
 export default function LivePage() {
   const cameraName = useCameraName()
@@ -136,6 +153,9 @@ export default function LivePage() {
 
   // 확대 상태도 URL 이 원본이다(`/live?cam=1`). 컴포넌트 state 에 두면 새로고침에
   // 날아간다 — 시연 중 실수로 새로고침해도 화면이 돌아가면 안 된다.
+  // 전체 분할 보기(시연용). 확대 상태와 같이 URL 에 둔다 — 새로고침해도 유지된다.
+  const wall = searchParams.get('view') === 'wall'
+
   const requested = Number(searchParams.get('cam'))
   const solo =
     Number.isInteger(requested) && cameras.some((camera) => camera.cam_id === requested)
@@ -259,8 +279,13 @@ export default function LivePage() {
         <div className="live__toolbar" role="group" aria-label="보기 전환">
           <button
             type="button"
-            className={`live__view ${solo === null ? 'live__view--on' : ''}`}
-            onClick={() => show(null)}
+            className={`live__view ${solo === null && !wall ? 'live__view--on' : ''}`}
+            onClick={() => {
+              const next = new URLSearchParams(searchParams)
+              next.delete('cam')
+              next.delete('view')
+              setSearchParams(next, { replace: true })
+            }}
           >
             분할 보기
           </button>
@@ -274,6 +299,23 @@ export default function LivePage() {
               {cameraName(camera.cam_id)}
             </button>
           ))}
+          {/* 시연용 — 녹화 영상을 함께 띄워 카메라를 여러 대 붙였을 때의 화면을 보인다. */}
+          <button
+            type="button"
+            className={`live__view ${wall ? 'live__view--on' : ''}`}
+            onClick={() => {
+              const next = new URLSearchParams(searchParams)
+              if (wall) next.delete('view')
+              else {
+                next.set('view', 'wall')
+                next.delete('cam')
+              }
+              setSearchParams(next, { replace: true })
+            }}
+            title="녹화 영상을 함께 띄운다. 감지는 실시간 카메라에서만 돈다"
+          >
+            전체 분할 보기
+          </button>
           <span className="live__spacer" />
           <button
             type="button"
@@ -327,7 +369,15 @@ export default function LivePage() {
           </div>
         )}
 
-        <div className={solo === null ? 'live__grid' : 'live__grid live__grid--solo'}>
+        <div
+          className={
+            solo !== null
+              ? 'live__grid live__grid--solo'
+              : wall
+                ? 'live__grid live__grid--wall'
+                : 'live__grid'
+          }
+        >
           {shown.map((camera) => (
             <CameraTile
               key={camera.cam_id}
@@ -340,6 +390,12 @@ export default function LivePage() {
               debug={debug}
             />
           ))}
+          {/* 실시간 타일 뒤에 붙인다 — 앞에 두면 시연 영상이 관제 화면의 주역처럼 보인다. */}
+          {wall &&
+            solo === null &&
+            DEMO_CLIPS.map((clip) => (
+              <DemoTile key={clip.file} file={clip.file} name={clip.name} />
+            ))}
         </div>
 
         {pending.length > 0 && (

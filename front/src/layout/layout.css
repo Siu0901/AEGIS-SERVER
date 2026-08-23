@@ -124,6 +124,11 @@
   background: var(--warn);
 }
 
+/* 실시간이 아닌 것 — 시연 영상 타일. 상태색과 섞이지 않게 무채색이다. */
+.dot--muted {
+  background: var(--text-dim);
+}
+
 .dot--danger {
   background: var(--danger);
 }
