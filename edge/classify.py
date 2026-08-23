@@ -31,9 +31,6 @@ __all__ = ["HelmetClassifier", "HelmetReading"]
 
 log = logging.getLogger(__name__)
 
-#: ultralytics 분류 전처리의 패딩 색. 학습 파이프라인과 같아야 한다.
-_PAD_VALUE = 114
-
 
 @dataclass(frozen=True, slots=True)
 class HelmetReading:
@@ -155,9 +152,25 @@ class HelmetClassifier:
     ) -> npt.NDArray[np.float32] | None:
         """사람 박스를 잘라 모델 입력으로 만든다.
 
-        **비율을 유지한 채 패딩한다**(ultralytics `ClassifyLetterBox`). 정사각으로
-        찌그러뜨리면 세로로 긴 사람 크롭이 학습 때와 다른 형태가 되어, 같은 사람이
-        가까이 있을 때와 멀리 있을 때 다른 판정을 받는다.
+        ★ **학습·검증과 같은 전처리여야 한다** — `Resize(짧은 변=224) → CenterCrop(224)`.
+          ultralytics `classify_transforms()` 가 그렇게 정의돼 있다(v8.4.126 실측):
+
+              T.Resize(224)      # 정수 하나면 **짧은 변** 기준, 비율 유지
+              T.CenterCrop(224)
+              T.ToTensor()
+              T.Normalize(mean=(0,0,0), std=(1,1,1))   # 무연산
+
+          앞서 이 함수는 `ClassifyLetterBox` 라고 적어 두고 **긴 변** 기준으로 줄인 뒤
+          회색 패딩을 채웠다. 그러면 같은 크롭이 학습 때와 전혀 다른 형태로 들어간다 —
+          100×300 크롭 기준으로
+
+              학습·검증   짧은 변 224 → 224×672 → 가운데 224×224 (배경 없음)
+              옛 추론     긴 변 224 → 75×224   → 좌우에 패딩 149px (배경 66%)
+
+          객체 크기·종횡비·배경 비율이 전부 어긋난다. 사람 박스는 대체로 세로로 길어서
+          이 어긋남이 **매번** 생긴다 — 확률적 실패가 아니라 구조적 실패다.
+
+          `Normalize` 가 무연산이므로 `/255` 만 하면 된다. 채널은 RGB 다(학습이 PIL).
         """
         height, width = frame_bgr.shape[:2]
         x1, y1, x2, y2 = detection.bbox
@@ -170,15 +183,20 @@ class HelmetClassifier:
 
         crop = frame_bgr[py1:py2, px1:px2]
         size = self._config.input_size
-        scale = min(size / crop.shape[0], size / crop.shape[1])
-        new_w = max(round(crop.shape[1] * scale), 1)
-        new_h = max(round(crop.shape[0] * scale), 1)
+
+        # ① 짧은 변을 `size` 로. 비율은 유지되고 긴 변은 `size` 보다 커진다.
+        height, width = crop.shape[:2]
+        scale = size / min(height, width)
+        new_w = max(round(width * scale), size)
+        new_h = max(round(height * scale), size)
         resized = cv2.resize(crop, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
-        canvas = np.full((size, size, 3), _PAD_VALUE, dtype=np.uint8)
-        top = (size - new_h) // 2
-        left = (size - new_w) // 2
-        canvas[top : top + new_h, left : left + new_w] = resized
-        rgb = canvas[:, :, ::-1].astype(np.float32) / 255.0
+
+        # ② 가운데 `size`×`size` 를 잘라낸다. 패딩이 생기지 않는다.
+        top = (new_h - size) // 2
+        left = (new_w - size) // 2
+        square = resized[top : top + size, left : left + size]
+
+        rgb = square[:, :, ::-1].astype(np.float32) / 255.0
         return np.ascontiguousarray(rgb.transpose(2, 0, 1))
 
     def _run(
