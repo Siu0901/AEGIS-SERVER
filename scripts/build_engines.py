@@ -42,6 +42,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 #: 뎁스는 `onnx` 가 주석 처리돼 있을 수 있다 — 없으면 건너뛰고 그 사실을 알린다.
 _SECTIONS = ("detect", "classify", "depth")
 
+#: 뎁스 모델(DepthAnythingV2)의 패치 크기. 입력이 이 배수여야 한다
+#: (`edge/depth.py` 의 `_PATCH` 와 같은 값이며 그쪽이 원본이다).
+_DEPTH_PATCH = 14
+
 if isinstance(sys.stdout, io.TextIOWrapper):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
@@ -63,6 +67,32 @@ def _resolve(value: str) -> Path:
     return path if path.is_absolute() else REPO_ROOT / path
 
 
+def input_shape(name: str, section: dict[str, Any]) -> tuple[int, int] | None:
+    """이 절의 모델이 실제로 받는 (높이, 너비). 모르면 `None`.
+
+    **엣지가 만드는 blob 과 같은 규칙으로 계산한다** — 다르게 계산하면 엔진과 런타임이
+    어긋나고, 그 어긋남은 빌드 때가 아니라 **추론 중에** 터진다(실측: 뎁스 엔진이
+    `[1,3,1,1]` 로 구워져 `[1,3,518,518]` 요청에서 죽었다).
+
+    | 절 | 규칙 | 근거 |
+    |---|---|---|
+    | `detect` | `imgsz: [H, W]` 그대로 | `edge/letterbox.py` |
+    | `classify` | `input_size` 정사각 | `edge/classify.py` `_crop` |
+    | `depth` | `input_size` 를 14 의 배수로 내림, 정사각 | `edge/depth.py` `_PATCH` |
+    """
+    if name == "detect":
+        imgsz = section.get("imgsz")
+        if isinstance(imgsz, (list, tuple)) and len(imgsz) == 2:
+            return int(imgsz[0]), int(imgsz[1])
+        return None
+    size = section.get("input_size")
+    if not isinstance(size, int):
+        return None
+    if name == "depth":
+        size -= size % _DEPTH_PATCH
+    return (size, size) if size > 0 else None
+
+
 def targets(config: dict[str, Any]) -> list[tuple[str, Path, Path]]:
     """(절 이름, ONNX 경로, 엔진 경로) 목록.
 
@@ -82,6 +112,35 @@ def targets(config: dict[str, Any]) -> list[tuple[str, Path, Path]]:
             continue
         found.append((name, _resolve(str(onnx)), _resolve(str(engine))))
     return found
+
+
+def dynamic_input(onnx_path: Path) -> tuple[str, list[Any]] | None:
+    """입력에 동적 축이 있으면 (이름, 차원목록). 전부 고정이면 `None`.
+
+    ★ **이걸 안 보면 조용히 망가진 엔진이 나온다.** `trtexec` 는 동적 축에 형상을
+      주지 않아도 실패하지 않는다 — 최소값으로 굳혀 버린다. 실측으로 뎁스 엔진이
+      `[1,3,1,1]` 로 구워졌고, 추론 중에 `Static dimension mismatch` 로 죽었다.
+      빌드는 성공했다고 나왔으므로 그 시점에는 아무도 몰랐다.
+    """
+    try:
+        import onnx
+    except ImportError as exc:
+        # ★ **`None` 을 돌려주면 안 된다.** 그건 「고정 입력이다」라는 뜻이 되어
+        #   형상 없이 굽게 되고, 망가진 엔진이 성공으로 보고된다. 판단할 수 없으면
+        #   통과가 아니라 오류다(절대규칙 9).
+        msg = (
+            "`onnx` 가 없어 입력이 동적인지 판단할 수 없다.\n"
+            "  형상을 모른 채 구우면 최소값으로 굳어 추론에서 죽는다.\n"
+            "  `uv pip install onnx` 후 다시 실행해라."
+        )
+        raise SystemExit(msg) from exc
+    model = onnx.load(str(onnx_path), load_external_data=False)
+    first = model.graph.input[0]
+    dims = [
+        d.dim_value if d.HasField("dim_value") else (d.dim_param or "?")
+        for d in first.type.tensor_type.shape.dim
+    ]
+    return (first.name, dims) if any(isinstance(d, str) for d in dims) else None
 
 
 def sidecar_names(onnx_path: Path, engine_path: Path) -> bool:
@@ -119,8 +178,20 @@ def sidecar_names(onnx_path: Path, engine_path: Path) -> bool:
     return True
 
 
-def build(name: str, onnx_path: Path, engine_path: Path, *, workspace_mb: int) -> None:
-    """`trtexec` 로 FP16 엔진을 만든다."""
+def build(
+    name: str,
+    onnx_path: Path,
+    engine_path: Path,
+    *,
+    workspace_mb: int,
+    shape: tuple[int, int] | None = None,
+) -> None:
+    """`trtexec` 로 FP16 엔진을 만든다.
+
+    ★ **동적 입력에는 형상을 반드시 준다.** 주지 않으면 `trtexec` 가 최소값으로 굳혀
+      쓸 수 없는 엔진을 만들면서도 **성공으로 끝난다**. 그래서 여기서 막지 않으면
+      실패가 추론 시점까지 미뤄진다(절대규칙 9).
+    """
     if not onnx_path.is_file():
         msg = f"{name}: ONNX 가 없다 — {onnx_path}"
         raise SystemExit(msg)
@@ -141,6 +212,22 @@ def build(name: str, onnx_path: Path, engine_path: Path, *, workspace_mb: int) -
         "--fp16",
         f"--memPoolSize=workspace:{workspace_mb}M",
     ]
+
+    dynamic = dynamic_input(onnx_path)
+    if dynamic is not None:
+        tensor, dims = dynamic
+        if shape is None:
+            msg = (
+                f"{name}: ONNX 입력 {tensor!r} 이 동적인데({dims}) 형상을 정할 수 없다.\n"
+                f"  `edge/config.yaml` 의 {name} 절에서 크기를 읽지 못했다 — "
+                "detect 는 `imgsz`, classify·depth 는 `input_size` 다.\n"
+                "  형상 없이 구우면 최소값으로 굳어 추론에서 죽는다."
+            )
+            raise SystemExit(msg)
+        height, width = shape
+        spec = f"{tensor}:1x3x{height}x{width}"
+        argv += [f"--minShapes={spec}", f"--optShapes={spec}", f"--maxShapes={spec}"]
+        _say(f"    · 동적 입력 {tensor} {dims} → 1x3x{height}x{width} 로 고정")
     _say(f"  $ {' '.join(argv)}")
     # **출력을 삼키지 않는다.** trtexec 는 지원하지 않는 연산자를 경고로만 알리고
     # 계속 진행하는 일이 있어서, 로그를 감추면 느린 엔진이 만들어진 이유를 놓친다.
@@ -169,7 +256,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     _say("[engines] edge/config.yaml 에서 대상을 읽는다")
-    found = targets(_config())
+    config = _config()
+    found = targets(config)
     if not found:
         msg = (
             "빌드할 대상이 없다 — config.yaml 의 detect·classify·depth 에 "
@@ -177,15 +265,24 @@ def main(argv: list[str] | None = None) -> int:
         )
         raise SystemExit(msg)
 
+    shapes = {name: input_shape(name, config.get(name) or {}) for name, _, _ in found}
     for name, onnx_path, engine_path in found:
-        _say(f"  · {name}: {onnx_path.name} → {engine_path.name}")
+        shape = shapes[name]
+        size = f"  입력 1x3x{shape[0]}x{shape[1]}" if shape else "  입력 크기 미확인"
+        _say(f"  · {name}: {onnx_path.name} → {engine_path.name}{size}")
     if args.list:
         return 0
 
     _say()
     for name, onnx_path, engine_path in found:
         _say(f"[engines] {name}")
-        build(name, onnx_path, engine_path, workspace_mb=args.workspace_mb)
+        build(
+            name,
+            onnx_path,
+            engine_path,
+            workspace_mb=args.workspace_mb,
+            shape=shapes[name],
+        )
         _say()
 
     _say("=" * 34)
