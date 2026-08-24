@@ -116,7 +116,18 @@ classify:
   weights: models/weights/lego_head_cls.pt
   onnx: models/weights/lego_head_cls.onnx
   engine: models/engines/lego_head_cls_fp16.engine
-  input_size: 224
+  # ★ **학습 크기와 같아야 한다.** `.pt` 안에 저장된 전처리가 원본이다:
+  #
+  #     Resize(size=128) -> CenterCrop(128) -> ToTensor()
+  #
+  #   224 로 두던 시절에는 판정이 **반대로** 나왔다(실측: 정답 No_Helmet 인 그림에
+  #   224 → Helmet 93.8% · 128 → No_Helmet 100.0%). 같은 텐서를 넣으면 onnx 와 torch
+  #   출력이 소수점까지 일치하므로 **변환 문제가 아니라 입력 크기 문제**였다.
+  #
+  #   ONNX 메타데이터의 `imgsz` 는 내보낼 때 기본값(224)이 박힌 것이라 믿지 않는다.
+  #   원본은 `.pt` 의 `model.transforms` 다:
+  #       YOLO("lego_head_cls.pt").model.transforms
+  input_size: 128
   batch: true
 
   # 사람 박스 바깥으로 이만큼 넓혀서 자른다(각 변 기준 비율).
