@@ -31,6 +31,7 @@ import {
   fetchVehicleClasses,
   fetchZones,
   groundToPixel,
+  pixelToGround,
   saveAlertSound,
   savePolicies,
   saveVehicleClass,
@@ -102,18 +103,22 @@ type PendingPoint = { px: [number, number]; x: string; y: string }
  * 기준 높이를 **어느 지면 위치에서 쟀는지**가 없으면 다른 거리의 기대 높이를 구할 수
  * 없다. 같은 사람도 카메라에서 멀수록 화면상 픽셀 높이가 줄어들기 때문이다.
  *
- * 화면상 높이는 발끝·머리끝 두 점을 클릭해 얻고, 그 사람이 서 있던 지면 좌표는 4점과
- * 같은 줄자 실측으로 입력받는다. **저장되지 않은 호모그래피로 미리 환산하지 않는다** —
- * 같은 제출에서 만들어지는 행렬이라 아직 존재하지 않는다.
+ * 화면상 높이는 발끝·머리끝 두 점을 클릭해 얻고, **서 있던 지면 좌표는 계산한다** —
+ * 저장된 호모그래피에 발끝 픽셀을 넣으면 그 자리가 나온다(`pixelToGround`).
+ *
+ * ★ 예전에는 X·Y 를 사람이 손으로 넣게 했다. 그 값은 4점과 같은 원점·같은 줄자로 재야
+ *   하는데, 화면 어디가 원점인지 알 수 없어 아무도 채울 수 없었다. 결국 높이만 찍고
+ *   좌표를 비운 채 저장되어 **기준 인물이 통째로 버려졌다**(실측: cam1 이 그 상태였고
+ *   쓰러짐 판정이 아예 돌지 않았다).
+ *
+ * 그래서 4점이 **저장된 뒤에만** 기준 인물을 찍을 수 있다. 변환이 없으면 계산할 수 없다.
  */
 type PendingReference = {
   foot: [number, number] | null
   head: [number, number] | null
-  x: string
-  y: string
 }
 
-const EMPTY_REFERENCE: PendingReference = { foot: null, head: null, x: '', y: '' }
+const EMPTY_REFERENCE: PendingReference = { foot: null, head: null }
 
 /** 두 클릭 사이의 세로 거리 = 화면상 높이(정규화 픽셀). */
 function referenceHeightPx(reference: PendingReference): number | null {
@@ -368,12 +373,16 @@ function CameraPanel({
       // 기준 인물은 **선택**이다(§4.5). 미입력이면 카메라 기하로 기대 높이를 추정한다.
       // 다만 넣는다면 높이와 위치가 **함께** 가야 한다 — 한쪽만으로는 곡선이 정해지지 않는다.
       const heightPx = referenceHeightPx(reference)
+      // ★ 지면 좌표는 **계산한다.** 사람이 줄자로 재는 값이 아니다 — 4점 캘리브레이션이
+      //   이미 화면↔지면 변환을 갖고 있으므로 발끝 픽셀이 그대로 그 자리를 가리킨다.
+      const groundAt =
+        calibrated && reference.foot ? pixelToGround(calibrated, reference.foot) : null
       const referencePerson =
-        heightPx !== null && reference.x !== '' && reference.y !== ''
+        heightPx !== null && groundAt !== null
           ? {
               // 요청과 저장이 같은 이름이다(§4.5 · §6 모두 `height_px`).
               height_px: heightPx,
-              at_m: [Number(reference.x), Number(reference.y)] as [number, number],
+              at_m: groundAt,
             }
           : null
       const derived = rectMode ? rectCoords() : null
@@ -392,8 +401,8 @@ function CameraPanel({
       setReference(EMPTY_REFERENCE)
       onDone(
         `cam${camId} 캘리브레이션 저장 — 재투영 오차 ${response.reprojection_error_m.toFixed(3)} m` +
-          (response.ref_height_calibrated
-            ? ` · 기준 인물 높이 ${heightPx} @ (${reference.x}, ${reference.y}) m`
+          (response.ref_height_calibrated && groundAt
+            ? ` · 기준 인물 높이 ${heightPx} @ (${groundAt[0].toFixed(2)}, ${groundAt[1].toFixed(2)})`
             : ' · 기준 인물 없음 (카메라 기하로 추정)'),
       )
     } catch (cause) {
@@ -777,8 +786,8 @@ function CameraPanel({
           <ReferenceFields
             reference={reference}
             picking={false}
+            homography={calibrated}
             onPick={() => setMode('reference')}
-            onChange={setReference}
             onClear={() => setReference(EMPTY_REFERENCE)}
           />
           <button
@@ -795,15 +804,15 @@ function CameraPanel({
       {mode === 'reference' && (
         <div className="settings__form">
           <p className="card__note">
-            기준 인물의 <strong>발끝 → 머리끝</strong> 순서로 두 점을 클릭한 뒤, 그 사람이
-            서 있던 자리의 <strong>실측 지면 좌표(m)</strong>를 넣어라. 4점과 같은 줄자 ·
-            같은 원점이어야 한다.
+            <strong>서 있는</strong> 인물의 <strong>발끝 → 머리끝</strong> 순서로 두 점을
+            클릭해라. 서 있던 자리의 지면 좌표는 4점 캘리브레이션으로 계산되므로 따로
+            잴 필요가 없다. 누운 인물을 찍으면 기대 높이가 낮아져 쓰러짐 판정이 무뎌진다.
           </p>
           <ReferenceFields
             reference={reference}
             picking
+            homography={calibrated}
             onPick={() => setReference(EMPTY_REFERENCE)}
-            onChange={setReference}
             onClear={() => setReference(EMPTY_REFERENCE)}
           />
           <button
@@ -880,17 +889,20 @@ function CameraPanel({
 function ReferenceFields({
   reference,
   picking,
+  homography,
   onPick,
-  onChange,
   onClear,
 }: {
   reference: PendingReference
   picking: boolean
+  /** 저장된 호모그래피. 발끝 → 지면 좌표 변환에 쓴다. 없으면 기준 인물을 찍을 수 없다. */
+  homography: number[][] | null
   onPick: () => void
-  onChange: (next: PendingReference) => void
   onClear: () => void
 }) {
   const heightPx = referenceHeightPx(reference)
+  const ground =
+    homography && reference.foot ? pixelToGround(homography, reference.foot) : null
   return (
     <div className="settings__reference-form">
       <div className="settings__row">
@@ -913,29 +925,23 @@ function ReferenceFields({
           </button>
         )}
       </div>
-      <div className="settings__row">
-        <label>
-          기준 인물 실측 X (m)
-          <input
-            value={reference.x}
-            inputMode="decimal"
-            placeholder="6.0"
-            onChange={(event) => onChange({ ...reference, x: event.target.value })}
-          />
-        </label>
-        <label>
-          기준 인물 실측 Y (m)
-          <input
-            value={reference.y}
-            inputMode="decimal"
-            placeholder="9.0"
-            onChange={(event) => onChange({ ...reference, y: event.target.value })}
-          />
-        </label>
-      </div>
-      {heightPx !== null && (reference.x === '' || reference.y === '') && (
+      {/* ★ **지면 좌표를 사람이 재지 않는다.** 4점 캘리브레이션이 이미 화면↔지면
+          변환을 갖고 있으므로, 발끝을 찍으면 그 자리의 좌표가 계산된다. 예전에는 X·Y 를
+          손으로 넣게 했는데 원점이 어디인지 알 수 없어 아무도 채울 수 없었다. */}
+      {heightPx !== null && (
+        <div className="settings__row">
+          <span className="settings__reference-label">서 있던 자리</span>
+          <span className="settings__reference-value">
+            {ground
+              ? `발끝 위치에서 계산됨 — (${ground[0].toFixed(2)}, ${ground[1].toFixed(2)})`
+              : '계산할 수 없다 — 발끝이 지평선 위에 찍혔다. 다시 찍어라'}
+          </span>
+        </div>
+      )}
+      {heightPx === null && !picking && homography === null && (
         <p className="card__note">
-          위치를 넣지 않으면 <strong>기준 인물이 저장되지 않는다.</strong>
+          이 카메라는 아직 4점 캘리브레이션이 없다. <strong>4점을 먼저 저장</strong>한 뒤
+          기준 인물을 찍어라 — 발끝 위치를 지면 좌표로 바꾸려면 그 변환이 필요하다.
         </p>
       )}
     </div>

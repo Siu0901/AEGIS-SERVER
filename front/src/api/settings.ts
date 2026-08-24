@@ -143,6 +143,28 @@ export function groundToPixel(
   ]
 }
 
+/**
+ * 정규화 픽셀 → 지면 좌표. **기준 인물의 위치를 사람이 재지 않게 하려고 있다.**
+ *
+ * 4점 캘리브레이션이 이미 화면↔지면 변환을 만들어 두었으므로, 인물의 **발끝**을
+ * 클릭하면 그 사람이 서 있던 지면 좌표가 그대로 나온다. 줄자를 다시 댈 이유가 없다.
+ *
+ * 역행렬이 필요 없다 — 호모그래피를 그대로 곱하는 것이 이 방향이다.
+ * `w` 가 0에 가까우면 지평선 위의 점이라 대응하는 지면 좌표가 없으므로 `null` 이다.
+ */
+export function pixelToGround(
+  homography: number[][],
+  point: [number, number],
+): [number, number] | null {
+  const [u, v] = point
+  const w = homography[2][0] * u + homography[2][1] * v + homography[2][2]
+  if (Math.abs(w) < 1e-9) return null
+  return [
+    (homography[0][0] * u + homography[0][1] * v + homography[0][2]) / w,
+    (homography[1][0] * u + homography[1][1] * v + homography[1][2]) / w,
+  ]
+}
+
 function invert3(m: number[][]): number[][] | null {
   const [[a, b, c], [d, e, f], [g, h, i]] = m as [
     [number, number, number],
