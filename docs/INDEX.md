@@ -43,7 +43,13 @@ ESP32(MQTT 2종)가 구현해야 하는 것 전량. API명세서 §1~§3·§6 �
 **M6**에 구현되고, 실물 추론·디코딩은 **M9**에 `edge/` 로 이식된다. 그 사이 서버가 보는
 입력은 `sim/edge_sim` 이 만든다(**M2**).
 
-> **M9 진행 중 — 노트북(CPU·ONNX)에서 실물 모델이 돈다.** `edge/` 에 러너가 들어왔고
+> **M9 완료 — 젯슨(TensorRT)에서 실물 모델이 돈다.** 2026-08-24 실측으로 Jetson Orin
+> Nano 가 `/ws/edge` 에 붙어 카메라당 **13.9 / 14.1 fps**(목표 8fps)로 `frame` ·
+> `candidate` · `track_lost` · `heartbeat` 를 만들고, 실물 IP 카메라 2대가 mediamtx 로
+> 들어오며, ESP32 가 MQTT 로 경광등·부저를 받는다. 이식 과정에서 나온 함정 4건은
+> `edge/JETSON.md` 1장에 표로 남겼다.
+>
+> 아래는 그 이전 상태의 기록이다 — **노트북(CPU·ONNX)에서 실물 모델이 돈다.** `edge/` 에 러너가 들어왔고
 > 학습된 seg·분류 모델과 Depth Anything V2 Small 을 ONNX 로 돌려 `frame` · `candidate` ·
 > `track_lost` · `heartbeat` 를 실제로 만든다. 젯슨 이식에서 바뀌는 것은
 > `runtime.backend`(`onnx` → `tensorrt`)와 디코더(`cpu` → `nvdec`) 두 값이다.

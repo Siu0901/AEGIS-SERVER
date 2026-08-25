@@ -131,7 +131,8 @@ def dynamic_input(onnx_path: Path) -> tuple[str, list[Any]] | None:
         msg = (
             "`onnx` 가 없어 입력이 동적인지 판단할 수 없다.\n"
             "  형상을 모른 채 구우면 최소값으로 굳어 추론에서 죽는다.\n"
-            "  `uv pip install onnx` 후 다시 실행해라."
+            "  `python -m pip install onnx` 후 다시 실행해라 "
+            "(uv 환경이면 `uv pip install onnx`)."
         )
         raise SystemExit(msg) from exc
     model = onnx.load(str(onnx_path), load_external_data=False)
@@ -155,7 +156,8 @@ def sidecar_names(onnx_path: Path, engine_path: Path) -> bool:
         import onnx
     except ImportError:
         _say("    ! `onnx` 가 없어 클래스 이름을 뽑지 못했다")
-        _say("      `uv pip install onnx` 후 다시 실행해라")
+        _say("      `python -m pip install onnx` 후 다시 실행해라")
+        _say("      (uv 환경이면 `uv pip install onnx`)")
         return False
 
     model = onnx.load(str(onnx_path), load_external_data=False)

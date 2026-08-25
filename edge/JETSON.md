@@ -40,14 +40,23 @@
 |---|---|---|
 | 추론 파이프라인 (감지·추적·분류·게이지·후보) | `edge/` 전체 | 노트북 CPU 에서 **동작 확인됨** |
 | 서버 연동 (WebSocket · 정책/구역/캘리브레이션 조회) | `edge/client.py` | 동작 확인됨 |
-| TensorRT 백엔드 | `edge/session.py` `_TensorRTBackend` | **작성만 됨 · 미검증** |
-| NVDEC 디코드 | `edge/main.py` `_gstreamer_pipeline` | **작성만 됨 · 미검증** |
-| 엔진 빌드 스크립트 | `scripts/build_engines.py` | **작성만 됨 · 미검증** |
+| TensorRT 백엔드 | `edge/session.py` `_TensorRTBackend` | **젯슨에서 동작 확인됨** (2026-08-24) |
+| NVDEC 디코드 | `edge/main.py` `_gstreamer_pipeline` | 젯슨에서 기동됨 |
+| 엔진 빌드 스크립트 | `scripts/build_engines.py` | **동작 확인됨** — 동적 입력 형상 버그를 고친 뒤 |
 
-★ 아래 세 개는 젯슨 하드웨어가 없어 **한 번도 실행된 적이 없다.** 노트북의
-`uv run tasks.py verify` 가 통과한 것은 백엔드 분기와 설정 처리까지이고, CUDA
-메모리 관리나 `execute_async_v3` 호출이 맞는지는 **젯슨에서 처음 확인된다.**
-통과했다고 동작한다고 읽지 마라.
+★ 위 셋은 2026-08-24 젯슨에서 실제로 돌렸다. 그 과정에서 나온 것들을 남긴다 —
+같은 자리에서 다시 막히지 않도록.
+
+| 증상 | 원인 | 고친 곳 |
+|---|---|---|
+| `cannot import name 'cudart'` | `cuda-python` 12.6+ 에서 바인딩 위치가 옮겨졌고 13.x 에서 `runtime` 으로 개명됐다. 13.x 의 `cuda.bindings` 는 **임포트는 되는데 속이 빈 껍데기**라 함수 존재까지 확인해야 한다 | `edge/session.py` |
+| 뎁스 추론이 `Static dimension mismatch [1,3,1,1]` 로 죽고 65초마다 재시작 | 뎁스 ONNX 는 입력이 동적인데 `trtexec` 에 형상을 안 주면 최소값으로 굳는다. **빌드는 성공으로 끝나서** 실패가 추론 시점까지 미뤄졌다 | `scripts/build_engines.py` |
+| 안전모 판정이 반대로 나옴 | 모델은 128×128 로 학습됐는데 ONNX 메타데이터의 기본값(224)을 쓰고 있었다. ultralytics 는 `.pt` 일 때만 저장된 transform 을 쓰고 그 외에는 메타데이터를 따른다 | `edge/config.yaml` `classify.input_size` |
+| 분류 전처리가 학습과 다름 | `classify_transforms()` 는 letterbox 가 아니라 `Resize(짧은 변) → CenterCrop` 이다 | `edge/classify.py` `_crop` |
+
+★ **`config.yaml` 을 노트북 사본으로 덮지 마라.** `runtime.backend` · `decode.backend` ·
+모델 경로 · `rtsp_sub` · `server.ws_url` 이 기계마다 다르다. 덮으면 젯슨이 ONNX 를 찾고
+자기 자신에게 서버 연결을 시도한다.
 
 ---
 
